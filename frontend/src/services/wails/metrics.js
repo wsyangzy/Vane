@@ -112,6 +112,8 @@ const getRequests = async (params = {}) => {
     page_size: parseInt(params.limit || params.pageSize || 50),
     start_date: params.start_date || params.start_time || params.startDate || '',
     end_date: params.end_date || params.end_time || params.endDate || '',
+    completed_since: params.completed_since || params.completedSince || '',
+    completed_before: params.completed_before || params.completedBefore || '',
     status: params.status || '',
     model: params.model || '',
     models: params.models || [],
@@ -121,9 +123,10 @@ const getRequests = async (params = {}) => {
     provider: params.provider || ''
   };
 
-  console.log('🔍 [Wails] GetRequests 参数:', queryParams);
+  const incremental = Boolean(queryParams.completed_since || queryParams.completed_before);
+  if (!incremental) console.log('🔍 [Wails] GetRequests 参数:', queryParams);
   const result = await WailsApp.GetRequests(queryParams);
-  console.log('🔍 [Wails] GetRequests 返回:', result);
+  if (!incremental) console.log('🔍 [Wails] GetRequests 返回:', result);
 
   // 转换请求记录格式
   const requests = (result.requests || []).map(r => ({

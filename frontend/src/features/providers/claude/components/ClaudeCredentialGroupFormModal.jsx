@@ -23,11 +23,16 @@ const ClaudeCredentialGroupFormModal = ({
   serverError = '',
   endpointCopyOptions = [],
   onClose,
-  onSubmit
+  onSubmit,
+  embedded = false,
+  formId,
+  setupSection,
+  onCredentialsReady
 }) => {
   const isEdit = mode === 'edit';
   const [formData, setFormData] = useState(() => buildInitialClaudeCredentialGroupForm(group, channelName));
-  const [activeTab, setActiveTab] = useState('basic');
+  const [storedActiveTab, setActiveTab] = useState('basic');
+  const activeTab = setupSection || storedActiveTab;
   const [standardMultiplierSettingsOpen, setStandardMultiplierSettingsOpen] = useState(false);
   const [error, setError] = useState('');
   const [showToken, setShowToken] = useState(false);
@@ -109,7 +114,7 @@ const ClaudeCredentialGroupFormModal = ({
     if (error) setError('');
   };
 
-  const buildSubmitPayload = () => {
+  const validateCredentials = () => {
     const name = formData.name.trim();
     const token = formData.authMode !== 'client_passthrough' && credentialSecretType === 'token' ? formData.token.trim() : '';
     const apiKey = formData.authMode !== 'client_passthrough' && credentialSecretType === 'apiKey' ? formData.apiKey.trim() : '';
@@ -133,6 +138,15 @@ const ClaudeCredentialGroupFormModal = ({
       return null;
     }
 
+    const subscriptionError = validateSubscription(formData);
+    if (subscriptionError) { setError(subscriptionError); setFormStep('details'); setActiveTab('basic'); return null; }
+    return { name, token, apiKey };
+  };
+
+  const buildSubmitPayload = () => {
+    const credentials = validateCredentials();
+    if (!credentials) return null;
+
 	const dailyCostLimitUSD = Number(formData.dailyCostLimitUSD);
 	if (!Number.isFinite(dailyCostLimitUSD) || dailyCostLimitUSD < 0) {
 	  setError('每日成本限额必须是大于或等于 0 的数字');
@@ -140,9 +154,6 @@ const ClaudeCredentialGroupFormModal = ({
 	  setActiveTab('billing');
 	  return null;
 	}
-
-    const subscriptionError = validateSubscription(formData);
-    if (subscriptionError) { setError(subscriptionError); setFormStep('details'); setActiveTab('basic'); return null; }
 
     const multiplierError = validateClaudeCredentialGroupMultipliers(formData);
     if (multiplierError) {
@@ -163,9 +174,7 @@ const ClaudeCredentialGroupFormModal = ({
     return {
       ...formData,
       channel: formData.channel || channelName,
-      name,
-      token,
-      apiKey,
+      ...credentials,
 	  dailyCostLimitUSD,
       copyEndpointsFromGroupId: formData.authMode === 'client_passthrough' ? '' : (formData.copyEndpointsFromGroupId || ''),
       modelPolicy: ['inherit', 'override', 'passthrough'].includes(formData.modelPolicy) ? formData.modelPolicy : 'inherit',
@@ -215,6 +224,11 @@ const ClaudeCredentialGroupFormModal = ({
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (loading) return;
+    if (setupSection === 'basic') {
+      if (validateCredentials()) { setError(''); onCredentialsReady?.(); }
+      return;
+    }
     const payload = buildSubmitPayload();
     if (!payload) return;
     if (!isEdit && copyEndpointsEnabled && !selectedCopyOption?.value) {
@@ -239,10 +253,10 @@ const ClaudeCredentialGroupFormModal = ({
     await saveGroup({ ...payload, copyEndpoints: editedEndpoints });
   };
 
-  return renderModalPortal(
-    <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-hidden bg-slate-900/30 p-4 backdrop-blur-sm animate-fade-in">
-      <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
-        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
+  return (embedded ? content => content : renderModalPortal)(
+    <div className={embedded ? 'contents' : 'fixed inset-0 z-[60] flex items-center justify-center overflow-hidden bg-slate-900/30 p-4 backdrop-blur-sm animate-fade-in'}>
+      <div className={embedded ? 'channel-setup-embedded' : 'flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl'}>
+        {!embedded && <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
           <div className="flex items-start gap-3">
             <div className="rounded-xl bg-slate-900 p-2 text-white shadow-sm">
               <KeyRound size={18} />
@@ -263,9 +277,9 @@ const ClaudeCredentialGroupFormModal = ({
               <XCircle size={18} />
             </button>
           </Tooltip>
-        </div>
+        </div>}
 
-        <form className="min-h-0 flex-1 overflow-y-auto" onSubmit={handleSubmit} autoComplete="off">
+        <form id={formId} className="min-h-0 flex-1 overflow-y-auto" onSubmit={handleSubmit} autoComplete="off">
           {formStep === 'copyNames' ? (
             <EndpointCopyNameEditorStep
               endpoints={copyStepEndpoints}
@@ -281,7 +295,7 @@ const ClaudeCredentialGroupFormModal = ({
             />
           ) : (
             <>
-              <div className="border-b border-slate-100 bg-slate-50/70 px-6 py-3">
+              {!setupSection && <div className="border-b border-slate-100 bg-slate-50/70 px-6 py-3">
                 <SegmentedTabs
                   tabs={credentialGroupTabs}
                   activeTab={activeTab}
@@ -290,11 +304,11 @@ const ClaudeCredentialGroupFormModal = ({
                   className={credentialGroupTabs.length === 4 ? 'grid-cols-4' : credentialGroupTabs.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}
                   buttonPaddingClass="px-2"
                 />
-              </div>
+              </div>}
 
-              <div className="px-6 py-5">
+              <div className={`px-6 py-5 ${embedded ? 'channel-setup-fields' : ''}`}>
             {(error || serverError) && (
-              <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              <div role="alert" className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
                 {error || serverError}
               </div>
             )}
@@ -544,14 +558,14 @@ const ClaudeCredentialGroupFormModal = ({
               </div>
             )}
 
-            <div className="mt-5 flex justify-end gap-3 border-t border-slate-100 pt-4">
+            {!embedded && <div className="mt-5 flex justify-end gap-3 border-t border-slate-100 pt-4">
               <Button type="button" variant="ghost" onClick={onClose} disabled={loading}>
                 取消
               </Button>
               <Button type="submit" variant="primary" loading={loading}>
                 {continueToEndpoint ? '下一步' : isEdit ? '保存分组' : copyEndpointsEnabled ? '下一步' : '添加分组'}
               </Button>
-            </div>
+            </div>}
               </div>
             </>
           )}

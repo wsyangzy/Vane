@@ -1,4 +1,5 @@
 import { getEndpointChainItems, getRequestResourcePath, parseChainNode } from './endpointChain.js';
+import { mapBlockage } from './blockage.js';
 
 const parseSnapshot = (value) => {
   if (typeof value === 'string') {
@@ -51,6 +52,7 @@ export function readRequestDispatchTrace(request, resources = []) {
       ...(captured?.attempts > 1 ? (aggregateLastAttempt ? { error: captured.error, local: captured.local } : {}) : captured),
       channelId: String(candidate.channel ?? ''),
       groupId: String(groupId ?? ''),
+      endpointId,
       channel: captured?.channel || channel?.name || key.channel || `渠道 #${candidate.channel || '未知'}`,
       credentialGroup: captured?.credentialGroup || group?.name || (groupId && groupId !== '0' ? `分组 #${groupId}` : '分组未记录'),
       endpoint: captured?.endpoint || endpointName || (endpointId ? `端点 #${endpointId}` : '端点未记录'),
@@ -84,7 +86,12 @@ export function readRequestDispatchTrace(request, resources = []) {
     }
     diagnostics.get(key).events.push({ action: event.action || '', reason: event.reason || '', scope: event.failure_scope || '' });
     if (event.action === 'skipped') {
-      skipped.push({ ...resolve(candidate, -1), reason: event.reason || '' });
+      const blockage = mapBlockage(event.blockage);
+      skipped.push({ ...resolve(candidate, -1), reason: event.reason || '', blockage,
+        ...(blockage?.channelName ? { channel: blockage.channelName } : {}),
+        ...(blockage?.groupName ? { credentialGroup: blockage.groupName } : {}),
+        ...(blockage?.endpointName ? { endpoint: blockage.endpointName } : {}),
+        ...(blockage?.groupId ? { groupId: String(blockage.groupId) } : {}) });
     } else if (event.action === 'attempt') {
       const attempt = { ...resolve(candidate, attempts.length), key: String(attempts.length), action: 'attempt', reason: '', hop: attempts.length + 1, events: [{ action: 'attempt' }] };
       attempts.push(attempt);
@@ -96,6 +103,7 @@ export function readRequestDispatchTrace(request, resources = []) {
         attempt.reason = event.reason || '';
         attempt.scope = event.failure_scope || '';
         attempt.events.push({ action: event.action, reason: event.reason || '', scope: event.failure_scope || '' });
+        if (event.blockage) attempt.blockage = mapBlockage(event.blockage);
       }
     }
   }
@@ -160,6 +168,9 @@ export function readRequestDispatchTrace(request, resources = []) {
     diagnostics: [...diagnostics.values()],
     stopReason: snapshot.stop_reason || snapshot.stopReason || '',
     waitMs: Math.max(0, Number(snapshot.wait_ms ?? snapshot.waitMs) || 0),
+    maxAttempts: Math.max(0, Number(snapshot.max_attempts ?? snapshot.maxAttempts) || 0),
+    maxDurationMs: Math.max(0, Number(snapshot.max_duration_ms ?? snapshot.maxDurationMs) || 0),
+    nextRecoveryAt: snapshot.next_recovery_at || snapshot.nextRecoveryAt || '',
     successful: !!snapshot.successful,
     responseStarted: !!(snapshot.response_started ?? snapshot.responseStarted),
     createdAt: snapshot.created_at || snapshot.createdAt || '',

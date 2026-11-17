@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "frontend/src/features/requests/components/requestDispatch.css"
+        ],
+        "createdAt": "2026-11-17T02:24:30.100Z",
+        "reason": "Codex review: existing HEAD uses a 2px error separator on collapsible upstream or transport diagnostics inside an attempt row; it identifies diagnostic error content rather than decorating a card."
+      }
+    ]
+  }
+}

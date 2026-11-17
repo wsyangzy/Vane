@@ -7,6 +7,7 @@ import ProfileMembersEditor from './ProfileMembersEditor.jsx';
 import { affinityOptions, candidateModeOptions, editableProfile, ruleDraftIssue, ruleKindLabel, ruleTargetLabels, setIntentRoutingEnabled, strategyOptions, validateProfileDraft } from './dispatchState.js';
 import { motionDuration } from '@/shared/hooks/usePresence.js';
 import { formatDispatchDuration, ruleFallbackOptions } from '@/shared/lib/dispatchPolicy.js';
+import { formatMultiplierDisplayValue } from '@/shared/lib/multiplier.js';
 import './profileEditor.css';
 
 const control = 'h-8 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2.5 text-xs outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:opacity-50';
@@ -38,7 +39,7 @@ function TargetsEditor({ targets, onChange, profiles, channels, accounts, profil
         <div className={`dispatch-target-fields${mapping ? ' dispatch-target-fields-mapping' : ''}`}>
           {!mapping && <Choice label="目标类型" value={useProfile ? 'profile' : 'channel'} options={[{ value: 'profile', label: '调度方案' }, { value: 'channel', label: '渠道 / 分组' }]} onChange={(targetKind) => update(index, { targetKind, profileId: 0, channelId: 0, groupId: 0 })} />}
           {useProfile ? <Choice label="目标方案" value={target.profileId} options={profiles.map((item) => ({ value: item.id, label: `${item.name}${item.enabled ? '' : '（已停用）'}` }))} onChange={(profileId) => update(index, { profileId })} /> : <Choice label={mapping ? '本方案渠道' : '目标渠道'} value={target.channelId} options={availableChannels.map((channel) => ({ value: channel.id, label: channel.name }))} onChange={(channelId) => update(index, { channelId, profileId: 0, groupId: initialGroup(channelId) })} />}
-          <Choice label="目标分组" disabled={Boolean(useProfile)} value={target.groupId} options={[...(allGroups ? [{ value: 0, label: '全部分组 / 方案成员' }] : []), ...groupsFor(target.channelId).map((account) => ({ value: account.groupId, label: account.groupName }))]} onChange={(groupId) => update(index, { groupId })} />
+          <Choice label="目标分组" disabled={Boolean(useProfile)} value={target.groupId} options={[...(allGroups ? [{ value: 0, label: '全部分组 / 方案成员' }] : []), ...groupsFor(target.channelId).map((account) => ({ value: account.groupId, label: `${account.groupName} · ${formatMultiplierDisplayValue(account.costMultiplier)}` }))]} onChange={(groupId) => update(index, { groupId })} />
           <Field label={mapping ? '映射后的实际模型' : '实际模型（可选）'} required={mapping} placeholder={mapping ? '填写支持的模型名' : '沿用渠道模型策略'} value={target.upstreamModel} onChange={(upstreamModel) => update(index, { upstreamModel })} />
         </div>
       </div>;

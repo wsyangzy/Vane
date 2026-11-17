@@ -5,6 +5,7 @@ export const selectPersistedEndpoints = (endpoints = []) => (
 export const buildCodexEndpointMutationPayload = (endpoint, overrides = {}) => ({
   name: endpoint?.name || '',
   baseURL: endpoint?.baseURL || endpoint?.base_url || '',
+  pathStrategy: endpoint?.pathStrategy || endpoint?.path_strategy || 'legacy',
   credentialGroupId: endpoint?.credentialGroupId || endpoint?.credential_group_id || 0,
   priority: endpoint?.priority,
   timeoutSeconds: endpoint?.timeoutSeconds ?? endpoint?.timeout_seconds ?? 0,

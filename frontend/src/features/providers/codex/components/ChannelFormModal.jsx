@@ -8,7 +8,7 @@ import { buildInitialChannelForm } from '../model.js';
 // ============================================================================
 // 渠道编辑弹窗（凭证分组在渠道卡片中独立维护）
 // ============================================================================
-const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serverError, onCancel, onSave }) => {
+const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serverError, onCancel, onSave, embedded = false, formId }) => {
   const [formData, setFormData] = useState(() => buildInitialChannelForm(channel));
   const [fieldError, setFieldError] = useState('');
   const isWails = isWailsEnvironment();
@@ -48,15 +48,15 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
     await onSave?.(payload);
   };
 
-  return renderModalPortal(
+  return (embedded ? content => content : renderModalPortal)(
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center overflow-hidden bg-slate-900/30 p-4 backdrop-blur-sm animate-fade-in"
+      className={embedded ? 'contents' : 'fixed inset-0 z-[100] flex items-center justify-center overflow-hidden bg-slate-900/30 p-4 backdrop-blur-sm animate-fade-in'}
     >
       <div
-        className="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
-        style={{ maxHeight: modalMaxHeight }}
+        className={embedded ? 'channel-setup-embedded' : 'flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl'}
+        style={embedded ? undefined : { maxHeight: modalMaxHeight }}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
+        {!embedded && <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
           <div className="flex items-start gap-3">
             <div className="rounded-xl bg-slate-900 p-2 text-white shadow-sm">
               {isEdit ? <Pencil size={18} /> : <Plus size={18} />}
@@ -77,12 +77,12 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
               <XCircle size={18} />
             </button>
           </Tooltip>
-        </div>
+        </div>}
 
-        <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
-          <div className="space-y-3.5 overflow-y-auto px-6 py-5">
+        <form id={formId} className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
+          <div className={`space-y-3.5 overflow-y-auto px-6 py-5 ${embedded ? 'channel-setup-fields' : ''}`}>
             {(fieldError || serverError) && (
-              <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
                 {fieldError || serverError}
               </div>
             )}
@@ -90,6 +90,7 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
             <div className="grid grid-cols-2 gap-4">
               <Input
                 label="渠道名"
+                aria-label="渠道名"
                 value={formData.name}
                 onChange={(event) => updateField('name', event.target.value)}
                 placeholder="例如：主渠道"
@@ -97,6 +98,7 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
               />
               <Input
                 label="官网地址（可选）"
+                aria-label="官网地址"
                 value={formData.website}
                 onChange={(event) => updateField('website', event.target.value)}
                 placeholder="https://platform.openai.com"
@@ -140,14 +142,14 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
 
           </div>
 
-          <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/40 px-6 py-3">
+          {!embedded && <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/40 px-6 py-3">
             <Button variant="secondary" onClick={onCancel} disabled={loading}>
               取消
             </Button>
             <Button variant="primary" icon={isEdit ? Pencil : undefined} loading={loading} type="submit">
               {isEdit ? '保存修改' : '下一步'}
             </Button>
-          </div>
+          </div>}
         </form>
       </div>
     </div>

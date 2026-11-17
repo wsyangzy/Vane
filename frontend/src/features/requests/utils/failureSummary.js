@@ -1,10 +1,11 @@
 // ============================================
 // 失败摘要 - 请求失败的统一文案构造
 // 供右上角全局提示与请求详情弹窗共用，保证两处说法一致。
-// 本模块只依赖同目录的 endpointChain，可直接被 node --test 加载。
+// 仅依赖请求工具模块，可直接被 node --test 加载。
 // ============================================
 
 import { getEndpointChainItems, parseChainNode } from './endpointChain.js';
+import { blockageLabel, describeBlockageRecovery, mapBlockage } from './blockage.js';
 
 // failure_reason 是 Relay 的内部分类；这里给每个分类一句用户能看懂的说明。
 // last_failure_reason may contain provider text or a local failure; provenance
@@ -15,6 +16,9 @@ export const FAILURE_REASON_DETAILS = Object.freeze({
   daily_cost_limit_exceeded: '凭证分组已达每日成本限额，请求未转发到提供商',
   daily_cost_state_unavailable: '暂时无法读取每日成本，请求未转发到提供商',
   retry_budget_exhausted: 'Vane 已达到本次请求重试上限并停止继续尝试',
+  retry_attempts_exhausted: '本次请求已达到上游发送次数上限',
+  retry_deadline_exceeded: '本次请求已达到允许的总时长',
+  recovery_outside_budget: '端点预计恢复时间超出本次请求的剩余等待时间',
   suspension_timeout: '挂起等待端点恢复超时',
   all_channels_unavailable: '所有渠道均已尝试，没有可用的故障转移渠道',
   max_loops_exceeded: '已达最大循环轮数，等待手动重试',
@@ -23,6 +27,15 @@ export const FAILURE_REASON_DETAILS = Object.freeze({
   route_exhausted: '模型路由规则的全部目标均已尝试失败',
   non_stream_route_exhausted: '非流改道的全部目标均已尝试失败',
   stream_truncated: '上游流式响应中途截断',
+  incomplete_stream: '上游未返回有效内容或流式结束事件',
+  incomplete_response: '上游响应未完整结束',
+  non_stream_response: '流式请求收到普通 JSON 响应',
+  empty_stream: '上游返回空的流式响应',
+  invalid_stream_event: '上游流式事件格式无效',
+  credential_rejected: '上游拒绝此分组的凭证',
+  permission_scope_unknown: '上游拒绝此请求，需核对账号余额和访问权限',
+  endpoint_unavailable: '上游端点暂不可用',
+  upstream_unavailable: '上游服务暂不可用',
   response_read_error: '上游响应正文读取失败',
   response_write_error: '响应写回客户端失败',
   privacy_filter_failed: '隐私防护处理失败',
@@ -46,6 +59,115 @@ export const FAILURE_REASON_DETAILS = Object.freeze({
   search_cached_unsupported: '搜索适配不提供官方缓存索引，请使用原生线路或 live 搜索',
 });
 
+const RETRY_STOP_REASONS = new Set(['retry_budget_exhausted', 'retry_attempts_exhausted', 'retry_deadline_exceeded', 'recovery_outside_budget']);
+const retryContext = (request) => {
+  let snapshot = request.routeSnapshot || request.route_snapshot || {};
+  if (typeof snapshot === 'string') { try { snapshot = JSON.parse(snapshot); } catch { snapshot = {}; } }
+  const trace = request.dispatchTrace || {};
+  const nextRecoveryAt = trace.nextRecoveryAt || snapshot?.next_recovery_at || snapshot?.nextRecoveryAt || '';
+  const rawAttempts = trace.attemptCount ?? snapshot?.attempts;
+  const savedStop = snapshot?.stop_reason || snapshot?.stopReason || '';
+  const attempts = rawAttempts == null ? nextRecoveryAt || RETRY_STOP_REASONS.has(savedStop) ? 0 : null : Math.max(0, Number(rawAttempts) || 0);
+  return { attempts, nextRecoveryAt, maxAttempts: Number(trace.maxAttempts ?? snapshot?.max_attempts ?? snapshot?.maxAttempts) || 0,
+    maxDurationMs: Number(trace.maxDurationMs ?? snapshot?.max_duration_ms ?? snapshot?.maxDurationMs) || 0 };
+};
+
+const retryContextLines = (request) => {
+  const { attempts, nextRecoveryAt, maxAttempts, maxDurationMs } = retryContext(request);
+  const recovery = nextRecoveryAt && new Date(nextRecoveryAt);
+  const limits = [maxAttempts > 0 && `最多发送 ${maxAttempts} 次`, maxDurationMs > 0 && `总时长上限 ${Number((maxDurationMs / 1000).toFixed(2))} 秒`].filter(Boolean);
+  return [attempts !== null && `实际向上游发送 ${attempts} 次`,
+    limits.length > 0 && `本次请求限制：${limits.join('，')}`,
+    recovery && Number.isFinite(recovery.getTime()) && `预计恢复时间：${recovery.toLocaleString('zh-CN', { hour12: false })}`].filter(Boolean);
+};
+
+const BLOCKER_LABELS = Object.freeze({
+  cooldown: '端点仍处于健康冷却中',
+  cooling_down: '端点仍处于健康冷却中',
+  account_cooling_down: '端点仍处于健康冷却中',
+  daily_cost_limit_exceeded: '凭证分组已达每日成本限额',
+  daily_cost_state_unavailable: '暂时无法读取凭证分组的每日成本',
+  account_disabled: '凭证分组已停用',
+  account_repair_required: '凭证需要修复',
+  credential_repair_required: '凭证需要修复',
+});
+
+const routeSnapshot = (request) => {
+  let snapshot = request.routeSnapshot || request.route_snapshot || {};
+  if (typeof snapshot === 'string') { try { snapshot = JSON.parse(snapshot); } catch { snapshot = {}; } }
+  return snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot) ? snapshot : {};
+};
+
+const skippedCandidates = (request) => {
+  const trace = request.dispatchTrace;
+  const traced = Array.isArray(trace?.skipped) ? [...trace.skipped, ...(trace.attempts || [])
+    .filter(item => item.action === 'failed' && item.blockage && item.blockage.reason !== item.reason)
+    .map(item => ({ ...item, reason: item.blockage.reason }))] : [];
+  if (traced.length) return traced;
+  const events = routeSnapshot(request).candidates;
+  const skipped = (Array.isArray(events) ? events : [])
+    .filter(event => (event?.action === 'skipped' || event?.action === 'failed' && event.blockage && event.blockage.reason !== event.reason) && event.candidate)
+    .map(event => ({ ...event.candidate, action: event.action, reason: event.blockage?.reason || event.reason || '', blockage: event.blockage }));
+  if (skipped.length) return skipped;
+  const reason = extractFailureCode(request.failure_reason || request.failureReason || '');
+  return reason.startsWith('daily_cost_') || reason.startsWith('account_') || reason.startsWith('manual_balance_') || reason.startsWith('subscription_')
+    ? [{ channel: request.channel || '', credentialGroup: request.credentialGroup || request.group || request.groupName || request.group_name || '',
+      endpoint: request.endpoint || request.endpoint_name || '', reason }]
+    : [];
+};
+
+const groupedBlockers = (request) => {
+  const groups = new Map();
+  for (const item of skippedCandidates(request)) {
+    const reason = item.reason || '';
+    if (!reason) continue;
+    const candidate = item.candidate || item;
+    const blockage = mapBlockage(item.blockage) || mapBlockage({ provider: request.provider,
+      channel_id: item.channelId || (/^\d+$/.test(candidate.channel || '') ? candidate.channel : 0),
+      group_id: item.groupId || String(candidate.credential || '').match(/^\d+\/(\d+)$/)?.[1] || 0,
+      endpoint_id: item.endpointId || (/^\d+$/.test(candidate.endpoint || '') ? candidate.endpoint : ''),
+      reason, model: item.model || candidate.model || '' });
+    const label = BLOCKER_LABELS[reason] || describeFailureReason(reason) || blockageLabel(reason);
+    const channel = blockage?.channelName || item.channel || candidate.channel_name || candidate.channel || '';
+    const credentialGroup = blockage?.groupName || item.credentialGroup || item.credential_group || candidate.group_name || candidate.credential_group || '';
+    const endpoint = blockage?.endpointName || item.endpoint || candidate.endpoint_name || candidate.endpoint || '';
+    const normalize = (value, fallback) => !value ? fallback : /^\d+$/.test(String(value)) ? `${fallback} #${value}` : String(value);
+    const key = JSON.stringify([reason, blockage?.channelId || channel, blockage?.groupId || credentialGroup, blockage?.model, blockage?.cause, blockage?.recoverAt]);
+    let group = groups.get(key);
+    if (!group) {
+      group = { reason, label, channel: normalize(channel, '渠道'), credentialGroup, endpoints: new Set(), candidates: new Set(), count: 0,
+        hasSkipped: false,
+        blockage: blockage || mapBlockage({ reason }), recovery: describeBlockageRecovery(blockage || { reason }) };
+      groups.set(key, group);
+    }
+    group.candidates.add(JSON.stringify([blockage?.endpointId || endpoint, item.model || candidate.model || '']));
+    group.hasSkipped ||= item.action !== 'failed';
+    group.count = group.candidates.size;
+    if (endpoint) group.endpoints.add(normalize(endpoint, '端点'));
+  }
+  return [...groups.values()].map(({ candidates: _candidates, ...group }) => ({ ...group, endpoints: [...group.endpoints] }));
+};
+
+const blockerAdvice = (code, blockers) => {
+  if (!blockers.length) return code === 'recovery_outside_budget'
+    ? '建议：查看相关端点的最近失败记录和恢复时间，待端点恢复后重试。'
+    : '';
+  const reasons = new Set(blockers.map(item => item.reason));
+  const advice = [];
+  if (reasons.has('cooldown') || reasons.has('cooling_down') || reasons.has('account_cooling_down')) {
+    advice.push('检查冷却端点最近一次失败记录，修复问题或等待冷却结束后重试');
+  }
+  if (reasons.has('daily_cost_limit_exceeded')) advice.push('检查已达每日限额的分组，等待限额重置或调整分组限额');
+  if (!advice.length) advice.push('检查上述候选的可用状态，恢复至少一个候选后重试');
+  return `建议：${advice.join('；')}。`;
+};
+
+const blockerSummaryLines = (blockers) => blockers.flatMap(item => [
+  `${[item.channel, item.credentialGroup].filter(Boolean).join(' / ')}：${item.label}（${item.count} 个候选）`,
+  item.recovery.costs, item.recovery.recovery, item.recovery.action,
+  item.blockage.cause && `触发原因：${describeFailureReason(item.blockage.cause) || item.blockage.cause}`,
+].filter(Boolean));
+
 // A provider reply and a local scheduling/transport outcome have different
 // evidence. Never render an internal classification as the provider's words.
 export const getRequestFailureDetails = (request = {}) => {
@@ -54,6 +176,11 @@ export const getRequestFailureDetails = (request = {}) => {
   const status = Number(request.http_status_code ?? request.httpStatusCode ?? request.status_code ?? request.httpStatus ?? 0) || 0;
   const source = request.http_status_is_upstream ?? request.httpStatusIsUpstream;
   const reason = request.failure_reason || request.failureReason || '';
+  const reasonCode = extractFailureCode(reason);
+  const blockingCandidates = groupedBlockers(request);
+  const hasSkippedCandidates = blockingCandidates.some(item => item.hasSkipped);
+  const retryStop = RETRY_STOP_REASONS.has(extractFailureCode(reason));
+  const retry = retryContext(request);
   const processingFailure = ['response_read_error', 'response_write_error', 'privacy_filter_failed'].includes(reason);
   const upstreamHops = nodes.filter(node => !node.local && node.statusCode > 0 && (!processingFailure || node.statusCode >= 400)).reverse();
   const hasUpstream = upstreamHops.length > 0 || source !== false && status > 0 && (!processingFailure || status >= 400);
@@ -63,19 +190,27 @@ export const getRequestFailureDetails = (request = {}) => {
   const admissionReason = /^(account_|subscription_|state_|profile_|routing_|candidate_)/.test(reason)
     || reason.startsWith('search_') || reason === 'daily_cost_state_unavailable'
     || ['no_healthy_endpoints', 'no_supported_model_endpoint', 'daily_cost_limit_exceeded', 'privacy_filter_failed', 'image_streaming_unsupported'].includes(reason);
-  const sent = nodes.some(node => !node.skipReason && (node.attempts > 0 || node.statusCode > 0 || node.error));
-  const unsent = !hasUpstream && !sent && (Boolean(skipReason) || request.dispatchTrace?.attemptCount === 0 || admissionReason);
+  const sent = nodes.some(node => !node.skipReason && (node.attempts > 0 || node.statusCode > 0 || !node.local && node.error)) || retry.attempts > 0;
+  const unsent = !hasUpstream && !sent && (Boolean(skipReason) || retry.attempts === 0 || admissionReason);
   return {
     upstreamHops, localHops, hasUpstream,
     upstreamStatus: hasUpstream ? status : 0,
     upstreamDetail: hasUpstream ? processingFailure ? upstreamHops[0]?.error || '' : detail : '',
-    showLocal: processingFailure || localHops.length > 0 || !hasUpstream,
+    showLocal: retryStop || processingFailure || localHops.length > 0 || blockingCandidates.length > 0 || !hasUpstream,
     localTitle: unsent ? '请求未发送' : processingFailure ? '本地响应处理失败'
-      : hasUpstream && localHops.every(hop => hop.skipReason) ? '部分目标未发送' : '未收到上游响应',
-    localSummary: ['endpoint_exhausted', 'route_exhausted', 'non_stream_route_exhausted', 'all_channels_unavailable'].includes(reason) && !skipReason
+      : hasUpstream && (localHops.some(hop => hop.skipReason) || hasSkippedCandidates) ? '部分目标未发送'
+        : hasUpstream && blockingCandidates.length ? '调用失败后的恢复条件' : '未收到上游响应',
+    localSummary: reasonCode === 'recovery_outside_budget'
+      ? '候选端点预计恢复时间晚于本次请求剩余等待时限，Vane 因此停止继续尝试。'
+      : hasUpstream && blockingCandidates.length > 0
+        ? hasSkippedCandidates ? '部分候选未发送；下方列出调度记录中的跳过原因。' : '本次上游调用失败后，以下候选进入阻塞状态。'
+      : ['endpoint_exhausted', 'route_exhausted', 'non_stream_route_exhausted', 'all_channels_unavailable'].includes(reason) && !skipReason
       ? localHops.some(hop => hop.error) || detail ? '连接或响应传输未完成' : '未记录具体的本地失败原因'
-      : describeFailureReason(skipReason || reason) || (unsent ? '本地调度未选出可发送的目标' : '本次请求没有可用的上游响应记录'),
+      : describeFailureReason(retryStop ? reason : skipReason || reason) || (unsent ? '本地调度未选出可发送的目标' : '本次请求没有可用的上游响应记录'),
     localDetail: processingFailure || !hasUpstream ? detail : '',
+    stopContext: retryStop ? retryContextLines(request) : [],
+    blockingCandidates,
+    blockerAdvice: blockerAdvice(reasonCode, blockingCandidates),
     category: reason === 'auxiliary_endpoint_unsupported' ? '辅助接口不受支持' : reason === 'image_endpoint_unsupported' ? '图像接口不受支持' : '',
   };
 };
@@ -97,11 +232,15 @@ const NOTIFY_REASONS = new Set([
   'daily_cost_limit_exceeded',
   'daily_cost_state_unavailable',
   'retry_budget_exhausted',
+  'retry_attempts_exhausted',
+  'retry_deadline_exceeded',
+  'recovery_outside_budget',
   'suspension_timeout',
   'account_cooling_down',
   'account_disabled',
   'account_missing',
   'account_repair_required',
+  'route_unavailable',
   'auxiliary_endpoint_unsupported',
 ]);
 
@@ -172,13 +311,17 @@ export const buildFailureToast = (request = {}) => {
   const manual = failureNeedsManualIntervention(failureReason);
   const provider = providerLabel(request.provider);
   const local = getRequestFailureDetails(request);
+  const contextLines = RETRY_STOP_REASONS.has(extractFailureCode(failureReason)) ? retryContextLines(request) : [];
   if ((request.http_status_is_upstream === false || request.httpStatusIsUpstream === false || local.localHops.length > 0 || local.localTitle === '本地响应处理失败') && !local.hasUpstream) {
-    return { type: 'warning', title: `${provider} ${local.localTitle}`, message: [local.localSummary] };
+    return { type: 'warning', title: `${provider} ${local.localTitle}`, message: [local.localSummary, ...contextLines,
+      ...blockerSummaryLines(local.blockingCandidates), !local.blockingCandidates.length && local.blockerAdvice].filter(Boolean) };
   }
 
   const lines = [];
   const summary = describeFailureReason(failureReason);
   if (summary) lines.push(summary);
+  lines.push(...contextLines);
+  lines.push(...blockerSummaryLines(local.blockingCandidates));
   const route = describeRoute(request);
   if (route) lines.push(route);
 

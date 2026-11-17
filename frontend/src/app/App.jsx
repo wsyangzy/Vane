@@ -11,7 +11,8 @@ import useSSE from '@/shared/hooks/useSSE.js';
 import { fetchRequests, isWailsEnvironment } from '@/services/http/api.js';
 import { getSuspendedRequestsCount, getSuspendedEndpointCounts, getManualRetryRequestsCount, getManualRetryChannelCounts, getCodexSuspendedCount, getPortConflictStatus, resolvePortConflict, subscribeToEvent } from '@/services/wails/index.js';
 import { getClaudeCodeVersion, getCodexVersion } from '@/services/wails/index.js';
-import { buildFailureToast, buildSuspensionToast, shouldNotifyFailure } from '@/features/requests/utils/failureSummary.js';
+import { buildSuspensionToast } from '@/features/requests/utils/failureSummary.js';
+import { createFailureNotificationAggregator, createFailureNotificationPoller } from '@/features/requests/utils/failureNotifications.js';
 
 // 懒加载页面组件
 const OverviewPage = lazy(() => import('@/features/overview/index.jsx'));
@@ -37,7 +38,10 @@ const GlobalAlerts = () => {
   const toast = useToast();
   const initializedRef = useRef(false);
   const inFlightRef = useRef(false);
-  const lastFailureIdRef = useRef('');
+  const failurePollerRef = useRef(null);
+  const failureGroupsRef = useRef(null);
+  if (!failurePollerRef.current) failurePollerRef.current = createFailureNotificationPoller({ fetchRequests });
+  if (!failureGroupsRef.current) failureGroupsRef.current = createFailureNotificationAggregator();
   const lastSuspendedCountRef = useRef(0);
   const lastManualRetryCountRef = useRef(0);
   // Codex 挂起数（独立于 Claude 挂起数，事件驱动）
@@ -53,19 +57,12 @@ const GlobalAlerts = () => {
       const [suspendedCount, manualRetryCount, failedData] = await Promise.all([
         getSuspendedRequestsCount().catch(() => 0),
         getManualRetryRequestsCount().catch(() => 0),
-        fetchRequests({ status: 'failed', page: 1, pageSize: 1 }).catch(() => null)
+        failurePollerRef.current.poll().catch(() => [])
       ]);
-
-      const latestFailed = failedData?.requests?.[0];
-      const latestFailureId = latestFailed?.rawRequestId || latestFailed?.requestId || latestFailed?.id || '';
-      const failureReason = latestFailed?.failure_reason || latestFailed?.failureReason || '';
 
       if (!initializedRef.current) {
         lastSuspendedCountRef.current = suspendedCount || 0;
         lastManualRetryCountRef.current = manualRetryCount || 0;
-        if (latestFailureId) {
-          lastFailureIdRef.current = latestFailureId;
-        }
         initializedRef.current = true;
         return;
       }
@@ -84,12 +81,9 @@ const GlobalAlerts = () => {
         }
       }
 
-      if (latestFailureId && latestFailureId !== lastFailureIdRef.current) {
-        if (shouldNotifyFailure(failureReason)) {
-          const failure = buildFailureToast(latestFailed);
-          toast.show(failure.message, { type: failure.type, title: failure.title, duration: 8000 });
-        }
-        lastFailureIdRef.current = latestFailureId;
+      for (const failure of failureGroupsRef.current.consume(failedData)) {
+        if (failure.update) toast.update(failure.id, { type: failure.type, title: failure.title, message: failure.message });
+        else toast.show(failure.message, { id: failure.id, type: failure.type, title: failure.title, duration: 8000 });
       }
 
       lastSuspendedCountRef.current = suspendedCount || 0;

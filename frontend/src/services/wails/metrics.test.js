@@ -68,3 +68,14 @@ test('requests and stats preserve multiple exact model names including commas', 
   assert.equal(calls[0].model, 'legacy');
   assert.deepEqual(calls[0].models, []);
 });
+
+test('incremental failures map completion bounds independently of start-date filters', async () => {
+  let called;
+  const api = await bridge({ GetRequests: async params => { called = params; return { requests: [], total: 0, page: 1, page_size: 100 }; } });
+  await api.getRequests({ status: 'failed', pageSize: 100, completedSince: '2026-11-17T00:46:12Z', completedBefore: '2026-11-17T00:46:16Z' });
+  assert.equal(called.completed_since, '2026-11-17T00:46:12Z');
+  assert.equal(called.completed_before, '2026-11-17T00:46:16Z');
+  assert.equal(called.start_date, '');
+  assert.equal(called.end_date, '');
+  assert.equal(called.page_size, 100);
+});

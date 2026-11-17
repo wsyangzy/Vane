@@ -57,7 +57,10 @@ test('old records without upstream evidence do not claim endpoints were all atte
 
 test('local outcomes use warning notifications and response processing stays separate from upstream errors', () => {
   const toast = buildFailureToast({ provider: 'codex', failure_reason: 'account_cooling_down', http_status_is_upstream: false });
-  assert.deepEqual(toast, { type: 'warning', title: 'Codex 请求未发送', message: ['端点处于冷却中'] });
+  assert.equal(toast.type, 'warning');
+  assert.equal(toast.title, 'Codex 请求未发送');
+  assert.equal(toast.message[0], '端点处于冷却中');
+  assert.ok(toast.message.some(line => line.includes('恢复时间未知')));
   const detail = getRequestFailureDetails({ failure_reason: 'response_read_error', http_status_is_upstream: true, http_status_code: 200, last_failure_reason: 'unexpected EOF' });
   assert.equal(detail.hasUpstream, false);
   assert.equal(detail.localTitle, '本地响应处理失败');
@@ -90,6 +93,67 @@ test('extractFailureCode reads the classification before legacy detail suffixes'
 
 test('retry budget message identifies Vane as the stop source', () => {
 	assert.equal(describeFailureReason('retry_budget_exhausted'), 'Vane 已达到本次请求重试上限并停止继续尝试');
+});
+
+test('retry stop reasons distinguish no sends, count limits and elapsed-time limits without exposing raw bodies', () => {
+  const recovery = buildFailureToast({ provider: 'codex', failure_reason: 'recovery_outside_budget', http_status_is_upstream: false,
+    last_failure_reason: '<html>private upstream content</html>',
+    endpoint_chain: [{ local: true, endpoint: 'one', error: 'account_cooling_down' }],
+    route_snapshot: JSON.stringify({ attempts: 0, next_recovery_at: '2026-11-17T01:00:00Z' }) });
+  assert.equal(recovery.title, 'Codex 请求未发送');
+  assert.match(recovery.message[0], /预计恢复时间晚于本次请求剩余等待时限/);
+  assert.match(recovery.message.at(-1), /查看相关端点的最近失败记录/);
+  assert.ok(recovery.message.includes('实际向上游发送 0 次'));
+  assert.ok(recovery.message.some(line => line.startsWith('预计恢复时间：')));
+  assert.ok(!recovery.message.join().includes('private upstream content'));
+  const sent = buildFailureToast({ provider: 'claude', failure_reason: 'retry_attempts_exhausted', http_status_is_upstream: false,
+    route_snapshot: { attempts: 3 }, endpoint_chain: [{ local: true, attempts: 3, endpoint: 'one', error: 'connection reset' }] });
+  assert.equal(sent.title, 'Claude 未收到上游响应');
+  assert.ok(sent.message.includes('实际向上游发送 3 次'));
+  assert.match(describeFailureReason('retry_deadline_exceeded'), /总时长/);
+  for (const code of ['retry_attempts_exhausted', 'retry_deadline_exceeded', 'recovery_outside_budget']) assert.equal(shouldNotifyFailure(code), true);
+});
+
+test('recovery stop explains candidate blockers and recommends a matching next action', () => {
+  const request = {
+    provider: 'codex', failure_reason: 'recovery_outside_budget', http_status_is_upstream: false,
+    route_snapshot: { attempts: 0, next_recovery_at: '2026-11-17T11:04:39+08:00', candidates: [
+      { action: 'skipped', reason: 'cooldown', candidate: { channel: '41', endpoint: '109' } },
+      { action: 'skipped', reason: 'daily_cost_limit_exceeded', candidate: { channel: '38', endpoint: '97' } },
+      { action: 'skipped', reason: 'daily_cost_limit_exceeded', candidate: { channel: '38', endpoint: '98' } },
+    ] },
+  };
+  const details = getRequestFailureDetails(request);
+  assert.equal(details.localTitle, '请求未发送');
+  assert.deepEqual(details.blockingCandidates.map(item => [item.reason, item.count]), [
+    ['cooldown', 1], ['daily_cost_limit_exceeded', 2],
+  ]);
+  assert.match(details.blockerAdvice, /最近一次失败记录/);
+  assert.match(details.blockerAdvice, /等待限额重置/);
+  const toast = buildFailureToast(request);
+  assert.ok(toast.message.some(line => /健康冷却中（1 个候选）/.test(line)));
+  assert.ok(toast.message.some(line => /每日成本限额（2 个候选）/.test(line)));
+  assert.ok(toast.message.some(line => line.includes('编辑此凭证分组')));
+
+  const resolved = getRequestFailureDetails({ ...request, dispatchTrace: { skipped: [
+    { channel: 'ZeroCat', credentialGroup: '混合池', endpoint: '主站', reason: 'daily_cost_limit_exceeded' },
+  ] } });
+  assert.equal(resolved.blockingCandidates[0].channel, 'ZeroCat');
+  assert.equal(resolved.blockingCandidates[0].credentialGroup, '混合池');
+  assert.deepEqual(resolved.blockingCandidates[0].endpoints, ['主站']);
+});
+
+test('upstream failure details also show skipped route candidates and their reasons', () => {
+  const details = getRequestFailureDetails({
+    failure_reason: 'incomplete_stream', http_status_is_upstream: true, http_status_code: 200,
+    endpoint_chain: [{ channel: 'NewCodex', endpoint: '默认', attempts: 1, status_code: 200, error: '<html>diagnostic response</html>' }],
+    dispatchTrace: { attemptCount: 1, skipped: [{ channel: 'ZeroCat', credentialGroup: '混合池', endpoint: '主站', reason: 'daily_cost_limit_exceeded' }] },
+  });
+  assert.equal(details.hasUpstream, true);
+  assert.equal(details.showLocal, true);
+  assert.equal(details.localTitle, '部分目标未发送');
+  assert.equal(details.blockingCandidates[0].channel, 'ZeroCat');
+  assert.match(details.localSummary, /部分候选未发送/);
 });
 
 test('shouldNotifyFailure only fires for terminal or local rejections', () => {

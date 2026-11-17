@@ -109,7 +109,7 @@ const CODEX_BILLING_MODES = [
 
 const CODEX_ENDPOINT_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
-  { key: 'routing', label: '路由配置' }
+  { key: 'routing', label: '请求设置' }
 ];
 
 const getCodexEndpointCredentialGroupID = (endpoint) => Number(endpoint?.credentialGroupId || endpoint?.credential_group_id || 0);
@@ -147,6 +147,7 @@ const buildCodexEndpointCopyPayload = (endpoint, channelId, credentialGroupId) =
   credentialGroupId,
   name: endpoint?.name || '',
   baseURL: endpoint?.baseURL || endpoint?.base_url || '',
+  pathStrategy: endpoint?.pathStrategy || endpoint?.path_strategy || 'legacy',
   failoverEnabled: endpoint?.failoverEnabled ?? endpoint?.failover_enabled ?? true,
   skipHealthCheck: endpoint?.skipHealthCheck ?? endpoint?.skip_health_check ?? false,
   priority: endpoint?.priority,

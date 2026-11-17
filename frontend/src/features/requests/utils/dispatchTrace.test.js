@@ -11,6 +11,16 @@ const resources = [
 ];
 const trace = (events, extra = {}) => ({ profile_id: 7, profile_name: '请求当时的方案', strategy: 'order', affinity_mode: 'turn', decision: { kind: 'default' }, candidates: events, ...extra });
 
+test('request trace retains stop budgets and recovery time when no upstream sends occurred', () => {
+  const value = readRequestDispatchTrace({ provider: 'codex', routeSnapshot: trace([], { stop_reason: 'recovery_outside_budget', max_attempts: 5,
+    max_duration_ms: 30000, next_recovery_at: '2026-11-17T01:00:00Z' }) });
+  assert.equal(value.attemptCount, 0);
+  assert.equal(value.waitMs, 0);
+  assert.equal(value.maxAttempts, 5);
+  assert.equal(value.maxDurationMs, 30000);
+  assert.equal(value.nextRecoveryAt, '2026-11-17T01:00:00Z');
+});
+
 test('model route tooltip separates model changes from the saved origin and executed destination', () => {
   const request = { provider: 'codex', model: 'gpt-5.6-luna', routeSnapshot: trace([
     { candidate: { ...candidate('codex', 2, 21, 201), model: 'gpt-5.6-luna' }, action: 'attempt' },

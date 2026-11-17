@@ -1078,7 +1078,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 </div>
               )}
 
-              {isFailure && failureDetails.showLocal && <LocalRequestFailure details={failureDetails} />}
+              {isFailure && failureDetails.showLocal && <LocalRequestFailure key={request.requestId} details={failureDetails} provider={request.provider} />}
               {/* Only actual provider responses belong in the upstream error card. */}
               {isFailure && failureDetails.hasUpstream && (
                 <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-rose-200 bg-rose-50">

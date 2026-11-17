@@ -10,6 +10,7 @@ import { getErrorMessage, getFailoverToggleErrorMessage } from '@/features/provi
 import CredentialGroupDetailModal from '@/features/providers/shared/credentials/CredentialGroupDetailModal.jsx';
 import { buildCodexEndpointMutationPayload, selectPersistedEndpoints } from '@/features/providers/shared/endpoints/endpointActions.js';
 import { createChannelSetupCommitter } from '../shared/channelSetup.js';
+import ChannelSetupWizard from './components/ChannelSetupWizard.jsx';
 import { activateCodexChannel, activateCodexEndpoint, createCodexChannel, createCodexCredentialGroup, createCodexEndpoint, deleteCodexChannelByID, deleteCodexCredentialGroupByID, deleteCodexEndpointByID, getCodexChannels, getCodexGlobalConfig, getNextAvailableCodexChannel, getSettingsByScope, getCodexSuspendedCount, subscribeToEvent, setDefaultCodexCredentialGroup, setCodexChannelFailoverEnabled, updateCodexChannelByID, updateCodexCredentialGroupByID, updateCodexEndpointByID } from '@/services/wails/index.js';
 import { getCredentialGroups, hasCodexCredential, getDefaultCredentialGroup, buildCodexEndpointCopyOptions, buildCodexEndpointCopyPayload } from './model.js';
 import { CodexLogo } from './components/CodexLogo.jsx';
@@ -75,7 +76,6 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
   const [credentialGroupFormChannel, setCredentialGroupFormChannel] = useState(null);
   const [editingCredentialGroup, setEditingCredentialGroup] = useState(null);
   const [credentialGroupFormError, setCredentialGroupFormError] = useState('');
-  const [channelSetupDraft, setChannelSetupDraft] = useState(null);
   const [commitChannelSetup] = useState(createChannelSetupCommitter);
   const [deleteCredentialGroupTarget, setDeleteCredentialGroupTarget] = useState(null);
 	const [credentialGroupDetailTarget, setCredentialGroupDetailTarget] = useState(null);
@@ -218,6 +218,7 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
     setChannelFormMode('create');
     setEditingChannel(null);
     setChannelFormError('');
+    setEndpointFormError('');
     setShowChannelForm(true);
   };
 
@@ -235,23 +236,8 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
   };
 
   const handleSaveChannel = async (payload) => {
-    const isCreating = channelFormMode !== 'edit' || !editingChannel;
-    if (isCreating) {
-      if (channels.some((channel) => channel.name === payload.name)) {
-        setChannelFormError('渠道名称已存在');
-        return;
-      }
-      const draftChannel = { ...payload, id: -1, credentialGroups: [], endpoints: [] };
-      setChannelSetupDraft({ channel: draftChannel });
-      closeChannelForm();
-      setCredentialGroupFormMode('create');
-      setCredentialGroupFormChannel(draftChannel);
-      setEditingCredentialGroup({ name: '默认分组', isDefault: true });
-      setCredentialGroupFormError('');
-      setShowCredentialGroupForm(true);
-      return;
-    }
-    setActionLoading(channelFormMode === 'edit' ? 'update-channel' : 'create-channel');
+    if (!editingChannel) return;
+    setActionLoading('update-channel');
     setChannelFormError('');
     try {
       await updateCodexChannelByID(editingChannel.id, payload);
@@ -287,7 +273,6 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
 
   // ===== 凭证分组动作 =====
   const openCreateCredentialGroupForm = (channel) => {
-    setChannelSetupDraft(null);
     setCredentialGroupFormMode('create');
     setCredentialGroupFormChannel(channel);
     setEditingCredentialGroup(null);
@@ -296,7 +281,6 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
   };
 
   const openEditCredentialGroupForm = (channel, group) => {
-    setChannelSetupDraft(null);
     setCredentialGroupFormMode('edit');
     setCredentialGroupFormChannel(channel);
     setEditingCredentialGroup(group);
@@ -309,7 +293,6 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
     setCredentialGroupFormChannel(null);
     setEditingCredentialGroup(null);
     setCredentialGroupFormError('');
-    setChannelSetupDraft(null);
   };
 
   const handleSaveCredentialGroup = async (payload) => {
@@ -317,22 +300,6 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
     const { copyEndpoints = [], ...groupPayload } = payload || {};
     delete groupPayload.copyEndpointsFromGroupId;
     const targetChannel = credentialGroupFormChannel;
-    if (channelSetupDraft) {
-      const draftGroup = { ...groupPayload, id: -1, isDefault: true, modelPolicy: 'inherit' };
-      const draftChannel = { ...channelSetupDraft.channel, credentialGroups: [draftGroup] };
-      setChannelSetupDraft({ channel: draftChannel, group: draftGroup });
-      setShowCredentialGroupForm(false);
-      setCredentialGroupFormChannel(null);
-      setEditingCredentialGroup(null);
-      setCredentialGroupFormError('');
-      setEndpointFormMode('create');
-      setEndpointFormChannel(draftChannel);
-      setEndpointFormCredentialGroup(draftGroup);
-      setEditingEndpoint(null);
-      setEndpointFormError('');
-      setShowEndpointForm(true);
-      return;
-    }
     let savedGroup = null;
     const loadingKey = credentialGroupFormMode === 'edit'
       ? `save-credential-group-${editingCredentialGroup?.id}`
@@ -433,13 +400,12 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
     setEndpointFormCredentialGroup(null);
     setEditingEndpoint(null);
     setEndpointFormError('');
-    setChannelSetupDraft(null);
   };
 
-  const handleSaveEndpoint = async ({ name, baseURL, credentialGroupId, failoverEnabled, skipHealthCheck, priority, timeoutSeconds }) => {
+  const handleSaveEndpoint = async ({ name, baseURL, credentialGroupId, failoverEnabled, skipHealthCheck, priority, timeoutSeconds, pathStrategy }, setupDraft = null) => {
     if (actionLoading) return;
-    if (channelSetupDraft) {
-      const { channel, group } = channelSetupDraft;
+    if (setupDraft) {
+      const { channel, group } = setupDraft;
       const groupPayload = { ...group };
       delete groupPayload.id;
       setActionLoading('create-endpoint');
@@ -456,13 +422,13 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
           },
           saveEndpoint: (createdChannel, savedGroup) => createCodexEndpoint({
             channelId: createdChannel.id, credentialGroupId: savedGroup.id,
-            name, baseURL, failoverEnabled, skipHealthCheck, priority, timeoutSeconds
+            name, baseURL, failoverEnabled, skipHealthCheck, priority, timeoutSeconds, pathStrategy
           }),
           remove: (createdChannel) => createdChannel ? deleteCodexChannelByID(createdChannel.id) : Promise.resolve()
         });
       } catch (err) {
         setEndpointFormError(getErrorMessage(err, '创建渠道失败'));
-        return;
+        return false;
       } finally {
         setActionLoading('');
       }
@@ -472,7 +438,7 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
       } catch (err) {
         toast.error(`渠道已创建，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`, '刷新失败');
       }
-      return;
+      return true;
     }
     if (endpointFormMode === 'edit') {
       if (!editingEndpoint) return;
@@ -486,7 +452,8 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
           failoverEnabled,
           skipHealthCheck,
           priority,
-          timeoutSeconds
+          timeoutSeconds,
+          pathStrategy
         });
       } catch (err) {
         setEndpointFormError(getErrorMessage(err, '更新端点失败'));
@@ -515,7 +482,8 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
         failoverEnabled,
         skipHealthCheck,
         priority,
-        timeoutSeconds
+        timeoutSeconds,
+        pathStrategy
       });
     } catch (err) {
       setEndpointFormError(getErrorMessage(err, '保存端点失败'));
@@ -747,7 +715,15 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
 
       </DispatchWorkspace>
 
-      {showChannelForm && (
+      {showChannelForm && channelFormMode === 'create' && <ChannelSetupWizard
+        channels={channels}
+        loading={actionLoading === 'create-endpoint'}
+        serverError={endpointFormError}
+        onCancel={closeChannelForm}
+        onSave={async draft => { if (await handleSaveEndpoint(draft.endpoint, draft)) closeChannelForm(); }}
+      />}
+
+      {showChannelForm && channelFormMode === 'edit' && (
         <ChannelFormModal
           mode={channelFormMode}
           channel={editingChannel}
@@ -765,7 +741,6 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
           mode={credentialGroupFormMode}
           channel={credentialGroupFormChannel}
           group={editingCredentialGroup}
-          continueToEndpoint={Boolean(channelSetupDraft)}
           loading={
             credentialGroupFormMode === 'edit'
               ? actionLoading === `save-credential-group-${editingCredentialGroup?.id}`
@@ -797,7 +772,6 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
           channel={endpointFormChannel}
           endpoint={editingEndpoint}
           credentialGroup={endpointFormCredentialGroup}
-          initialSetup={Boolean(channelSetupDraft)}
           loading={
             endpointFormMode === 'edit'
               ? actionLoading === `save-endpoint-${editingEndpoint?.id}`

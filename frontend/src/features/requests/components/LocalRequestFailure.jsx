@@ -2,13 +2,17 @@ import { useState } from 'react';
 import { Check, Copy, CircleSlash, Unplug } from 'lucide-react';
 import { Tooltip } from '@/shared/ui/index.js';
 import { describeFailureReason } from '../utils/failureSummary.js';
+import RequestCandidateRecovery from './RequestCandidateRecovery.jsx';
 
-export default function LocalRequestFailure({ details }) {
+export default function LocalRequestFailure({ details, provider }) {
   const [copied, setCopied] = useState(false);
   const Icon = details.localTitle === '请求未发送' ? CircleSlash : Unplug;
   const singleHop = details.localHops.length === 1 ? details.localHops[0] : null;
   const repeatsHop = singleHop && (describeFailureReason(singleHop.skipReason) || singleHop.error) === details.localSummary;
-  const text = [details.localTitle, details.localSummary, details.localDetail,
+  const text = [details.localTitle, details.localSummary, ...(details.stopContext || []), details.localDetail,
+    ...(details.blockingCandidates || []).map(item => [item.channel, item.credentialGroup, item.label, item.endpoints.join(', '), item.recovery?.costs,
+      item.blockage?.cause && `触发原因：${describeFailureReason(item.blockage.cause) || item.blockage.cause}`, item.recovery?.recovery, item.recovery?.action].filter(Boolean).join(' / ')),
+    !details.blockingCandidates?.length && details.blockerAdvice,
     ...details.localHops.map(hop => [hop.channel, hop.credentialGroup, hop.endpoint,
       describeFailureReason(hop.skipReason) || hop.skipReason || hop.error].filter(Boolean).join(' / '))
   ].filter(Boolean).join('\n');
@@ -23,6 +27,25 @@ export default function LocalRequestFailure({ details }) {
     </div>
     <div className="min-w-0 space-y-3 p-4 text-sm text-amber-950">
       {!repeatsHop && <p className="font-medium leading-6 [overflow-wrap:anywhere]">{details.localSummary}</p>}
+      {details.stopContext?.length > 0 && <div className="space-y-1 text-xs leading-5 text-slate-700">{details.stopContext.map(line => <p key={line} className="[overflow-wrap:anywhere]">{line}</p>)}</div>}
+      {details.blockingCandidates?.length > 0 && <div className="space-y-1.5">
+        <p className="text-xs font-semibold text-slate-700">本次请求的阻塞记录</p>
+        <ul className="divide-y divide-amber-200/70 rounded-lg border border-amber-200/80 bg-white/60">
+          {details.blockingCandidates.map((item, index) => <li key={`${item.reason}/${item.channel}/${item.credentialGroup}/${index}`} className="min-w-0 space-y-1 px-3 py-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
+              <span className="min-w-0 [overflow-wrap:anywhere]">{[item.channel, item.credentialGroup].filter(Boolean).join(' / ') || '候选未记录'}</span>
+              <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-amber-800">{item.label}</span>
+            </div>
+            {item.endpoints.length > 0 && <p className="text-xs leading-5 text-slate-500 [overflow-wrap:anywhere]">端点：{item.endpoints.join('、')}</p>}
+            {item.recovery?.costs && <p className="text-xs font-medium leading-5 text-slate-700 [overflow-wrap:anywhere]">{item.recovery.costs}</p>}
+            {item.blockage?.cause && <p className="text-xs leading-5 text-slate-600 [overflow-wrap:anywhere]">触发原因：{describeFailureReason(item.blockage.cause) || item.blockage.cause}</p>}
+            {item.recovery?.recovery && <p className="text-xs leading-5 text-slate-600 [overflow-wrap:anywhere]">{item.recovery.recovery}</p>}
+            {item.recovery?.action && <p className="text-xs leading-5 text-slate-700 [overflow-wrap:anywhere]">处理：{item.recovery.action}</p>}
+            {item.blockage?.observedAt && <p className="text-xs leading-5 text-slate-400">记录时间：{new Date(item.blockage.observedAt).toLocaleString('zh-CN', { hour12: false })}</p>}
+            <RequestCandidateRecovery target={{ ...item.blockage, provider: item.blockage?.provider || provider }} />
+          </li>)}
+        </ul>
+      </div>}
       {details.localHops.length > 0 && <ul className="divide-y divide-amber-200/70 rounded-lg border border-amber-200/80 bg-white/60">
         {details.localHops.map((hop, index) => <li key={`${hop.hop}/${index}`} className="min-w-0 space-y-1 px-3 py-2">
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
@@ -32,6 +55,7 @@ export default function LocalRequestFailure({ details }) {
           <p className="whitespace-pre-wrap text-xs leading-5 [overflow-wrap:anywhere]">{describeFailureReason(hop.skipReason) || hop.skipReason || hop.error || '未记录具体原因'}</p>
         </li>)}
       </ul>}
+      {details.blockerAdvice && !details.blockingCandidates?.length && <p className="text-xs leading-5 text-slate-700 [overflow-wrap:anywhere]">{details.blockerAdvice}</p>}
       {details.localDetail && !details.localHops.some(hop => hop.error === details.localDetail || hop.skipReason === details.localDetail) && <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded-lg bg-white/70 p-3 font-mono text-xs leading-5 text-slate-700 [overflow-wrap:anywhere]">{details.localDetail}</pre>}
     </div>
   </section>;

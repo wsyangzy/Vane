@@ -2,6 +2,7 @@ import Tooltip from '@/shared/ui/Tooltip.jsx';
 import { useId, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Check, KeyRound, Layers, Plus, Trash2, X } from 'lucide-react';
 import { Button } from '@/shared/ui/index.js';
+import { formatMultiplierDisplayValue } from '@/shared/lib/multiplier.js';
 import { moveProfileChannel, profileChannelIds, selectProfileChannels, updateProfileMembers } from './dispatchState.js';
 import ChannelPickerDialog from './ChannelPickerDialog.jsx';
 import './profileMembers.css';
@@ -14,7 +15,7 @@ function GroupCard({ account, member, channelName, groupId, weighted, busy, onCh
   return <div className="profile-group-card" data-selected={selected}>
     <label className="profile-group-select">
       <span className="profile-group-icon"><KeyRound size={14} /></span>
-      <span className="profile-group-identity"><span className="profile-group-name">{name}</span><span className="profile-group-kind">{groupId === 0 ? '包含当前及后续新增分组' : account?.managed ? '托管订阅' : '分组凭证'}</span></span>
+      <span className="profile-group-identity"><span className="profile-group-name">{name}</span>{(groupId === 0 || account?.managed) && <span className="profile-group-kind">{groupId === 0 ? '包含当前及后续新增分组' : '托管订阅'}</span>}{groupId > 0 && account && <span className="profile-group-multiplier">{formatMultiplierDisplayValue(account.costMultiplier)}</span>}</span>
       <span className="profile-group-state"><input type="checkbox" aria-label={`${channelName} / ${name} 参与调度`} checked={selected} disabled={busy} onChange={(event) => onChange({ enabled: event.target.checked })} />{selected ? '参与' : '未参与'}</span>
     </label>
     {weighted && <div className="profile-group-fields"><label className="profile-group-field"><span>调度权重</span><input aria-label={`${channelName} / ${name} 权重`} type="number" min="1" max="10000" value={member?.weight ?? 1} disabled={busy || !selected} onChange={(event) => onChange({ weight: event.target.value })} /></label></div>}

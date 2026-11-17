@@ -197,7 +197,7 @@ export const ToastProvider = ({ children }) => {
   }, []);
 
   const addToast = useCallback((options) => {
-    const id = ++toastIdRef.current;
+    const id = options.id ?? ++toastIdRef.current;
     const toast = {
       id,
       type: options.type || 'info',
@@ -206,20 +206,27 @@ export const ToastProvider = ({ children }) => {
       duration: options.duration ?? 4000 // 默认 4 秒
     };
 
-    setToasts((prev) => [...prev, toast]);
+    setToasts((prev) => prev.some(item => item.id === id) ? prev : [...prev, toast]);
 
     return id;
+  }, []);
+
+  const updateToast = useCallback((id, { type, title, message }) => {
+    // Preserve the original duration and mounted item: repeated failures must
+    // neither reset expiry nor resurrect a toast the user has dismissed.
+    setToasts(prev => prev.map(item => item.id === id ? { ...item, type: type ?? item.type, title: title ?? item.title, message: message ?? item.message } : item));
   }, []);
 
   // 便捷方法
   const toast = useMemo(() => ({
     show: (message, options = {}) => addToast({ message, ...options }),
     dismiss: removeToast,
+    update: updateToast,
     success: (message, title) => addToast({ type: 'success', message, title: title || '成功' }),
     error: (message, title) => addToast({ type: 'error', message, title: title || '错误', duration: 6000 }),
     warning: (message, title) => addToast({ type: 'warning', message, title: title || '警告', duration: 5000 }),
     info: (message, title) => addToast({ type: 'info', message, title: title || '提示' })
-  }), [addToast, removeToast]);
+  }), [addToast, removeToast, updateToast]);
 
   return (
     <ToastContext.Provider value={toast}>

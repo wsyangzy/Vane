@@ -14,7 +14,9 @@ const CreateChannelModal = ({
   loading = false,
   serverError = '',
   mode = 'create',
-  initialValue = null
+  initialValue = null,
+  embedded = false,
+  formId
 }) => {
   const isEdit = mode === 'edit';
   const [name, setName] = useState(() => (isEdit ? (initialValue?.name || '') : ''));
@@ -23,10 +25,10 @@ const CreateChannelModal = ({
 
   if (!open) return null;
 
-  return renderModalPortal(
-    <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-sm flex items-center justify-center p-4 z-[60]">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
-        <div className="flex items-start justify-between px-6 py-4 border-b border-slate-100">
+  return (embedded ? content => content : renderModalPortal)(
+    <div className={embedded ? 'contents' : 'fixed inset-0 bg-slate-900/30 backdrop-blur-sm flex items-center justify-center p-4 z-[60]'}>
+      <div className={embedded ? 'channel-setup-embedded' : 'bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden'}>
+        {!embedded && <div className="flex items-start justify-between px-6 py-4 border-b border-slate-100">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑渠道' : '添加渠道 · 1/3'}</h2>
             <p className="text-xs text-slate-500 mt-1">
@@ -43,9 +45,10 @@ const CreateChannelModal = ({
               <XCircle size={18} />
             </button>
           </Tooltip>
-        </div>
+        </div>}
 
         <form
+          id={formId}
           onSubmit={(e) => {
             e.preventDefault();
             const trimmedName = name.trim();
@@ -66,9 +69,9 @@ const CreateChannelModal = ({
           className="flex flex-1 flex-col overflow-hidden"
           autoComplete="off"
         >
-          <div className="flex-1 overflow-y-auto p-6">
+          <div className={`flex-1 overflow-y-auto p-6 ${embedded ? 'channel-setup-fields' : ''}`}>
             {(error || serverError) && (
-              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-sm">
+              <div role="alert" className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-sm">
                 {error || serverError}
               </div>
             )}
@@ -79,6 +82,7 @@ const CreateChannelModal = ({
                 渠道名称 <span className="text-rose-500">*</span>
               </label>
               <input
+                aria-label="渠道名称"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="例如：official / backup / openai"
@@ -97,6 +101,7 @@ const CreateChannelModal = ({
             <div>
               <label className="block text-sm font-medium text-slate-700">渠道官网</label>
               <input
+                aria-label="渠道官网"
                 value={website}
                 onChange={(e) => setWebsite(e.target.value)}
                 placeholder="https://example.com (可选)"
@@ -111,14 +116,14 @@ const CreateChannelModal = ({
           </div>
           </div>
 
-          <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-white px-6 py-4">
+          {!embedded && <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-white px-6 py-4">
             <Button variant="ghost" type="button" onClick={onClose} disabled={loading}>
               取消
             </Button>
             <Button icon={isEdit ? CheckCircle2 : undefined} type="submit" loading={loading}>
               {isEdit ? '保存修改' : '下一步'}
             </Button>
-          </div>
+          </div>}
         </form>
       </div>
     </div>

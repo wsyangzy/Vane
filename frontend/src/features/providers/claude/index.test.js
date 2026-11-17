@@ -13,6 +13,7 @@ const source = await import('node:fs').then(({ readFileSync }) => [
   'components/EndpointMiniCard.jsx',
   'components/EndpointDetailModal.jsx',
   'components/CreateChannelModal.jsx',
+  'components/ChannelSetupWizard.jsx',
   'components/ClaudeCredentialGroupFormModal.jsx',
   'components/ChannelCard.jsx',
   'index.jsx',
@@ -84,12 +85,10 @@ test('Claude credential groups no longer expose long-context pricing', () => {
   assert.match(source, /disableLongContextPricing:\s*true/);
 });
 
-test('new Claude channels keep the first two steps in a draft and commit with the endpoint', () => {
-  const firstStep = source.slice(source.indexOf('const handleCreateChannel ='), source.indexOf('const handleOpenEditChannel ='));
-  assert.match(firstStep, /setChannelSetupDraft\(\{ channel: payload \}\)/);
-  assert.doesNotMatch(firstStep, /await (createChannel|loadChannelsMeta)/);
-  assert.match(source, /if \(channelSetupDraft\) \{[\s\S]*?setShowForm\(true\);\s*return;/);
-  assert.match(source, /continueToEndpoint=\{Boolean\(channelSetupDraft\)\}/);
+test('new Claude channels keep wizard drafts local and commit all resources only on final confirmation', () => {
+  assert.match(source, /handleSave\(draft\.endpoint, draft\)/);
+  assert.match(source, /if \(setupDraft\) \{/);
+  assert.doesNotMatch(source, /setChannelSetupDraft/);
   assert.match(source, /await commitChannelSetup\(/);
   assert.match(source, /credentialGroupId: savedGroup\.id/);
   assert.match(source, /remove: \(\) => deleteChannel\(channel\.name, true\)/);
@@ -115,7 +114,7 @@ test('Claude setup hides infrequent model policy and distinguishes a saved chann
   assert.match(source, /filter\(\(tab\) => !continueToEndpoint \|\| tab\.key !== 'model'\)/);
   assert.match(source, /modelPolicy: 'inherit'/);
   assert.match(source, /savedChannelSetup \? '渠道已创建' : '端点已保存'/);
-  assert.match(source, /initialSetup=\{Boolean\(channelSetupDraft\)\}/);
+  assert.match(source, /<EndpointForm key="endpoint" embedded formId=.*initialSetup/);
   assert.doesNotMatch(source, /initialSetupChannelName/);
 });
 

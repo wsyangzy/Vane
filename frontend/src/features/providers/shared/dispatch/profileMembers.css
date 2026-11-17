@@ -71,6 +71,9 @@
 .profile-members-empty > svg { margin-bottom: 3px; color: #b8c4d4; }
 .profile-members-empty small { color: #94a3b8; font-size: 11px; }
 .profile-selected-channels { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 10px; }
+@container (min-width: 1000px) {
+  .profile-selected-channels { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .profile-channel-block { min-width: 0; overflow: hidden; border: 1px solid #e2e8f0; border-radius: 9px; background: #fff; }
 .profile-channel-header { min-width: 0; flex-wrap: wrap; gap: 6px 9px; padding: 7px 10px; border-bottom: 1px solid #edf1f7; background: #f8fafc; }
 .profile-channel-order { display: grid; width: 24px; height: 24px; flex-shrink: 0; place-items: center; border: 1px solid #e0e7ff; border-radius: 6px; color: #6366f1; background: #fff; font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -94,6 +97,7 @@
 .profile-group-identity { display: flex; min-width: 0; flex: 1; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
 .profile-group-name { min-width: 0; overflow-wrap: anywhere; color: #475569; font-size: 11px; font-weight: 500; line-height: 17px; }
 .profile-group-kind { color: #94a3b8; font-size: 9px; line-height: 15px; }
+.profile-group-multiplier { color: #64748b; font-size: 9px; line-height: 15px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .profile-group-state { flex-shrink: 0; gap: 5px; color: #94a3b8; font-size: 10px; white-space: nowrap; }
 .profile-group-state input { flex-shrink: 0; }
 .profile-group-card[data-selected="true"] .profile-group-state { color: #6366f1; }

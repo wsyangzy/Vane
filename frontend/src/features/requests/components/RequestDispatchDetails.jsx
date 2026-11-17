@@ -2,6 +2,7 @@ import { Activity, Check, ChevronDown, Fingerprint, FolderKey, ListOrdered, Rout
 import { affinityOptions, dispatchReason, strategyOptions } from '@/features/providers/shared/dispatch/dispatchState.js';
 import { formatDuration } from '@/services/http/api.js';
 import ModelTag from './ModelTag.jsx';
+import { describeFailureReason } from '../utils/failureSummary.js';
 import './requestDispatch.css';
 
 const optionLabel = (options, value) => options.find(item => item.value === value)?.label.split(' · ')[0] || value;
@@ -18,7 +19,7 @@ const eventReason = reason => ({
   upstream_error: '上游返回错误', upstream_failure: '上游调用失败',
   incomplete_response: '响应未完整结束', response_incomplete: '响应未完整结束',
   network_error: '连接或网络异常', candidate_busy: '候选资源正在使用中',
-}[reason] || dispatchReason(reason));
+}[reason] || describeFailureReason(reason) || dispatchReason(reason));
 
 function DispatchEvents({ attempt }) {
   return <details className="request-dispatch-events">
@@ -93,10 +94,12 @@ export default function RequestDispatchDetails({ trace, expanded = false }) {
       {trace.decision.intent_id && <span>意图 {trace.decision.intent_id}</span>}
       {trace.decision.reused_turn && <span>复用本轮决策</span>}
       {trace.waitMs > 0 && <span>等待 {formatDuration(trace.waitMs)}</span>}
+      {trace.nextRecoveryAt && <span>预计恢复 {dateLabel(trace.nextRecoveryAt)}</span>}
     </div>
     <RuleTargets trace={trace} />
     {expanded && <>
       <dl className="request-dispatch-summary"><div><dt>调度结果</dt><dd>{result}</dd></div><div><dt>上游尝试</dt><dd>{trace.attemptCount} 次</dd></div><div><dt>候选跳过</dt><dd>{trace.skipped.length} 条</dd></div><div><dt>等待恢复</dt><dd>{formatDuration(trace.waitMs)}</dd></div></dl>
+      {(trace.maxAttempts > 0 || trace.maxDurationMs > 0) && <dl className="request-dispatch-summary">{trace.maxAttempts > 0 && <div><dt>发送次数上限</dt><dd>{trace.maxAttempts} 次</dd></div>}{trace.maxDurationMs > 0 && <div><dt>请求时间上限</dt><dd>{formatDuration(trace.maxDurationMs)}</dd></div>}</dl>}
       <h4 className="request-dispatch-section-title">实际发送路径</h4>
     </>}
     {!!trace.attempts.length && <ol className="request-dispatch-attempts" aria-label="实际调用路径">{trace.attempts.map((attempt, index) => <li key={`${attempt.key}/${index}`} data-result={attempt.action}>
@@ -122,8 +125,8 @@ export default function RequestDispatchDetails({ trace, expanded = false }) {
       <div className="request-dispatch-result"><span>{!expanded && (attempt.action === 'success' ? <Check size={12} aria-hidden="true" /> : attempt.action === 'failed' ? <X size={12} aria-hidden="true" /> : <Activity size={12} aria-hidden="true" />)}{actionLabels[attempt.action] || '处理中'}</span>{attempt.durationMs != null && <small>{formatDuration(attempt.durationMs)}</small>}{attempt.statusCode > 0 && <small>HTTP {attempt.statusCode}</small>}</div>
     </li>)}</ol>}
     {!trace.attempts.length && <p className="request-dispatch-empty">{trace.attemptCount ? '此记录未保存逐次候选事件。' : trace.finished || trace.stopReason ? '未向上游发送请求。' : '等待调度选择上游。'}</p>}
-    {trace.stopReason && <p className="request-dispatch-stop">结束原因：{dispatchReason(trace.stopReason)}</p>}
-    {!!trace.skipped.length && <details className="request-dispatch-skipped"><summary>{trace.skipped.length} 条候选跳过记录</summary><ul>{trace.skipped.map((item, index) => <li key={index}><span>{item.channel} / {item.credentialGroup} / {item.endpoint}</span><small>{item.reason ? eventReason(item.reason) : '未发起上游调用'}</small></li>)}</ul></details>}
+    {trace.stopReason && <p className="request-dispatch-stop">结束原因：{eventReason(trace.stopReason)}</p>}
+    {!!trace.skipped.length && <details open={expanded} className="request-dispatch-skipped"><summary>{trace.skipped.length} 条候选跳过记录</summary><ul>{trace.skipped.map((item, index) => <li key={index}><span>{item.channel} / {item.credentialGroup} / {item.endpoint}</span><small>{item.reason ? eventReason(item.reason) : '未发起上游调用'}</small></li>)}</ul></details>}
     {expanded && <DispatchDiagnostics trace={trace} />}
     <div className="request-dispatch-footnote">{expanded && <><p>记录范围：本次 {trace.provider === 'claude' ? 'Claude' : trace.provider === 'codex' ? 'Codex' : ''} 请求的调度过程。</p><p>开始：{dateLabel(trace.createdAt)} · 结束：{trace.finishedAt ? dateLabel(trace.finishedAt) : pending ? '进行中' : '未记录'}</p></>}<p>方案与决策取自请求当时的记录{expanded ? '；资源名称优先使用历史链路，其余按当前配置解析。' : '。'}</p></div>
   </section>;

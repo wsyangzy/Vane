@@ -196,6 +196,7 @@ const mapCodexEndpoint = (endpoint) => ({
   apiKeyMasked: endpoint.api_key_masked || endpoint.apiKeyMasked || '',
   name: endpoint.name || '',
   baseURL: endpoint.base_url,
+  pathStrategy: endpoint.path_strategy || 'legacy',
   isActive: Boolean(endpoint.is_active),
   failoverEnabled: endpoint.failover_enabled !== false,
   skipHealthCheck: Boolean(endpoint.skip_health_check),
@@ -468,7 +469,7 @@ const setDefaultCodexCredentialGroup = async (id) => {
 /**
  * 在指定渠道/凭证分组下新增端点。端点只负责 base_url 线路配置，API Key 与计费倍率归属凭证分组。
  */
-const createCodexEndpoint = async ({ channelId, credentialGroupId, name, baseURL, failoverEnabled, skipHealthCheck, priority, timeoutSeconds }) => {
+const createCodexEndpoint = async ({ channelId, credentialGroupId, name, baseURL, failoverEnabled, skipHealthCheck, priority, timeoutSeconds, pathStrategy }) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
   const payload = {
@@ -481,6 +482,7 @@ const createCodexEndpoint = async ({ channelId, credentialGroupId, name, baseURL
   if (skipHealthCheck !== undefined) payload.skip_health_check = skipHealthCheck;
   if (priority !== undefined) payload.priority = priority;
   if (timeoutSeconds !== undefined) payload.timeout_seconds = parseEndpointTimeout(timeoutSeconds);
+  if (pathStrategy !== undefined) payload.path_strategy = pathStrategy;
   await WailsApp.CreateCodexEndpoint(payload);
   return { success: true };
 };
@@ -488,7 +490,7 @@ const createCodexEndpoint = async ({ channelId, credentialGroupId, name, baseURL
 /**
  * 更新端点线路配置。未传的历史端点计费字段由后端保留，运行时不再读取端点级计费。
  */
-const updateCodexEndpointByID = async (id, { name, baseURL, credentialGroupId, failoverEnabled, skipHealthCheck, priority, timeoutSeconds }) => {
+const updateCodexEndpointByID = async (id, { name, baseURL, credentialGroupId, failoverEnabled, skipHealthCheck, priority, timeoutSeconds, pathStrategy }) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
   const payload = {
@@ -500,6 +502,7 @@ const updateCodexEndpointByID = async (id, { name, baseURL, credentialGroupId, f
   if (skipHealthCheck !== undefined) payload.skip_health_check = skipHealthCheck;
   if (priority !== undefined) payload.priority = priority;
   if (timeoutSeconds !== undefined) payload.timeout_seconds = parseEndpointTimeout(timeoutSeconds);
+  if (pathStrategy !== undefined) payload.path_strategy = pathStrategy;
   await WailsApp.UpdateCodexEndpointByID(id, payload);
   return { success: true };
 };
@@ -578,3 +581,11 @@ const updateCodexGlobalConfig = async (input) => {
 };
 
 export { getCodexProviderStorageStatus, getCodexProviders, createCodexProvider, updateCodexProviderByID, deleteCodexProviderByID, activateCodexProvider, mapCodexCredentialGroup, buildCodexCredentialGroupPayload, getCodexChannels, getNextAvailableCodexChannel, createCodexChannel, updateCodexChannelByID, setCodexChannelFailoverEnabled, deleteCodexChannelByID, activateCodexChannel, createCodexCredentialGroup, updateCodexCredentialGroupByID, deleteCodexCredentialGroupByID, setDefaultCodexCredentialGroup, createCodexEndpoint, updateCodexEndpointByID, deleteCodexEndpointByID, activateCodexEndpoint, getCodexSuspendedCount, getCodexGlobalConfig, updateCodexGlobalConfig };
+
+const probeCodexEndpoint = async ({channelId, credentialGroupId, endpointId, baseURL, apiKey, model, pathStrategy, verifyResponse = false}) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return WailsApp.ProbeCodexEndpoint({channel_id: channelId || 0, credential_group_id: credentialGroupId || 0, endpoint_id: endpointId || 0,
+    base_url: (baseURL || '').trim(), api_key: apiKey || '', model: model || '', path_strategy: pathStrategy || '', verify_response: verifyResponse});
+};
+export { probeCodexEndpoint };

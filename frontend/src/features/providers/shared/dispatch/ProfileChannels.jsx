@@ -1,4 +1,4 @@
-import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, Server } from 'lucide-react';
 import { profileChannelIds } from './dispatchState.js';
 import ChannelGroupsPopover from './ChannelGroupsPopover.jsx';
@@ -14,17 +14,31 @@ export default function ProfileChannels({ profile, channels, accounts = [] }) {
   const panelId = useId();
   const panelRef = useRef(null);
   const restoringFocus = useRef(false);
+  const closeTimer = useRef(null);
   const summaryRef = useRef(null);
   const measureRef = useRef(null);
   const moreRef = useRef(null);
+  const cancelClose = useCallback(() => {
+    if (closeTimer.current) window.clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+  }, []);
   const close = useCallback(() => {
+    cancelClose();
     if (panelRef.current?.contains(document.activeElement)) {
       restoringFocus.current = true;
       floating?.anchor.focus({ preventScroll: true });
       restoringFocus.current = false;
     }
     setFloating(value => value ? { ...value, open: false } : null);
-  }, [floating?.anchor]);
+  }, [cancelClose, floating?.anchor]);
+  const scheduleClose = useCallback(() => {
+    cancelClose();
+    closeTimer.current = window.setTimeout(() => {
+      closeTimer.current = null;
+      close();
+    }, 180);
+  }, [cancelClose, close]);
+  useEffect(() => () => cancelClose(), [cancelClose]);
   const trigger = key => {
     const open = (event, focusPanel = false) => {
       setFloating({ key, anchor: event.currentTarget, open: true, focusPanel });
@@ -32,10 +46,11 @@ export default function ProfileChannels({ profile, channels, accounts = [] }) {
     return {
       'aria-haspopup': 'dialog', 'aria-expanded': floating?.open && floating.key === key || false,
       'aria-controls': floating?.open && floating.key === key ? panelId : undefined,
-      onPointerEnter: event => { if (event.pointerType !== 'touch') open(event); }, onPointerLeave: close,
-      onFocus: event => { if (!restoringFocus.current) open(event); },
+      onPointerEnter: event => { if (event.pointerType !== 'touch') { cancelClose(); open(event); } },
+      onPointerLeave: event => { if (event.pointerType !== 'touch') scheduleClose(); },
+      onFocus: event => { cancelClose(); if (!restoringFocus.current) open(event); },
       onBlur: event => { if (!panelRef.current?.contains(event.relatedTarget)) close(); },
-      onClick: event => open(event),
+      onClick: event => { cancelClose(); open(event); },
       onKeyDown: event => { if (event.key === 'ArrowDown') { event.preventDefault(); open(event, true); } },
     };
   };
@@ -70,6 +85,6 @@ export default function ProfileChannels({ profile, channels, accounts = [] }) {
       <span ref={moreRef} className="dp-channel-more dp-channel-measure" aria-hidden="true">… +{entries.length}</span>
       {entries.length ? <><ol className="dp-channel-list" aria-label="参与渠道摘要">{entries.slice(0, shown).map((entry, index) => chip(entry, index))}</ol>{shown < entries.length && <button type="button" className="dp-channel-more" aria-label={`查看全部 ${entries.length} 个渠道分组`} {...trigger('all')}>… +{entries.length - shown}</button>}</> : <p className="dp-summary-empty">尚未添加参与渠道。</p>}
     </div>
-    <ChannelGroupsPopover id={panelId} floating={floating} panelRef={panelRef} entries={floating?.key === 'all' ? entries : entries.filter(entry => entry.id === floating?.key)} accounts={accounts} strategy={profile.strategy} onClose={close} />
+    <ChannelGroupsPopover id={panelId} floating={floating ? { ...floating, cancelClose, scheduleClose } : null} panelRef={panelRef} entries={floating?.key === 'all' ? entries : entries.filter(entry => entry.id === floating?.key)} accounts={accounts} strategy={profile.strategy} onClose={close} />
   </div>;
 }

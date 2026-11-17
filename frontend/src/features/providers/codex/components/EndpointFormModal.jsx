@@ -7,10 +7,12 @@ import { isWailsEnvironment } from '@/services/wails/index.js';
 import { formatMultiplierExpression } from '@/shared/lib/multiplier.js';
 import { CODEX_ENDPOINT_FORM_TABS, getNextCodexEndpointPriority, BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS, formatEndpointTimeoutInputValue, parseEndpointTimeoutPayload, parseEndpointPriorityPayload } from '../model.js';
 import { EndpointToggleTile } from './EndpointToggleTile.jsx';
+import EndpointPathPolicy from './EndpointPathPolicy.jsx';
 
-const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, initialSetup = false, loading, serverError, onCancel, onSave }) => {
+const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, initialSetup = false, loading, serverError, onCancel, onSave, embedded = false, formId, pathStrategyOverride }) => {
   const [name, setName] = useState(endpoint?.name || '');
   const [baseURL, setBaseURL] = useState(endpoint?.baseURL || endpoint?.base_url || '');
+  const [pathStrategy, setPathStrategy] = useState(endpoint?.pathStrategy || endpoint?.path_strategy || (mode === 'edit' ? 'legacy' : 'v1'));
   const [activeTab, setActiveTab] = useState('basic');
   const credentialGroups = channel?.credentialGroups || [];
   const defaultCredentialGroup =
@@ -89,6 +91,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, initialSe
     await onSave?.({
       name: trimmedName,
       baseURL: trimmed,
+      pathStrategy: subscriptionGroup ? 'legacy' : pathStrategyOverride || pathStrategy,
       credentialGroupId: selectedCredentialGroupId,
       failoverEnabled,
       skipHealthCheck,
@@ -97,16 +100,16 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, initialSe
     });
   };
 
-  return renderModalPortal(
+  return (embedded ? content => content : renderModalPortal)(
     <div
-      className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/30 px-4 pb-4 backdrop-blur-sm animate-fade-in"
-      style={{ paddingTop: `${modalTopPadding}px` }}
+      className={embedded ? 'contents' : 'fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/30 px-4 pb-4 backdrop-blur-sm animate-fade-in'}
+      style={embedded ? undefined : { paddingTop: `${modalTopPadding}px` }}
     >
       <div
-        className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
-        style={{ maxHeight: modalMaxHeight }}
+        className={embedded ? 'channel-setup-embedded' : 'flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl'}
+        style={embedded ? undefined : { maxHeight: modalMaxHeight }}
       >
-        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+        {!embedded && <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">{initialSetup ? '添加渠道 · 3/3' : isEdit ? '编辑端点' : '新建端点'}</h2>
             {initialSetup && <p className="mt-0.5 text-xs text-slate-500">配置首个端点，确认后创建渠道</p>}
@@ -120,9 +123,9 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, initialSe
           >
             <X size={20} />
           </button>
-        </div>
+        </div>}
 
-        <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
+        <form id={formId} className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
           <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/70 px-6 py-3">
             <SegmentedTabs
               tabs={CODEX_ENDPOINT_FORM_TABS}
@@ -133,9 +136,9 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, initialSe
               buttonPaddingClass="px-2 sm:px-3"
             />
           </div>
-          <div className="space-y-4 overflow-y-auto px-6 py-6">
+          <div className={`space-y-4 overflow-y-auto px-6 py-6 ${embedded ? 'channel-setup-fields' : ''}`}>
             {(fieldError || serverError) && (
-              <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
                 {fieldError || serverError}
               </div>
             )}
@@ -247,15 +250,17 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, initialSe
                       {subscriptionGroup ? '订阅端点固定连接官方 Codex 服务，凭证来源在分组中配置' : '端点只保存线路信息；API Key 与计费倍率来自上方凭证分组'}
                     </p>
                   </div>
+                  {!subscriptionGroup && !embedded && <EndpointPathPolicy channel={channel} credentialGroup={selectedCredentialGroup} endpoint={endpoint} baseURL={baseURL} strategy={pathStrategy} onChange={setPathStrategy} disabled={loading} />}
                 </div>
               </div>
             ) : (
               <div className="space-y-3">
                 <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
                   <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-2">
-                    <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800"><Route size={15} className="text-slate-500" />请求路由</h3>
+                    <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800"><Route size={15} className="text-slate-500" />线路选择与超时</h3>
                     <span className="max-w-full truncate rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-500">{channel?.name} · {selectedCredentialGroup?.name || '默认分组'}</span>
                   </div>
+                  <p className="mb-4 text-xs leading-5 text-slate-500">优先级用于同一凭证分组内的多条线路，只有一个端点时可保留默认。渠道与分组的选用在调度方案中配置；实际线路还受可用状态、选路策略和上次成功线路影响。</p>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
                       <label className="mb-1.5 block text-sm font-medium text-slate-700">优先级</label>
@@ -309,14 +314,14 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, initialSe
             )}
           </div>
 
-          <div className="flex flex-shrink-0 items-center justify-end gap-3 border-t border-slate-100 bg-white px-6 py-4">
+          {!embedded && <div className="flex flex-shrink-0 items-center justify-end gap-3 border-t border-slate-100 bg-white px-6 py-4">
             <Button type="button" variant="ghost" onClick={onCancel} disabled={loading}>
               取消
             </Button>
             <Button variant="primary" icon={isEdit ? Pencil : Save} loading={loading} type="submit">
               {initialSetup ? '完成创建' : isEdit ? '保存修改' : '创建端点'}
             </Button>
-          </div>
+          </div>}
         </form>
       </div>
     </div>

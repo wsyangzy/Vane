@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildDispatchInput, buildIntentClassificationInput, buildRoutingProfilePayload, buildManualBalanceUpdate, listManualBalances, mapManualBalance, mapDispatchPreview, mapDispatchTrace, mapDispatchWorkspace, mapQuotaSnapshot, mapRoutingConfigurationStatus, mapRoutingProfile } from './dispatch.js';
+import { buildDispatchInput, buildIntentClassificationInput, buildRoutingProfilePayload, buildManualBalanceUpdate, buildDispatchRecoveryInput, mapDispatchRecovery, listManualBalances, mapManualBalance, mapDispatchPreview, mapDispatchTrace, mapDispatchWorkspace, mapQuotaSnapshot, mapRoutingConfigurationStatus, mapRoutingProfile } from './dispatch.js';
 
 test('dispatch reports the desktop requirement when no Wails runtime is present', async () => {
   await assert.rejects(listManualBalances('codex'), /需要在 Vane 桌面应用中使用/);
@@ -38,8 +38,9 @@ test('routing profile contract preserves nullable fallbacks, strings and duratio
 });
 
 test('workspace and quota mapping distinguish unknown from numeric zero across model scopes', () => {
-  const state = mapDispatchWorkspace({ profiles: [], channels: [{ id: 1, name: '渠道' }], accounts: [{ channel_id: 1, group_id: 2, group_name: '订阅', enabled: false, managed: true, auth_mode: 'subscription' }], quota: [{ provider: 'codex', channel_id: 1, group_id: 2, model_scope: 'gpt-a', window_name: '5h', used_percent: 0, confidence: 'exact' }, { provider: 'codex', channel_id: 1, group_id: 2, model_scope: 'gpt-b', window_name: '5h', confidence: 'unknown' }], runtime_mode: 'unified' });
+  const state = mapDispatchWorkspace({ profiles: [], channels: [{ id: 1, name: '渠道' }], accounts: [{ channel_id: 1, group_id: 2, group_name: '订阅', cost_multiplier: 0.4, enabled: false, managed: true, auth_mode: 'subscription' }], quota: [{ provider: 'codex', channel_id: 1, group_id: 2, model_scope: 'gpt-a', window_name: '5h', used_percent: 0, confidence: 'exact' }, { provider: 'codex', channel_id: 1, group_id: 2, model_scope: 'gpt-b', window_name: '5h', confidence: 'unknown' }], runtime_mode: 'unified' });
   assert.equal(Object.hasOwn(state, 'runtimeMode'), false); assert.equal(state.accounts[0].enabled, false);
+  assert.equal(state.accounts[0].costMultiplier, 0.4);
   assert.deepEqual(state.quotas.map((quota) => [quota.modelScope, quota.usedPercent]), [['gpt-a', 0], ['gpt-b', null]]);
   assert.equal(mapQuotaSnapshot({ remaining: 0, limit: 0 }).remaining, 0);
 });
@@ -60,6 +61,20 @@ test('dispatch input explicitly allowlists fields and configuration checks prese
   assert.deepEqual(input, { provider: 'claude', profile_id: 3, model: 'claude-a', streaming: false, conversation_id: 'c', branch_id: 'b', turn_id: 't', new_turn: true });
   const status = mapRoutingConfigurationStatus({ ready: false, checks: [{ code: 'default_profile', passed: false, message: '请先建立默认方案' }] });
   assert.equal(status.ready, false); assert.equal(status.checks[0].passed, false);
+});
+
+test('recovery bridge preserves saved cost facts and explicitly limits retry input to resource identifiers', () => {
+  const blockage = { provider: 'codex', channel_id: 38, group_id: 9, endpoint_id: '97', channel_name: 'ZeroCat', group_name: '常用', reason: 'daily_cost_limit_exceeded', recovery: 'automatic', daily_used_usd: 0, daily_limit_usd: 5, recover_at: '2026-11-18T00:00:00+08:00' };
+  const preview = mapDispatchPreview({ evaluations: [{ candidate: {}, blockage }] });
+  const trace = mapDispatchTrace({ candidates: [{ action: 'skipped', blockage }] });
+  assert.deepEqual(preview.candidates[0].blockage, trace.candidates[0].blockage);
+  assert.equal(trace.candidates[0].blockage.dailyUsedUsd, 0);
+  assert.equal(trace.candidates[0].blockage.dailyLimitUsd, 5);
+  assert.equal(mapDispatchRecovery({ blockage, can_retry: false }).canRetry, false);
+  assert.equal(mapDispatchRecovery({ blockage: { reason: 'cooldown' }, can_retry: true }).canRetry, true);
+  assert.deepEqual(buildDispatchRecoveryInput({ provider: 'codex', channelId: '38', groupId: '9', endpointId: '97', model: ' model ', apiKey: 'never-forward', body: 'never-replay' }), {
+    provider: 'codex', channel_id: 38, group_id: 9, endpoint_id: '97', model: 'model',
+  });
 });
 
 test('trace bridge retains the original model and public default source without adding sends', () => {

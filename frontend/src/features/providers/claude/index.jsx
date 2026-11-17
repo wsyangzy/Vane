@@ -17,6 +17,7 @@ import { selectPersistedEndpoints } from '@/features/providers/shared/endpoints/
 import { getCredentialGroupForEndpoint } from './utils/credentialGroups.js';
 import { buildClaudeEndpointCopyPayload } from './utils/endpointPayload.js';
 import { createChannelSetupCommitter } from '../shared/channelSetup.js';
+import ChannelSetupWizard from './components/ChannelSetupWizard.jsx';
 import { getEndpointStorageStatus, getEndpointRecords, createEndpointRecord, updateEndpointRecordByID, deleteEndpointRecordByID, activateEndpointRecordByID, setEndpointFailoverEnabledByID, setEndpointSkipHealthCheckByID, getChannels, createChannel, updateChannel, deleteChannel, getGroupsRaw, activateGroup, pauseGroup, resumeGroup, getNextAvailableChannel, getConfig, getSettingsByCategory, isInterChannelFailoverEnabled, isWailsEnvironment, subscribeToEvent, getSuspendedRequestsCount, getSuspendedEndpointCounts, getManualRetryRequestsCount, getManualRetryChannelCounts, createClaudeCredentialGroup, updateClaudeCredentialGroupByID, deleteClaudeCredentialGroupByID, setDefaultClaudeCredentialGroup } from '@/services/wails/index.js';
 import { hasClaudeCredential, getClaudeCredentialGroups, getDefaultClaudeCredentialGroup, buildClaudeEndpointCopyOptions, parseSettingsBool, buildSuspendedEndpointKey } from './model.js';
 import { DeleteChannelConfirmDialog } from './components/DeleteChannelConfirmDialog.jsx';
@@ -72,7 +73,6 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
   // 表单状态
   const [showForm, setShowForm] = useState(false);
   const [showCreateChannel, setShowCreateChannel] = useState(false);
-  const [createChannelError, setCreateChannelError] = useState('');
   const [showEditChannel, setShowEditChannel] = useState(false);
   const [editChannelError, setEditChannelError] = useState('');
   const [editingChannel, setEditingChannel] = useState(null);
@@ -88,7 +88,6 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
   const [editingCredentialGroup, setEditingCredentialGroup] = useState(null);
   const [credentialGroupFormLoading, setCredentialGroupFormLoading] = useState(false);
   const [credentialGroupFormError, setCredentialGroupFormError] = useState('');
-  const [channelSetupDraft, setChannelSetupDraft] = useState(null);
   const [commitChannelSetup] = useState(createChannelSetupCommitter);
 	const [credentialGroupDetailTarget, setCredentialGroupDetailTarget] = useState(null);
 
@@ -367,12 +366,6 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
   }, [loadChannelsMeta]);
 
   useEffect(() => {
-    if (showCreateChannel) {
-      setCreateChannelError('');
-    }
-  }, [showCreateChannel]);
-
-  useEffect(() => {
     if (showEditChannel) {
       setEditChannelError('');
     }
@@ -627,21 +620,6 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
     return true;
   }, []);
 
-  const handleCreateChannel = useCallback(async (payload) => {
-    if (channelsMeta.some((channel) => channel.name === payload.name)) {
-      setCreateChannelError('渠道名称已存在');
-      return;
-    }
-    setCreateChannelError('');
-    setChannelSetupDraft({ channel: payload });
-    setShowCreateChannel(false);
-    setCredentialGroupFormMode('create');
-    setCredentialGroupFormChannel(payload.name);
-    setEditingCredentialGroup({ name: '默认分组', isDefault: true });
-    setCredentialGroupFormError('');
-    setShowCredentialGroupForm(true);
-  }, [channelsMeta]);
-
   const handleOpenEditChannel = useCallback((channelName) => {
     const name = (channelName || '').trim();
     if (!name) return;
@@ -678,7 +656,6 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
   const openCreateCredentialGroupForm = useCallback((channelName) => {
     const name = String(channelName || '').trim();
     if (!name) return;
-    setChannelSetupDraft(null);
     setCredentialGroupFormMode('create');
     setCredentialGroupFormChannel(name);
     setEditingCredentialGroup(null);
@@ -689,7 +666,6 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
   const openEditCredentialGroupForm = useCallback((channelName, group) => {
     const name = String(channelName || group?.channel || '').trim();
     if (!name || !group) return;
-    setChannelSetupDraft(null);
     setCredentialGroupFormMode('edit');
     setCredentialGroupFormChannel(name);
     setEditingCredentialGroup(group);
@@ -702,26 +678,10 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
     setCredentialGroupFormChannel('');
     setEditingCredentialGroup(null);
     setCredentialGroupFormError('');
-    setChannelSetupDraft(null);
   }, []);
 
   const handleSaveCredentialGroup = useCallback(async (payload) => {
     const { copyEndpoints = [], ...groupPayload } = payload || {};
-    if (channelSetupDraft) {
-      const draftGroup = { ...groupPayload, id: -1, isDefault: true, modelPolicy: 'inherit' };
-      setChannelSetupDraft({ ...channelSetupDraft, group: draftGroup });
-      setShowCredentialGroupForm(false);
-      setCredentialGroupFormChannel('');
-      setEditingCredentialGroup(null);
-      setCredentialGroupFormError('');
-      // Draft groups also support client passthrough, which has no stored credential.
-      setEditingEndpoint(null);
-      setDefaultChannel(channelSetupDraft.channel.name);
-      setDefaultCredentialGroupId(draftGroup.id);
-      setLockChannel(true);
-      setShowForm(true);
-      return;
-    }
     let savedGroup = null;
     try {
       setCredentialGroupFormLoading(true);
@@ -763,7 +723,6 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
     credentialGroupFormChannel,
     credentialGroupFormMode,
     editingCredentialGroup,
-    channelSetupDraft,
     loadChannelsMeta,
     loadGroups,
     loadStorageStatus
@@ -831,12 +790,12 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
   }, [channelSections]);
 
   // 保存端点
-  const handleSave = async (formData) => {
+  const handleSave = async (formData, setupDraft = null) => {
     if (formLoading) return;
     setFormLoading(true);
     try {
-      if (channelSetupDraft) {
-        const { channel, group } = channelSetupDraft;
+      if (setupDraft) {
+        const { channel, group } = setupDraft;
         const groupPayload = { ...group };
         delete groupPayload.id;
         await commitChannelSetup({
@@ -865,8 +824,7 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
       setDefaultChannel('');
       setDefaultCredentialGroupId(0);
       setLockChannel(false);
-      const savedChannelSetup = Boolean(channelSetupDraft);
-      setChannelSetupDraft(null);
+      const savedChannelSetup = Boolean(setupDraft);
       try {
         await loadStorageStatus({ throwOnError: true });
         await loadChannelsMeta({ throwOnError: true });
@@ -1096,14 +1054,10 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
           endpoint={editingEndpoint}
           channels={channelOptions}
           existingEndpoints={isSqliteMode ? storageEndpoints : []}
-          credentialGroupsByChannel={channelSetupDraft?.group ? {
-            ...credentialGroupsByChannel,
-            [channelSetupDraft.channel.name]: [channelSetupDraft.group]
-          } : credentialGroupsByChannel}
+          credentialGroupsByChannel={credentialGroupsByChannel}
           defaultChannel={defaultChannel}
           defaultCredentialGroupId={defaultCredentialGroupId}
           lockChannel={lockChannel}
-          initialSetup={Boolean(channelSetupDraft)}
           onSave={handleSave}
           onCancel={() => {
             setShowForm(false);
@@ -1111,19 +1065,17 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
             setDefaultChannel('');
             setDefaultCredentialGroupId(0);
             setLockChannel(false);
-            setChannelSetupDraft(null);
           }}
           loading={formLoading}
         />
       )}
 
       {showCreateChannel && isSqliteMode && (
-        <CreateChannelModal
-          open
-          loading={channelFormLoading}
-          serverError={createChannelError}
-          onClose={() => setShowCreateChannel(false)}
-          onSubmit={handleCreateChannel}
+        <ChannelSetupWizard
+          channels={channelsMeta}
+          loading={formLoading}
+          onCancel={() => setShowCreateChannel(false)}
+          onSave={async draft => { await handleSave(draft.endpoint, draft); setShowCreateChannel(false); }}
         />
       )}
 
@@ -1148,7 +1100,6 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
           mode={credentialGroupFormMode}
           channelName={credentialGroupFormChannel}
           group={editingCredentialGroup}
-          continueToEndpoint={Boolean(channelSetupDraft)}
           loading={credentialGroupFormLoading}
           serverError={credentialGroupFormError}
           endpointCopyOptions={credentialGroupEndpointCopyOptions}

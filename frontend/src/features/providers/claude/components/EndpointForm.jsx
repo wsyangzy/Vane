@@ -13,7 +13,7 @@ import { isSubscriptionGroup } from '../utils/subscription.js';
 
 const ENDPOINT_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
-  { key: 'routing', label: '路由配置' }
+  { key: 'routing', label: '请求设置' }
 ];
 
 // ============================================
@@ -46,7 +46,7 @@ const FormInput = ({ label, name, value, onChange, type = 'text', placeholder, r
         ${disabled ? 'cursor-not-allowed' : ''}
       `}
     />
-    {error && <p className="text-xs text-rose-500">{error}</p>}
+    {error && <p role="alert" className="text-xs text-rose-500">{error}</p>}
     {help && <p className="text-xs text-slate-400">{help}</p>}
   </div>
 );
@@ -104,6 +104,8 @@ const EndpointForm = ({
   defaultCredentialGroupId = 0,
   lockChannel = false,
   initialSetup = false,
+  embedded = false,
+  formId,
   onSave,
   onCancel,
   loading = false
@@ -162,7 +164,10 @@ const EndpointForm = ({
   };
 
   // 表单状态
-  const [formData, setFormData] = useState(getInitialFormData);
+  const [storedFormData, setFormData] = useState(getInitialFormData);
+  // Keep endpoint inputs when revisiting earlier steps, while the locked
+  // channel/group always reflects the wizard's latest validated selection.
+  const formData = embedded ? { ...storedFormData, channel: defaultChannel, credentialGroupId: defaultCredentialGroupId } : storedFormData;
   const [activeTab, setActiveTab] = useState('basic');
 
   // 表单错误
@@ -304,11 +309,11 @@ const EndpointForm = ({
     }
   };
 
-  return renderModalPortal(
-    <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-sm flex items-start justify-center z-50 animate-fade-in pt-[15vh]">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[75vh] flex flex-col overflow-hidden">
+  return (embedded ? content => content : renderModalPortal)(
+    <div className={embedded ? 'contents' : 'fixed inset-0 bg-slate-900/30 backdrop-blur-sm flex items-start justify-center z-50 animate-fade-in pt-[15vh]'}>
+      <div className={embedded ? 'channel-setup-embedded' : 'bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[75vh] flex flex-col overflow-hidden'}>
         {/* 标题栏 */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
+        {!embedded && <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">
               {initialSetup ? '添加渠道 · 3/3' : isEditMode ? '编辑端点' : '新建端点'}
@@ -324,10 +329,10 @@ const EndpointForm = ({
           >
             <X size={20} />
           </button>
-        </div>
+        </div>}
 
         {/* 表单内容 - 可滚动区域 */}
-        <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden" autoComplete="off">
+        <form id={formId} onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden" autoComplete="off">
           <div className="border-b border-slate-100 bg-slate-50/70 px-6 py-3">
             <SegmentedTabs
               tabs={ENDPOINT_FORM_TABS}
@@ -339,7 +344,7 @@ const EndpointForm = ({
             />
           </div>
 
-          <div className="p-6 overflow-y-auto flex-1">
+          <div className={`p-6 overflow-y-auto flex-1 ${embedded ? 'channel-setup-fields' : ''}`}>
           {/* 提交错误提示 */}
           {errors.submit && (
             <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-rose-700 text-sm">
@@ -518,9 +523,10 @@ const EndpointForm = ({
           <div className="space-y-3">
             <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
               <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-2">
-                <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800"><Route size={15} className="text-slate-500" />请求路由</h3>
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800"><Route size={15} className="text-slate-500" />线路选择与超时</h3>
                 <span className="max-w-full truncate rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-500">{formData.channel} · {selectedCredentialGroup?.name || '默认分组'}</span>
               </div>
+              <p className="mb-4 text-xs leading-5 text-slate-500">优先级用于同一凭证分组内的多条线路，只有一个端点时可保留默认。渠道与分组的选用在调度方案中配置；实际线路还受可用状态、选路策略和上次成功线路影响。</p>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
                   <FormInput
@@ -583,7 +589,7 @@ const EndpointForm = ({
           </div>
 
           {/* 按钮 - 固定在底部 */}
-          <div className="flex justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-white flex-shrink-0">
+          {!embedded && <div className="flex justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-white flex-shrink-0">
             <Button
               type="button"
               variant="ghost"
@@ -599,7 +605,7 @@ const EndpointForm = ({
             >
               {initialSetup ? '完成创建' : isEditMode ? '保存修改' : '创建端点'}
             </Button>
-          </div>
+          </div>}
         </form>
       </div>
     </div>

@@ -18,10 +18,12 @@ import { buildInitialCredentialGroupForm, CODEX_CREDENTIAL_GROUP_FORM_TABS, CODE
 // ============================================================================
 // 凭证分组编辑弹窗
 // ============================================================================
-const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = false, loading, serverError, endpointCopyOptions = [], onCancel, onSave }) => {
+const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = false, loading, serverError, endpointCopyOptions = [], onCancel, onSave, embedded = false, formId, setupSection, onCredentialsReady }) => {
   const [formData, setFormData] = useState(() => buildInitialCredentialGroupForm(group, channel));
   const [standardMultiplierSettingsOpen, setStandardMultiplierSettingsOpen] = useState(false);
-  const [longContextSettingsOpen, setLongContextSettingsOpen] = useState(false);  const [activeTab, setActiveTab] = useState('basic');
+  const [longContextSettingsOpen, setLongContextSettingsOpen] = useState(false);
+  const [storedActiveTab, setActiveTab] = useState('basic');
+  const activeTab = setupSection || storedActiveTab;
   const [fieldError, setFieldError] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const isWails = isWailsEnvironment();
@@ -143,7 +145,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
 	  if (fieldError) setFieldError('');
 	};
 
-  const buildSubmitPayload = () => {
+  const validateCredentials = () => {
     const name = formData.name.trim();
     const apiKey = formData.authMode === 'client_passthrough' ? '' : formData.apiKey.trim();
     const subscriptionError = validateSubscription(formData);
@@ -160,6 +162,12 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
       setActiveTab('basic');
       return null;
     }
+    return { name, apiKey };
+  };
+
+  const buildSubmitPayload = () => {
+    const credentials = validateCredentials();
+    if (!credentials) return null;
 	const modelPolicy = ['inherit', 'override', 'passthrough'].includes(formData.modelPolicy)
 	  ? formData.modelPolicy
 	  : 'inherit';
@@ -207,11 +215,10 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
 	  billingRules = billingRuleResult.payload;
 	}
     return {
-      name,
+      ...credentials,
 	  serviceTierSource: formData.serviceTierSource,
 	  cacheWriteTTLPricing: formData.cacheWriteTTLPricing,
       authMode: formData.authMode, subscription: formData.subscription,
-      apiKey,
       isDefault: formData.isDefault,
 	  modelPolicy,
 	  modelMapping: modelPolicy === 'override' ? buildModelMappingPayload(formData.modelMappingRows) : {},
@@ -236,6 +243,11 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (loading) return;
+    if (setupSection === 'basic') {
+      if (validateCredentials()) { setFieldError(''); onCredentialsReady?.(); }
+      return;
+    }
     const payload = buildSubmitPayload();
     if (!payload) return;
     if (!isEdit && copyEndpointsEnabled && !selectedCopyOption?.value) {
@@ -259,15 +271,15 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
     await saveGroup({ ...payload, copyEndpoints: editedEndpoints });
   };
 
-  return renderModalPortal(
+  return (embedded ? content => content : renderModalPortal)(
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center overflow-hidden bg-slate-900/30 p-4 backdrop-blur-sm animate-fade-in"
+      className={embedded ? 'contents' : 'fixed inset-0 z-[100] flex items-center justify-center overflow-hidden bg-slate-900/30 p-4 backdrop-blur-sm animate-fade-in'}
     >
       <div
-        className="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
-        style={{ maxHeight: modalMaxHeight }}
+        className={embedded ? 'channel-setup-embedded' : 'flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl'}
+        style={embedded ? undefined : { maxHeight: modalMaxHeight }}
       >
-        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
+        {!embedded && <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
           <div className="flex items-start gap-3">
             <div className="rounded-xl bg-slate-900 p-2 text-white shadow-sm">
               <KeyRound size={18} />
@@ -288,9 +300,9 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
               <XCircle size={18} />
             </button>
           </Tooltip>
-        </div>
+        </div>}
 
-        <form className={`min-h-0 flex-1 ${formStep === 'copyNames' ? 'overflow-y-auto' : 'flex flex-col overflow-hidden'}`} onSubmit={handleSubmit} autoComplete="off">
+        <form id={formId} className={`min-h-0 flex-1 ${formStep === 'copyNames' ? 'overflow-y-auto' : 'flex flex-col overflow-hidden'}`} onSubmit={handleSubmit} autoComplete="off">
           {formStep === 'copyNames' ? (
             <EndpointCopyNameEditorStep
               endpoints={copyStepEndpoints}
@@ -306,7 +318,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
             />
           ) : (
             <>
-              <div className="shrink-0 border-b border-slate-100 bg-slate-50/70 px-6 py-3">
+              {!setupSection && <div className="shrink-0 border-b border-slate-100 bg-slate-50/70 px-6 py-3">
                 <SegmentedTabs
                   tabs={credentialGroupTabs}
                   activeTab={activeTab}
@@ -315,11 +327,11 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
                   className={credentialGroupTabs.length === 4 ? 'grid-cols-4' : credentialGroupTabs.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}
                   buttonPaddingClass="px-2"
                 />
-              </div>
+              </div>}
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+              <div className={`min-h-0 flex-1 overflow-y-auto px-6 py-5 ${embedded ? 'channel-setup-fields' : ''}`}>
             {(fieldError || serverError) && (
-              <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              <div role="alert" className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
                 {fieldError || serverError}
               </div>
             )}
@@ -700,12 +712,12 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
             )}
 
               </div>
-            <div className="flex shrink-0 justify-end gap-3 border-t border-slate-100 bg-white px-6 py-4">
+            {!embedded && <div className="flex shrink-0 justify-end gap-3 border-t border-slate-100 bg-white px-6 py-4">
               <Button type="button" variant="ghost" onClick={onCancel} disabled={loading}>取消</Button>
               <Button type="submit" variant="primary" loading={loading}>
                 {isEdit ? '保存分组' : (continueToEndpoint || copyEndpointsEnabled ? '下一步' : '添加分组')}
               </Button>
-            </div>
+            </div>}
             </>
           )}
         </form>

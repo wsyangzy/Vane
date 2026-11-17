@@ -9,6 +9,7 @@ const source = await import('node:fs').then(({ readFileSync }) => [
   'components/endpointState.jsx',
   'components/CodexLogo.jsx',
   'components/ChannelFormModal.jsx',
+  'components/ChannelSetupWizard.jsx',
   'components/CredentialGroupFormModal.jsx',
   'components/EndpointToggleTile.jsx',
   'components/EndpointFormModal.jsx',
@@ -33,6 +34,7 @@ test('Codex endpoint mutations preserve endpoint identity and requested state', 
     credentialGroupId: 7,
     priority: 2,
     timeoutSeconds: 90,
+    pathStrategy: 'legacy',
     failoverEnabled: false
   });
 });
@@ -90,12 +92,11 @@ test('Codex channel creation keeps credentials out of the channel modal', () => 
   assert.match(source, /apiKey: ''/);
 });
 
-test('new Codex channels keep the first two steps in a draft and commit with the endpoint', () => {
-  const firstStep = source.slice(source.indexOf('if (isCreating) {'), source.indexOf("setActionLoading(channelFormMode === 'edit'"));
-  assert.match(firstStep, /setChannelSetupDraft\(\{ channel: draftChannel \}\)/);
-  assert.doesNotMatch(firstStep, /await (createCodexChannel|fetchData)/);
-  assert.match(source, /if \(channelSetupDraft\) \{[\s\S]*?setShowEndpointForm\(true\);\s*return;/);
-  assert.match(source, /continueToEndpoint=\{Boolean\(channelSetupDraft\)\}/);
+test('new Codex channels keep wizard drafts local and commit all resources only on final confirmation', () => {
+  const wizard = source.slice(source.indexOf('const initialGroup ='), source.indexOf('// ============================================================================', source.indexOf('const initialGroup =')));
+  assert.doesNotMatch(wizard, /await (createCodexChannel|createCodexCredentialGroup|createCodexEndpoint|fetchData)/);
+  assert.match(source, /handleSaveEndpoint\(draft\.endpoint, draft\)/);
+  assert.match(source, /if \(setupDraft\) \{/);
   assert.match(source, /await commitChannelSetup\(/);
   assert.match(source, /credentialGroupId: savedGroup\.id/);
   assert.match(source, /deleteCodexChannelByID\(createdChannel\.id\)/);
@@ -105,9 +106,10 @@ test('new Codex channels keep the first two steps in a draft and commit with the
 });
 
 test('Codex ordinary credential group creation does not enter endpoint setup', () => {
-  assert.match(source, /const openCreateCredentialGroupForm = \(channel\) => \{\s*setChannelSetupDraft\(null\)/);
-  assert.match(source, /const openEditCredentialGroupForm = \(channel, group\) => \{\s*setChannelSetupDraft\(null\)/);
-  assert.match(source, /const closeCredentialGroupForm = \(\) => \{[\s\S]*?setChannelSetupDraft\(null\)/);
+  const start = source.indexOf('const handleSaveCredentialGroup = async');
+  const handler = source.slice(start, source.indexOf('const handleDeleteCredentialGroup', start));
+  assert.doesNotMatch(handler, /setShowEndpointForm\(true\)|setChannelSetupDraft/);
+  assert.match(handler, /createCodexCredentialGroup\(/);
 });
 
 test('Codex credential group and endpoint saves separate mutation errors from refresh errors', () => {
