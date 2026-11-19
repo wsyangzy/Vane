@@ -17,6 +17,7 @@ import { CodexLogo } from './components/CodexLogo.jsx';
 import { ChannelFormModal } from './components/ChannelFormModal.jsx';
 import { CredentialGroupFormModal } from './components/CredentialGroupFormModal.jsx';
 import { EndpointFormModal } from './components/EndpointFormModal.jsx';
+import EndpointPathsWorkspace from './components/EndpointPathsWorkspace.jsx';
 import { DeleteConfirmDialog } from './components/DeleteConfirmDialog.jsx';
 import { DeleteCredentialGroupConfirmDialog } from './components/DeleteCredentialGroupConfirmDialog.jsx';
 import { ActiveChannelPauseDialog } from './components/ActiveChannelPauseDialog.jsx';
@@ -89,6 +90,8 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
   const [endpointFormError, setEndpointFormError] = useState('');
   const [deleteEndpointTarget, setDeleteEndpointTarget] = useState(null);
   const [endpointDetailTarget, setEndpointDetailTarget] = useState(null);
+  const [pathBatchBusy, setPathBatchBusy] = useState(false);
+  const [pathResults, setPathResults] = useState({});
 
   const selectedEndpointDetail = endpointDetailTarget ? (() => {
     const latestChannel = channels.find((channel) => channel.id === endpointDetailTarget.channelOwner?.id) ||
@@ -361,9 +364,9 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
     setActionLoading(`default-credential-group-${group.id}`);
     try {
       await setDefaultCodexCredentialGroup(group.id);
-      await fetchData({ silent: true });
-    } catch (err) {
-      toast.error(getErrorMessage(err, '设置默认分组失败'), '设置默认分组失败');
+      await fetchData({ silent: true, throwOnError: true });
+    } catch (error) {
+      throw new Error(getErrorMessage(error, '设置默认分组失败'));
     } finally {
       setActionLoading('');
     }
@@ -642,7 +645,11 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
       </div>
 
       <DispatchWorkspace provider="codex" refreshToken={channels} onViewRequests={onViewRequests}
-        resourcesBusy={loading || Boolean(actionLoading)}
+        resourcesBusy={loading || Boolean(actionLoading) || pathBatchBusy}
+        endpointPathBusy={pathBatchBusy}
+        endpointPathPanel={<EndpointPathsWorkspace channels={channels} disabled={loading || Boolean(actionLoading)}
+          results={pathResults} onResultsChange={setPathResults} onBusyChange={setPathBatchBusy}
+          onRefresh={() => fetchData({ silent: true, throwOnError: true })} />}
         onRefreshResources={() => fetchData({ silent: true, throwOnError: true })}
         resourceActions={<>
           <ClientConnectionButton provider="codex" onUpdated={() => fetchData({ silent: true, throwOnError: true })} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading)} />
@@ -792,6 +799,7 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
           endpoint={selectedEndpointDetail.endpoint}
           channel={selectedEndpointDetail.channelOwner}
           globalConfig={globalConfig}
+          pathResult={pathResults[selectedEndpointDetail.endpoint.id]}
           onClose={() => setEndpointDetailTarget(null)}
           onEdit={(endpoint) => {
             setEndpointDetailTarget(null);
@@ -839,6 +847,7 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
       {deleteEndpointTarget && (
         <DeleteConfirmDialog
           title="删除端点"
+          routingGroupId={deleteEndpointTarget.endpoint.credentialGroupId || getDefaultCredentialGroup(deleteEndpointTarget.channelOwner)?.id}
           description={`即将从渠道「${deleteEndpointTarget.channelOwner?.name}」中删除端点「${deleteEndpointTarget.endpoint?.name || deleteEndpointTarget.endpoint?.baseURL || '未命名端点'}」。`}
           hint={
             deleteEndpointTarget.endpoint.isActive

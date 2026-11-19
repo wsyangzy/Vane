@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { ArrowRight, Database, KeyRound, Pencil, Server, Settings, XCircle } from 'lucide-react';
-import { Button } from '@/shared/ui/index.js';
+import { Button, SegmentedTabs } from '@/shared/ui/index.js';
 import EndpointAvailabilityBar from '@/features/providers/shared/endpoints/EndpointAvailabilityBar.jsx';
 import ModelTag from '@/features/requests/components/ModelTag.jsx';
 import { EndpointHealthSection, ResourceDetailShell, ModelMappingPair } from '@/features/providers/shared/endpoints/detailParts.jsx';
@@ -7,6 +8,10 @@ import { formatLastCheck, formatDetailMultiplier, getDetailTimestamp } from '@/f
 import { EndpointHealthBadge as CodexHealthBadge, EndpointRequestFailureBadge as CodexRequestFailureBadge } from '@/features/providers/shared/endpoints/endpointBadges.jsx';
 import { DetailMetricCard, DetailChip, DetailPill, DetailTimeoutPill, DetailTimestampFooter } from './detailParts.jsx';
 import { getDefaultCredentialGroup, BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS } from '../model.js';
+import { endpointPathIdentity, getEndpointPathStrategy } from '../pathPolicy.js';
+import EndpointPathPolicy from './EndpointPathPolicy.jsx';
+
+const detailTabs = [{ key: 'overview', label: '概览' }, { key: 'path', label: '接口路径' }];
 
 // ============================================================================
 // 渠道卡片（卡片头 + 端点子列表）
@@ -15,7 +20,8 @@ import { getDefaultCredentialGroup, BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS } from '
 // 端点行（紧凑表格风，延续渠道管理页密度）：
 // 左侧 toggle = 激活；行整体点击展开内嵌编辑（base_url 直改即保存）
 // ============================================================================
-const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, onEdit, onHealth, onToggleHealth, busy = false }) => {
+const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, onEdit, onHealth, onToggleHealth, busy = false, pathResult }) => {
+  const [tab, setTab] = useState('overview');
   if (!endpoint) return null;
 
   const healthState = endpoint.healthState || endpoint.health_state || 'unchecked';
@@ -28,6 +34,7 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
     getDefaultCredentialGroup(channel);
   const credentialGroupName = credentialGroup?.name || endpoint.credentialGroupName || endpoint.credential_group_name || '默认分组';
   const credentialGroupIsDefault = Boolean(credentialGroup?.isDefault || credentialGroup?.is_default);
+  const subscription = credentialGroup?.authMode === 'client_passthrough' || endpoint.authMode === 'client_passthrough';
   const credentialGroupKeyMasked = credentialGroup?.apiKeyMasked || '';
   const billingSource = credentialGroup?.billingOutputTokenSource || 'output_tokens';
   const billingOption = BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS.find(
@@ -142,10 +149,17 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
         <CodexRequestFailureBadge failCode={lastFailCode} failReason={lastFailReason} detail hideWhenEmpty />
       </>}
     >
+      <SegmentedTabs tabs={detailTabs} activeTab={tab} onChange={setTab} className="mb-3 grid-cols-2" />
+      {tab === 'path' ? subscription
+        ? <p className="text-sm text-slate-600">官方订阅使用固定接口路径。</p>
+        : <EndpointPathPolicy channel={channel} credentialGroup={credentialGroup} endpoint={endpoint}
+            baseURL={endpoint.baseURL || endpoint.base_url} strategy={getEndpointPathStrategy(endpoint)} disabled={busy} readOnly
+            previousResult={pathResult?.identity === endpointPathIdentity(endpoint) ? pathResult : null} />
+      : <>
       <EndpointHealthSection
         inScope={endpoint.healthInScope !== false && healthState !== 'disabled'}
         skipped={endpoint.skipHealthCheck ?? endpoint.skip_health_check}
-        subscription={credentialGroup?.authMode === 'client_passthrough' || endpoint.authMode === 'client_passthrough'}
+        subscription={subscription}
         ms={responseTimeMs}
         lastCheck={lastCheck}
         onCheck={onHealth ? () => onHealth(endpoint) : undefined}
@@ -203,6 +217,7 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
           )}
 
       <DetailTimestampFooter createdAt={createdAt} updatedAt={updatedAt} />
+      </>}
     </ResourceDetailShell>
   );
 };

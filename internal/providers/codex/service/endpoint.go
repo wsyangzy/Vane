@@ -167,6 +167,14 @@ func updateCodexEndpointStoreRecord(ctx context.Context, endpointStore store.Cod
 	)
 }
 
+func (s *CodexEndpointService) SetPathStrategy(ctx context.Context, id int64, strategy string) error {
+	strategy = pathpolicy.Normalize(strategy)
+	if err := pathpolicy.Validate(strategy); err != nil {
+		return err
+	}
+	return s.endpointStore.SetPathStrategy(ctx, id, strategy)
+}
+
 func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64, name, baseURL string, credentialGroupID int64, apiKey string, failoverEnabled bool, skipHealthCheck bool, priority, timeoutSeconds int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []store.CodexModelMultiplierRecord, pathStrategies ...string) error {
 	name = strings.TrimSpace(name)
 	baseURL = strings.TrimSpace(baseURL)

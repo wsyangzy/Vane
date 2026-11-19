@@ -1,7 +1,7 @@
 import { getErrorMessage } from '@/shared/lib/errorMessage.js';
 import Tooltip from '@/shared/ui/Tooltip.jsx';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { Activity, AlertCircle, ArrowLeft, ArrowUpRight, Ban, Hash, Layers, ListTree, Plus, RefreshCw, Server, ShieldCheck, Star } from 'lucide-react';
+import { Activity, AlertCircle, ArrowLeft, ArrowUpRight, Ban, Hash, Layers, ListTree, Plus, RefreshCw, ScanLine, Server, ShieldCheck, Star } from 'lucide-react';
 import { Button } from '@/shared/ui/index.js';
 import { deleteRoutingProfile, checkRoutingConfiguration, listDispatchTraces, listQuotaSnapshots, listManualBalances, updateManualBalance, listRoutingProfiles, refreshQuota, saveRoutingProfile, setDefaultRoutingProfile } from '@/services/wails/dispatch.js';
 import ProfileEditor from './ProfileEditor.jsx';
@@ -28,8 +28,9 @@ function ConfigurationNotice({ status }) {
   </section>;
 }
 
-export default function DispatchWorkspace({ provider, onError, onSuccess, onManageChannels, onViewRequests, resourceActions, onRefreshResources, resourcesBusy = false, children, refreshToken, endpoints = [] }) {
-  const tabs = provider === 'claude' ? [...baseTabs, ['runtime', 'Token 预估', Hash]] : baseTabs;
+export default function DispatchWorkspace({ provider, onError, onSuccess, onManageChannels, onViewRequests, resourceActions, onRefreshResources, resourcesBusy = false, children, refreshToken, endpoints = [], endpointPathPanel, endpointPathBusy = false }) {
+  const tabs = provider === 'claude' ? [...baseTabs, ['runtime', 'Token 预估', Hash]] :
+    endpointPathPanel ? [...baseTabs, ['paths', '端点路径', ScanLine]] : baseTabs;
   const [state, setState] = useState(emptyState);
   const [policy, setPolicy] = useState(null);
   const [status, setStatus] = useState(null);
@@ -87,7 +88,7 @@ export default function DispatchWorkspace({ provider, onError, onSuccess, onMana
   });
   const intentStatistics = (profileId) => summarizeIntentTraces(traces, provider, profileId);
   const selectTab = (value) => {
-    if (value === tab) return;
+    if (value === tab || endpointPathBusy) return;
     setTab(value);
     if (value === 'quota') perform(async () => { const [quotas, balances] = await Promise.all([listQuotaSnapshots(provider), listManualBalances(provider)]); setState((previous) => ({ ...previous, quotas, balances })); });
   };
@@ -127,6 +128,7 @@ export default function DispatchWorkspace({ provider, onError, onSuccess, onMana
         onBalanceUpdate={async (input) => { await updateManualBalance(input); await reload(); onSuccess?.('手动余额已更新'); }}
         onPreview={() => setTab('profiles')} />}
       {tab === 'runtime' && provider === 'claude' && <RuntimeSettings provider={provider} refreshToken={runtimeRefreshToken} onBusyChange={setBusy} />}
+      {tab === 'paths' && endpointPathPanel}
     </div>}
     {confirmDelete && <DeleteProfileConfirmDialog profile={confirmDelete} busy={busy} error={error}
       onCancel={() => setConfirmDelete(null)}

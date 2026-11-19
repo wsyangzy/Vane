@@ -128,11 +128,11 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, initialSe
         <form id={formId} className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
           <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/70 px-6 py-3">
             <SegmentedTabs
-              tabs={CODEX_ENDPOINT_FORM_TABS}
+              tabs={subscriptionGroup || embedded ? CODEX_ENDPOINT_FORM_TABS : [...CODEX_ENDPOINT_FORM_TABS, { key: 'path', label: '接口路径' }]}
               activeTab={activeTab}
               onChange={setActiveTab}
               disabled={loading}
-              className="grid-cols-2"
+              className={subscriptionGroup || embedded ? 'grid-cols-2' : 'grid-cols-3'}
               buttonPaddingClass="px-2 sm:px-3"
             />
           </div>
@@ -250,9 +250,10 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, initialSe
                       {subscriptionGroup ? '订阅端点固定连接官方 Codex 服务，凭证来源在分组中配置' : '端点只保存线路信息；API Key 与计费倍率来自上方凭证分组'}
                     </p>
                   </div>
-                  {!subscriptionGroup && !embedded && <EndpointPathPolicy channel={channel} credentialGroup={selectedCredentialGroup} endpoint={endpoint} baseURL={baseURL} strategy={pathStrategy} onChange={setPathStrategy} disabled={loading} />}
                 </div>
               </div>
+            ) : activeTab === 'path' ? (
+              <EndpointPathPolicy channel={channel} credentialGroup={selectedCredentialGroup} endpoint={endpoint} baseURL={baseURL} strategy={pathStrategy} onChange={setPathStrategy} disabled={loading} />
             ) : (
               <div className="space-y-3">
                 <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">

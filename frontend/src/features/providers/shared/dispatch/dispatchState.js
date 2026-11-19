@@ -186,10 +186,11 @@ export function credentialGroupRoutingImpact(workspaces, provider, groupId) {
   return workspaces.flatMap((workspace) => workspace.profiles.flatMap((profile) => {
     const ownsGroup = workspace.provider === provider;
     const memberReference = ownsGroup && profile.members.some((member) => member.enabled && matchesGroup(member));
-    const targetReference = ownsGroup && [...profile.rules, ...profile.intents].some((rule) => rule.targets.some(matchesTarget));
+    const ruleReference = ownsGroup && profile.rules.some((rule) => rule.targets.some(matchesTarget));
+    const intentReference = ownsGroup && profile.intents.some((intent) => intent.targets.some(matchesTarget));
     const classifierReference = (profile.classifier?.provider || workspace.provider) === provider && profile.classifier?.groupId === id;
-    if (!memberReference && !targetReference && !classifierReference) return [];
+    if (!memberReference && !ruleReference && !intentReference && !classifierReference) return [];
     const losesLastMember = ownsGroup && profile.members.some((member) => member.enabled && member.groupId === id) && !profile.members.some((member) => member.enabled && member.groupId !== id);
-    return [{ id: profile.id, provider: workspace.provider, name: profile.name, losesLastMember, classifierReference }];
+    return [{ id: profile.id, provider: workspace.provider, name: profile.name, losesLastMember, memberReference, ruleReference, intentReference, classifierReference }];
   }));
 }

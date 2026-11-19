@@ -12,6 +12,33 @@ import (
 	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
+func TestUpdateCodexEndpointPathOnlyPreservesEndpointAndReloadsRuntime(t *testing.T) {
+	a, member, endpointID := credentialGroupDeletionFixture(t, "codex")
+	ctx := context.Background()
+	require.NoError(t, a.codexChannelStore.SetActive(ctx, member.ChannelID))
+	before, err := a.codexEndpointStore.GetByID(ctx, endpointID)
+	require.NoError(t, err)
+
+	invalid := "invalid"
+	require.Error(t, a.UpdateCodexEndpointByID(endpointID, UpdateCodexEndpointInput{PathStrategy: &invalid}))
+	strategy := "base"
+	require.NoError(t, a.UpdateCodexEndpointByID(endpointID, UpdateCodexEndpointInput{PathStrategy: &strategy}))
+	after, err := a.codexEndpointStore.GetByID(ctx, endpointID)
+	require.NoError(t, err)
+	before.PathStrategy = strategy
+	before.UpdatedAt = after.UpdatedAt
+	require.Equal(t, before, after)
+
+	seen := false
+	for _, endpoint := range a.codexEndpointMgr.GetAllEndpoints() {
+		if endpoint.ID == endpointID {
+			require.Equal(t, strategy, endpoint.PathStrategy)
+			seen = true
+		}
+	}
+	require.True(t, seen)
+}
+
 func TestDeleteCodexCredentialGroupRefreshesRuntimeWithoutChangingActiveChannel(t *testing.T) {
 	adapter, err := tracking.NewSQLiteAdapter(tracking.DatabaseConfig{
 		DatabasePath: filepath.Join(t.TempDir(), "usage.db"),

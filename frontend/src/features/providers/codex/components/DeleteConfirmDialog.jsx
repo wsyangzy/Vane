@@ -2,11 +2,14 @@ import { Trash2, TriangleAlert } from 'lucide-react';
 import { Button } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import { isWailsEnvironment } from '@/services/wails/index.js';
+import CredentialGroupRoutingImpact from '../../shared/credentials/CredentialGroupRoutingImpact.jsx';
+import useCredentialGroupRoutingImpact from '../../shared/credentials/useCredentialGroupRoutingImpact.js';
 
 // ============================================================================
 // 删除确认弹窗（渠道 / 端点 共用）
 // ============================================================================
-const DeleteConfirmDialog = ({ title, description, hint, loading, confirmDisabled = false, onCancel, onConfirm }) => {
+const DeleteConfirmDialog = ({ title, description, hint, loading, confirmDisabled = false, routingGroupId, onCancel, onConfirm }) => {
+  const impact = useCredentialGroupRoutingImpact('codex', routingGroupId);
   const isWails = isWailsEnvironment();
   const modalTopPadding = isWails ? 48 : 16;
 
@@ -25,7 +28,10 @@ const DeleteConfirmDialog = ({ title, description, hint, loading, confirmDisable
             {description && <p className="mt-1 text-sm text-slate-500">{description}</p>}
           </div>
         </div>
-        {hint && <div className="px-6 py-4 text-sm text-slate-600">{hint}</div>}
+        {(hint || routingGroupId) && <div className="px-6 py-4 text-sm text-slate-600">
+          {hint}
+          {Boolean(routingGroupId) && <CredentialGroupRoutingImpact impact={impact} endpoint disabled={loading} />}
+        </div>}
         <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/40 px-6 py-3">
           <Button variant="secondary" onClick={onCancel} disabled={loading}>
             取消

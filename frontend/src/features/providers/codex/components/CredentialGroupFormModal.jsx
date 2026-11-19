@@ -512,6 +512,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
                       />
                     </div>
                   </div>
+                  <p className="mt-2 text-xs text-slate-500">沿用来源端点的路径设置。新分组使用自己的凭证，检测结果需重新获取。</p>
                 </div>
               </div>
             )}

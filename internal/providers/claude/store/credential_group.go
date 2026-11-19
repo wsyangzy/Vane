@@ -384,6 +384,17 @@ func (s *SQLiteClaudeCredentialGroupStore) CountEndpoints(ctx context.Context, i
 func (s *SQLiteClaudeCredentialGroupStore) SetDefault(ctx context.Context, id int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.tx == nil {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err := s.WithTx(tx).SetDefault(ctx, id); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
 
 	var channel string
 	if err := s.getQuerier().QueryRowContext(ctx, `SELECT channel FROM claude_credential_groups WHERE id = ?`, id).Scan(&channel); err != nil {
@@ -392,7 +403,7 @@ func (s *SQLiteClaudeCredentialGroupStore) SetDefault(ctx context.Context, id in
 		}
 		return fmt.Errorf("查询 Claude 凭证分组 channel 失败: %w", err)
 	}
-	if _, err := s.getQuerier().ExecContext(ctx, `UPDATE claude_credential_groups SET is_default = 0 WHERE channel = ?`, channel); err != nil {
+	if _, err := s.getQuerier().ExecContext(ctx, `UPDATE claude_credential_groups SET is_default = 0 WHERE channel = ? AND is_default = 1 AND id <> ?`, channel, id); err != nil {
 		return fmt.Errorf("清空默认凭证分组失败: %w", err)
 	}
 	if _, err := s.getQuerier().ExecContext(ctx, `UPDATE claude_credential_groups SET is_default = 1 WHERE id = ?`, id); err != nil {

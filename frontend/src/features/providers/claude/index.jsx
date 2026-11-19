@@ -733,16 +733,13 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
     try {
       setChannelActionLoading(true);
       await setDefaultClaudeCredentialGroup(group.id);
-      await loadStorageStatus();
-      await loadChannelsMeta();
-      await loadGroups();
-    } catch (err) {
-      console.error('设置默认凭证分组失败:', err);
-      setActionError(`设置默认分组失败: ${getErrorMessage(err, '未知错误')}`);
+      await loadChannelsMeta({ throwOnError: true });
+    } catch (error) {
+      throw new Error(getErrorMessage(error, '设置默认分组失败'));
     } finally {
       setChannelActionLoading(false);
     }
-  }, [loadChannelsMeta, loadGroups, loadStorageStatus]);
+  }, [loadChannelsMeta]);
 
   const handleDeleteCredentialGroup = useCallback((channelName, group) => {
     if (!group?.id) return;
@@ -1126,6 +1123,7 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
       {deleteTarget && (
         <DeleteConfirmDialog
           endpoint={deleteTarget}
+          routingGroupId={deleteTarget.credentialGroupId || deleteTarget.credential_group_id || getCredentialGroupForEndpoint(credentialGroupsByChannel[deleteTarget.group || deleteTarget.channel], deleteTarget)?.id}
           onConfirm={handleConfirmDelete}
           onCancel={() => setDeleteTarget(null)}
           loading={deleteLoading}

@@ -507,6 +507,8 @@ const updateCodexEndpointByID = async (id, { name, baseURL, credentialGroupId, f
   return { success: true };
 };
 
+export const updateCodexEndpointPath = (id, pathStrategy) => updateCodexEndpointByID(id, { pathStrategy });
+
 /**
  * 删除端点
  */

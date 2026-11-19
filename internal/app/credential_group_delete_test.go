@@ -111,6 +111,49 @@ func credentialGroupDeletionFixture(t *testing.T, provider string) (*App, routin
 	return a, member, endpoint.ID
 }
 
+func TestSetDefaultCredentialGroupPreservesPreviousDefaultOnFailure(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		t.Run(provider, func(t *testing.T) {
+			a, target, _ := credentialGroupDeletionFixture(t, provider)
+			table, channelColumn := "claude_credential_groups", "channel"
+			var channel any = "first"
+			setDefault, deleteGroup := a.SetDefaultClaudeCredentialGroup, a.DeleteClaudeCredentialGroupByID
+			if provider == "codex" {
+				table, channelColumn = "codex_credential_groups", "channel_id"
+				channel = target.ChannelID
+				setDefault, deleteGroup = a.SetDefaultCodexCredentialGroup, a.DeleteCodexCredentialGroupByID
+			}
+			currentDefault := func() int64 {
+				t.Helper()
+				var id, count int64
+				require.NoError(t, a.storeDB.QueryRow(fmt.Sprintf(
+					"SELECT COALESCE(MAX(id), 0), COUNT(*) FROM %s WHERE %s = ? AND is_default = 1", table, channelColumn,
+				), channel).Scan(&id, &count))
+				require.EqualValues(t, 1, count)
+				return id
+			}
+			previous := currentDefault()
+			require.NotEqual(t, target.GroupID, previous)
+
+			_, err := a.storeDB.Exec(fmt.Sprintf(
+				"CREATE TRIGGER fail_new_default BEFORE UPDATE OF is_default ON %s WHEN NEW.id = %d AND NEW.is_default = 1 BEGIN SELECT RAISE(ABORT,'forced default failure'); END",
+				table, target.GroupID,
+			))
+			require.NoError(t, err)
+			require.ErrorContains(t, setDefault(target.GroupID), "forced default failure")
+			require.Equal(t, previous, currentDefault())
+
+			_, err = a.storeDB.Exec("DROP TRIGGER fail_new_default")
+			require.NoError(t, err)
+			require.NoError(t, setDefault(target.GroupID))
+			require.Equal(t, target.GroupID, currentDefault())
+			require.ErrorContains(t, deleteGroup(target.GroupID), "默认凭证分组不能删除")
+			require.NoError(t, setDefault(previous))
+			require.NoError(t, deleteGroup(target.GroupID))
+		})
+	}
+}
+
 func TestReferencedCredentialGroupRenameUpdatesRoutingResources(t *testing.T) {
 	for _, provider := range []string{"claude", "codex"} {
 		t.Run(provider, func(t *testing.T) {
