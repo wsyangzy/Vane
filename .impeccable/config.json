@@ -11,6 +11,24 @@
         ],
         "createdAt": "2026-11-17T02:24:30.100Z",
         "reason": "Codex review: existing HEAD uses a 2px error separator on collapsible upstream or transport diagnostics inside an attempt row; it identifies diagnostic error content rather than decorating a card."
+      },
+      {
+        "rule": "ai-color-palette",
+        "value": "*",
+        "files": [
+          "frontend/src/features/requests/index.jsx"
+        ],
+        "createdAt": "2026-11-18T01:49:34.150Z",
+        "reason": "Agent: the only finding in this file is the existing Codex or Claude provider badge nested in the heading; the heading itself uses slate text and the badge uses flat indigo on a light background."
+      },
+      {
+        "rule": "ai-color-palette",
+        "value": "*",
+        "files": [
+          "frontend/src/features/requests/components/RequestPrivacyDetails.jsx"
+        ],
+        "createdAt": "2026-11-19T04:00:48.895Z",
+        "reason": "Codex review: the existing ShieldCheck icon uses flat indigo on the white privacy panel to identify the protection section, matching the existing Vane privacy page. The adjacent heading text uses slate."
       }
     ]
   }
