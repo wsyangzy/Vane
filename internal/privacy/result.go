@@ -43,9 +43,11 @@ const (
 // ApplyResult 一次过滤的结果。Body 始终可直接转发：
 // 零命中 / 仅检测 / 关闭时与输入 byte-identical。
 type ApplyResult struct {
-	Restoration *Restoration `json:"-"`
-	activity    *activityHandle
-	Body        []byte `json:"-"`
+	Restoration      *Restoration `json:"-"`
+	activity         *activityHandle
+	fieldHits        []ActivityFieldHit
+	fieldHitsLimited bool
+	Body             []byte `json:"-"`
 	// RedactedBody 是脱敏模式下替换后的正文；仅检测和关闭时为 nil。
 	RedactedBody    []byte        `json:"-"`
 	Changed         bool          `json:"changed"`

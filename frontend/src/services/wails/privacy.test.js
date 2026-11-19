@@ -2,6 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizePrivacySettings, denormalizePrivacySettings, normalizePrivacyRule, denormalizePrivacyRule, normalizePrivacyActivity, mapPrivacyRequestPreview } from './privacy.js';
 
+test('activity field details keep only audit metadata', () => {
+  const raw = { field_hits_limited: true, field_hits: [{
+    path: 'input[0].content[0].text', rule_id: 7, rule_name: '邮箱地址', kind: 'email',
+    action: 'redact', replacement_mode: 'reversible', count: 2,
+    matches: ['example@example.test'], replacement: '__REDACTED_EMAIL_example__',
+  }] };
+  const item = normalizePrivacyActivity(raw);
+  assert.equal(item.fieldHitsLimited, true);
+  assert.deepEqual(item.fieldHits, [{
+    path: 'input[0].content[0].text', ruleId: 7, ruleName: '邮箱地址', source: '', kind: 'email',
+    action: 'redact', replacementMode: 'reversible', count: 2,
+  }]);
+  assert.deepEqual(normalizePrivacyActivity({}).fieldHits, []);
+});
+
 test('privacy settings map runtime options without reintroducing legacy matching overrides', () => {
   const dto = { mode: 'redact', restore_responses: true, scan_max_bytes: 4194304, over_limit_action: 'scan_prefix', on_error: 'fail_open', unsupported_path_action: 'warn' };
   const mapped = normalizePrivacySettings({ ...dto, restore_responses: true, keep_key_format: true });

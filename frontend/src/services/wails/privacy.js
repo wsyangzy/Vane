@@ -88,6 +88,12 @@ const normalizeUnscannedPath = (stat = {}) => ({
   lastSeenAt: stat.last_seen_at || stat.lastSeenAt || ''
 });
 
+const normalizeActivityFieldHit = (hit) => ({
+  ...normalizePrivacyRuleHit(hit),
+  path: hit.path || '',
+  replacementMode: hit.replacement_mode || '',
+});
+
 export const normalizePrivacyActivity = (item = {}) => ({
   id: Number(item.id ?? 0),
   requestId: item.request_id || '',
@@ -97,6 +103,8 @@ export const normalizePrivacyActivity = (item = {}) => ({
   state: item.state || 'unknown',
   hitCount: Number(item.hit_count ?? 0),
   ruleHits: (item.rule_hits || []).map(normalizePrivacyRuleHit),
+  fieldHits: Array.isArray(item.field_hits) ? item.field_hits.map(normalizeActivityFieldHit) : [],
+  fieldHitsLimited: Boolean(item.field_hits_limited),
   scanDurationMs: Number(item.scan_duration_ms ?? 0),
   skippedReason: item.skipped_reason || '',
   truncated: Boolean(item.truncated),

@@ -222,13 +222,13 @@ func matchChatCompletionsTextPath(path []pathElem) bool {
 // 后者会重排对象键、把尖括号与和号转义成 Unicode 形式并改变数字格式，
 // 等于伪造了客户端的原始请求，可能触发上游的客户端指纹检测。
 func collectJSONTextSegments(body []byte, match segmentMatcher) ([]textSegment, error) {
-	segments, _, err := walkJSONTextSegments(body, match, false)
+	segments, _, err := walkJSONTextSegments(body, match, nil)
 	return segments, err
 }
 
 // collectJSONTextSegmentsWithPaths 同 collectJSONTextSegments，另返回每段的 JSON 路径（测试面板展示用）
 func collectJSONTextSegmentsWithPaths(body []byte, match segmentMatcher) ([]textSegment, []string, error) {
-	return walkJSONTextSegments(body, match, true)
+	return walkJSONTextSegments(body, match, formatJSONPath)
 }
 
 func formatJSONPath(path []pathElem) string {
@@ -246,7 +246,33 @@ func formatJSONPath(path []pathElem) string {
 	return b.String()
 }
 
-func walkJSONTextSegments(body []byte, match segmentMatcher, withPaths bool) ([]textSegment, []string, error) {
+// Activity paths retain protocol field names and array indexes. Tool argument
+// object keys can contain user data, so only allowlisted keys survive.
+func formatActivityPath(path []pathElem) string {
+	var b strings.Builder
+	for i, elem := range path {
+		if i == 12 {
+			b.WriteString(".…")
+			break
+		}
+		if elem.Index >= 0 {
+			b.WriteString(elem.String())
+			continue
+		}
+		if i > 0 {
+			b.WriteByte('.')
+		}
+		switch elem.Key {
+		case "input", "instructions", "system", "messages", "content", "text", "output", "summary", "arguments", "args", "function", "tool_calls", "source", "title", "context", "commands", "search_query", "image_query", "find", "q", "pattern", "current_user_message", "previous_user_message", "previous_assistant_text":
+			b.WriteString(elem.Key)
+		default:
+			b.WriteByte('*')
+		}
+	}
+	return b.String()
+}
+
+func walkJSONTextSegments(body []byte, match segmentMatcher, pathLabel func([]pathElem) string) ([]textSegment, []string, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 
@@ -343,8 +369,8 @@ func walkJSONTextSegments(body []byte, match segmentMatcher, withPaths bool) ([]
 						Value:  tok,
 						IsJSON: true,
 					})
-					if withPaths {
-						paths = append(paths, formatJSONPath(path))
+					if pathLabel != nil {
+						paths = append(paths, pathLabel(path))
 					}
 				}
 			}

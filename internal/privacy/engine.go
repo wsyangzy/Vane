@@ -139,7 +139,7 @@ func (s *Snapshot) Apply(req Request, body []byte) (ApplyResult, error) {
 		return result, nil
 	}
 
-	segments, err := collectJSONTextSegments(body, matcher)
+	segments, paths, err := walkJSONTextSegments(body, matcher, formatActivityPath)
 	if err != nil {
 		result.SkippedReason = "scan_error"
 		result.ScanDuration = time.Since(started)
@@ -151,7 +151,7 @@ func (s *Snapshot) Apply(req Request, body []byte) (ApplyResult, error) {
 		return result, nil
 	}
 
-	scanned := s.scanSegments(&result, candidates, segments)
+	scanned := s.scanSegments(&result, candidates, segments, paths)
 	if s.restoration != nil && s.restoration.skipped != "" {
 		// 无法保存完整映射时原文放行，避免发送无法还原或混淆实体的占位符。
 		result.SkippedReason = "mapping_capacity"
@@ -184,7 +184,7 @@ func (s *Snapshot) candidateRules() []int {
 
 // scanSegments 对文本段应用候选规则，返回需替换的段（段下标 -> 替换后文本）。
 // 超出 scan_max_bytes 时按配置扫描前缀或跳过整次扫描，其余文本原样放行。
-func (s *Snapshot) scanSegments(result *ApplyResult, candidates []int, segments []textSegment) map[int]string {
+func (s *Snapshot) scanSegments(result *ApplyResult, candidates []int, segments []textSegment, paths []string) map[int]string {
 	limit := s.Settings.ScanMaxBytes
 	if limit <= 0 {
 		limit = DefaultScanMaxBytes
@@ -203,6 +203,7 @@ func (s *Snapshot) scanSegments(result *ApplyResult, candidates []int, segments 
 	}
 
 	hits := make(map[int64]*RuleHit)
+	fieldHits := make(map[activityFieldKey]int)
 	replacements := make(map[int]string)
 	// 假名分配器随请求创建、随请求销毁：请求内一致，不留任何持久化痕迹
 	pseudo := newPseudonymizer()
@@ -247,6 +248,9 @@ func (s *Snapshot) scanSegments(result *ApplyResult, candidates []int, segments 
 			hit.Count++
 			hit.Matches = append(hit.Matches, text[span.start:span.end])
 			result.HitCount++
+			if len(paths) > 0 {
+				result.countFieldHit(fieldHits, paths[segIdx], hit, rule)
+			}
 			if action == ActionRedact {
 				redactSpans = append(redactSpans, span)
 			}

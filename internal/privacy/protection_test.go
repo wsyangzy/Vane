@@ -68,6 +68,53 @@ func TestProtectionOptionsAndActualDelivery(t *testing.T) {
 		t.Fatal("preview mutated vault")
 	}
 }
+
+func TestActivityFieldDetailsRecordLocationsWithoutSensitiveValues(t *testing.T) {
+	s := protectionService(t)
+	ctx := context.Background()
+	settings := DefaultSettings()
+	settings.Mode = ModeRedact
+	if err := s.UpdateSettings(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	req := Request{RequestID: "detail-1", SessionKey: "activity-test", Path: "/v1/messages", ProviderType: "claude"}
+	key, first, second := "dynamic@"+"example.invalid", "first@"+"example.invalid", "second@"+"example.invalid"
+	body := []byte(`{"messages":[{"content":[{"type":"tool_use","input":{"` + key + `":"` + first + " " + second + `"}}]}]}`)
+	result, err := s.Apply(ctx, req, body)
+	if err != nil || !result.Changed {
+		t.Fatalf("expected redacted request: %v", err)
+	}
+	entries, err := s.store.ActivitiesForRequests(ctx, req.ProviderType, []string{req.RequestID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries[req.RequestID].State != "detected" {
+		t.Fatal("must not report completed redaction before body selection")
+	}
+	forwarded, _ := result.SelectBody(body)
+	entries, err = s.store.ActivitiesForRequests(ctx, req.ProviderType, []string{req.RequestID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := entries[req.RequestID]
+	if entry.State != "redacted" || len(entry.FieldHits) != 1 {
+		t.Fatalf("unexpected activity: %+v", entry)
+	}
+	field := entry.FieldHits[0]
+	if field.Path != "messages[0].content[0].input.*" || field.Count != 2 || field.Action != ActionRedact || field.ReplacementMode == "" {
+		t.Fatalf("unexpected field summary: %+v", field)
+	}
+	var payload string
+	if err := s.store.db.QueryRowContext(ctx, `SELECT payload FROM privacy_activity WHERE id=?`, entry.ID).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{key, first, second, "__REDACTED_", string(forwarded)} {
+		if strings.Contains(payload, secret) {
+			t.Fatal("activity contains a request value, dynamic field name, or replacement token")
+		}
+	}
+}
+
 func TestToolArgumentsAndCompletePrivateKey(t *testing.T) {
 	rules := []Rule{presetRule("完整私钥块", privateKeyPattern, "[私钥]", 10), presetRule("密钥", `SECRET`, "[密钥]", 20)}
 	compiled, err := CompileRules(rules)

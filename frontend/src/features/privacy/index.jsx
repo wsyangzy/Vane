@@ -149,7 +149,7 @@ const PrivacyDialog = ({ title, icon: Icon, children, footer, busy = false, onCl
     const previousFocus = document.activeElement;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    const controls = () => [...dialogRef.current.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex="0"]')].filter(element => element.getClientRects().length > 0);
+    const controls = () => [...dialogRef.current.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), summary, [tabindex="0"]')].filter(element => element.getClientRects().length > 0);
     (dialogRef.current.querySelector('input, textarea') || controls()[0])?.focus();
     const onKeyDown = event => {
       if (event.defaultPrevented || (!dialogRef.current?.contains(event.target) && event.target !== document.body)) return;
@@ -1108,7 +1108,11 @@ const PrivacyPage = () => {
 
       {testOpen && <TestModal open onClose={() => setTestOpen(false)} />}
       {optionsOpen && <ProtectionOptions settings={settings} Dialog={PrivacyDialog} saving={savingSettings} onSave={saveSettings} onClose={() => setOptionsOpen(false)} />}
-      {activityOpen && <PrivacyActivity activity={overview.activity || []} Dialog={PrivacyDialog} onClose={() => setActivityOpen(false)} />}
+      {activityOpen && <PrivacyActivity
+        activity={overview.activity || []}
+        Dialog={PrivacyDialog}
+        onClose={() => setActivityOpen(false)}
+      />}
 
       {presetsOpen && <PrivacyDialog
         title="导入规则预设" icon={Package} busy={Boolean(importingPreset)} onClose={() => setPresetsOpen(false)}
