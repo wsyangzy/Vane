@@ -20,7 +20,7 @@ const failureScope = (request) => {
   return ['route', snapshot.kind || '', snapshot.id || '', snapshot.channel || request.channel || '', request.group || request.group_name || '', request.endpoint || request.endpoint_name || ''];
 };
 
-const blockerScope = (request) => [...new Set(getRequestFailureDetails(request).blockingCandidates.map(item => JSON.stringify([
+const blockerScope = (blockers) => [...new Set(blockers.map(item => JSON.stringify([
   item.reason, item.blockage?.cause || '', item.blockage?.channelId || item.channel, item.blockage?.groupId || item.credentialGroup,
 ])))].sort();
 
@@ -37,8 +37,16 @@ export const createFailureNotificationAggregator = ({ windowMs = 30000, maxGroup
       const changes = new Map();
       for (const request of requests) {
         const reason = request.failure_reason || request.failureReason || '';
-        if (!shouldNotifyFailure(reason) && (reason === 'client_cancelled' || !getRequestFailureDetails(request).blockingCandidates.length)) continue;
-        const key = JSON.stringify([String(request.provider || 'claude').toLowerCase(), failureScope(request), extractFailureCode(reason) || describeFailureReason(reason), blockerScope(request)]);
+        if (extractFailureCode(reason) === 'client_cancelled') continue;
+        const details = getRequestFailureDetails(request);
+        if (!shouldNotifyFailure(reason) && !details.cooldownBlocked && !details.blockingCandidates.length) continue;
+        const scope = failureScope(request);
+        // Candidate and rule differences do not change the action for a fully
+        // cooldown-blocked request on the same dispatch profile.
+        const coolingScope = scope[0] === 'profile' ? scope.slice(0, 2) : scope;
+        const key = JSON.stringify([String(request.provider || 'claude').toLowerCase(), details.cooldownBlocked
+          ? [coolingScope, 'unsent_cooldown']
+          : [scope, extractFailureCode(reason) || describeFailureReason(reason), blockerScope(details.blockingCandidates)]]);
         let group = groups.get(key);
         const existing = Boolean(group);
         if (!group) {
@@ -47,13 +55,14 @@ export const createFailureNotificationAggregator = ({ windowMs = 30000, maxGroup
           if (groups.size > maxGroups) groups.delete(groups.keys().next().value);
         }
         group.count++;
-        group.expiresAt = now + windowMs;
-        const failure = buildFailureToast(request);
+        const recoveryAt = details.cooldownBlocked ? Date.parse(details.nextRecoveryAt) || 0 : 0;
+        group.expiresAt = Math.max(group.expiresAt, now + windowMs, recoveryAt);
+        const failure = buildFailureToast(request, details, now);
         changes.set(key, {
           id: group.id,
           update: changes.get(key)?.update ?? existing,
           ...failure,
-          message: [...failure.message, ...(group.count > 1 ? [`短时间内已有 ${group.count} 个请求因同一原因失败`] : [])],
+          message: [...failure.message, ...(group.count > 1 ? [`已合并 ${group.count} 个请求`] : [])],
         });
       }
       return [...changes.values()];

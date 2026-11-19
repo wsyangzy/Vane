@@ -11,6 +11,26 @@ import (
 	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
+func TestClaudeStreamPublishesReportedUsageBeforeCompletion(t *testing.T) {
+	tracker := newLifecycleTestTracker(t)
+	const id = "req-claude-live"
+	tracker.RecordRequestStart(id, "", "", "POST", "/v1/messages", true)
+	processor := NewStreamProcessor(NewTokenParser(), tracker, nil, nil, id, "endpoint")
+
+	processor.parseTokensInline([]byte("event: message_start\ndata: " +
+		`{"message":{"model":"claude-model","usage":{"input_tokens":25,"cache_read_input_tokens":10}}}` + "\n\n"))
+	first, err := tracker.FindRequestDetail(t.Context(), id)
+	if err != nil || first == nil || first.InputTokens != 25 || first.CacheReadTokens != 10 || first.EndTime != nil {
+		t.Fatalf("message_start usage: %+v, %v", first, err)
+	}
+	processor.parseTokensInline([]byte("event: message_delta\ndata: " +
+		`{"usage":{"output_tokens":17}}` + "\n\n"))
+	delta, err := tracker.FindRequestDetail(t.Context(), id)
+	if err != nil || delta == nil || delta.InputTokens != 25 || delta.OutputTokens != 17 || delta.CacheReadTokens != 10 || delta.EndTime != nil {
+		t.Fatalf("message_delta usage: %+v, %v", delta, err)
+	}
+}
+
 // TestStreamProcessorTokenIntegration 测试流式处理器与Token解析的集成
 func TestStreamProcessorTokenIntegration(t *testing.T) {
 	// 模拟带有token信息的SSE响应

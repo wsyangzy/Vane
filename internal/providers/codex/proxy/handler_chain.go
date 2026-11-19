@@ -19,10 +19,11 @@ type chainNode struct {
 	// Attempts 本跳内实际发出的请求次数（含同端点重试）；整请求累计 = retry_count + 1
 	Attempts int `json:"attempts,omitempty"`
 	// StartMs / DurationMs 与 Claude 端 ChainNode 同口径：距请求开始的毫秒数与本跳耗时
-	StartMs    int64  `json:"start_ms"`
-	DurationMs *int64 `json:"duration_ms,omitempty"`
-	StatusCode int    `json:"status_code,omitempty"`
-	Error      string `json:"error,omitempty"`
+	StartMs      int64  `json:"start_ms"`
+	DurationMs   *int64 `json:"duration_ms,omitempty"`
+	StatusCode   int    `json:"status_code,omitempty"`
+	UsageCredits *int   `json:"usage_credits,omitempty"`
+	Error        string `json:"error,omitempty"`
 	// Headers / Local 与 Claude 端 ChainNode 同口径：诊断头白名单；没拿到上游响应的本地失败
 	Headers map[string]string `json:"headers,omitempty"`
 	Local   bool              `json:"local,omitempty"`

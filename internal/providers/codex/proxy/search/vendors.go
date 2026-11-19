@@ -99,6 +99,9 @@ func buildCall(ctx context.Context, cfg Config, job work, include, exclude []str
 		payload = p
 	default:
 		p := map[string]any{"query": job.Q, "max_results": cfg.MaxResults, "search_depth": "basic", "include_domains": include, "exclude_domains": exclude, "include_images": job.images, "include_image_descriptions": job.images}
+		if cfg.Vendor == "" || cfg.Vendor == "tavily" {
+			p["include_usage"] = true
+		}
 		if start != "" {
 			p["start_date"] = start
 		}

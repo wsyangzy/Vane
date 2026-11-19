@@ -270,7 +270,6 @@ func (sp *StreamProcessor) parseTokensInline(data []byte) {
 }
 
 // processSSELine 处理单个SSE行
-// 修改版本：仅进行 Token 解析，不再直接记录到 usageTracker
 func (sp *StreamProcessor) processSSELine(line string) {
 	// 🔥 [重复计费防护] 2025-12-26: 检测是否为实际模型输出事件
 	trimmedLine := strings.TrimSpace(line)
@@ -307,24 +306,8 @@ func (sp *StreamProcessor) processSSELine(line string) {
 			return
 		}
 
-		// 处理正常Token信息
-		if result.TokenUsage != nil {
-			// 直接使用ParseResult，无需类型转换
-			trackingTokens := result.TokenUsage
-			modelName := result.ModelName
-
-			// 确保模型名称不为空
-			if modelName == "" {
-				modelName = "default"
-			}
-
-			// ✅ 移除completionRecorded限制，每次都更新最新token统计
-			slog.Debug(fmt.Sprintf("🔄 [Token实时更新] [%s] 模型: %s, 输入: %d, 输出: %d, 缓存创建: %d, 缓存读取: %d",
-				sp.requestID, modelName, trackingTokens.InputTokens, trackingTokens.OutputTokens,
-				trackingTokens.CacheCreationTokens, trackingTokens.CacheReadTokens))
-
-			// ✅ 移除或注释掉这个字段，因为不再需要
-			// sp.completionRecorded = true
+		if sp.usageTracker != nil && result.Status != "non_token_response" {
+			sp.usageTracker.RecordStreamUsage(sp.requestID, result.TokenUsage, result.ModelName, "")
 		}
 	}
 }

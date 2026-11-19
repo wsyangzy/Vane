@@ -8,6 +8,10 @@ import (
 
 // ActiveRequestToDetail 将 ActiveRequest 转换为 RequestDetail
 func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail {
+	return ut.activeRequestToDetail(req, false)
+}
+
+func (ut *UsageTracker) activeRequestToDetail(req *ActiveRequest, includeLiveUsage bool) RequestDetail {
 	// 统一在请求级别加读锁，避免并发更新导致数据竞争
 	req.mu.RLock()
 	requestID := req.RequestID
@@ -34,6 +38,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	cacheWrite30m, cacheWrite12h, cacheWriteTTLPricing := req.CacheWrite30mTokens, req.CacheWrite12hTokens, req.CacheWriteTTLPricing
 	privacyRedacted := req.PrivacyRedacted
 	privacySummary := req.PrivacySummary
+	contextSummary := req.ContextSummary
 	isStreaming := req.IsStreaming
 	provider := req.Provider
 	status := req.Status
@@ -48,7 +53,6 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	outputTokens := req.OutputTokens
 	reasoningTokens := req.ReasoningTokens
 	billingOutputTokenSource := NormalizeBillingOutputTokenSource(req.BillingOutputTokenSource)
-	billableOutputTokens := BillableOutputTokens(outputTokens, reasoningTokens, billingOutputTokenSource)
 	cacheCreationTokens := req.CacheCreationTokens
 	cacheCreation5mTokens := req.CacheCreation5mTokens
 	cacheCreation1hTokens := req.CacheCreation1hTokens
@@ -69,7 +73,24 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	billingRules := append([]BillingRule(nil), req.BillingRules...)
 	billingRulesCaptured := req.BillingRulesCaptured
 	billingGroupMultiplier := req.BillingGroupMultiplier
+	streamUsage := req.streamUsage
 	req.mu.RUnlock()
+
+	if includeLiveUsage && endTimeSnapshot == nil && streamUsage != nil {
+		tokens := streamUsage.tokens
+		inputTokens, outputTokens, reasoningTokens = tokens.InputTokens, tokens.OutputTokens, tokens.ReasoningTokens
+		cacheCreationTokens, cacheReadTokens = tokens.CacheCreationTokens, tokens.CacheReadTokens
+		cacheCreation5mTokens, cacheCreation1hTokens = tokens.CacheCreation5mTokens, tokens.CacheCreation1hTokens
+		cacheWrite30m, cacheWrite12h = tokens.CacheWrite30mTokens, tokens.CacheWrite12hTokens
+		inputIncludesCacheRead = tokens.InputIncludesCacheRead
+		if streamUsage.model != "" && streamUsage.model != "unknown" {
+			modelName = streamUsage.model
+		}
+		if streamUsage.tier != "" {
+			responseTier = streamUsage.tier
+		}
+	}
+	billableOutputTokens := BillableOutputTokens(outputTokens, reasoningTokens, billingOutputTokenSource)
 
 	var endTime *time.Time
 	var durationMs *int64
@@ -221,6 +242,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		ServiceTier:                   serviceTier,
 		PrivacyRedacted:               privacyRedacted,
 		PrivacyRedactionSummary:       privacySummary,
+		ContextSummary:                contextSummary,
 		IsStreaming:                   isStreaming,
 		Provider:                      provider, // 提供商标识
 		Status:                        status,

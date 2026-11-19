@@ -8,6 +8,7 @@ import { Tooltip } from '@/shared/ui/index.js';
 import { describeRouteSnapshot } from '@/features/providers/shared/routing/routeTargets.js';
 import { CodexLogo } from '@/features/providers/codex/components/CodexLogo.jsx';
 import { getModelBrand } from '../utils/modelBrand.js';
+import { getModernGptColor } from '../utils/gptModelColors.js';
 import { DeepSeekIcon, GLMIcon, KimiIcon, QwenIcon } from './ModelBrandIcons.jsx';
 import { getRequestModelFallback } from '../utils/requestMetadata.js';
 
@@ -101,21 +102,6 @@ const GPT5_CODENAME_COLOR_MAP = {
   luna: createModelStyle('bg-[#EEF2FF] text-[#3730A3] border-[#A5B4FC]', 'openai')
 };
 
-const GPT6_CODENAME_COLOR_MAP = {
-  astra: createModelStyle('bg-[#FFF1F2] text-[#9F1239] border-[#FDA4AF]', 'openai')
-};
-
-const getGpt6ColorClasses = (lowerName) => {
-  const match = lowerName.match(/\bgpt[-.]?6(?:[.-]([a-z0-9]+))?\b/);
-  if (!match) return null;
-
-  const codename = Object.keys(GPT6_CODENAME_COLOR_MAP)
-    .find((name) => lowerName.includes(name));
-  return codename
-    ? GPT6_CODENAME_COLOR_MAP[codename]
-    : createModelStyle('bg-[#F0F9FF] text-[#075985] border-[#7DD3FC]', 'openai');
-};
-
 const getGpt5ColorClasses = (lowerName) => {
   const match = lowerName.match(/\bgpt[-.]?5(?:[.-](\d+))?\b/);
   if (!match) return null;
@@ -205,13 +191,13 @@ const getModelStyle = (modelName) => {
     return claudeColorClasses;
   }
 
-  if (lowerName.includes('mini')) {
-    return createModelStyle('bg-[#B4EEB4]/45 text-green-900 border-[#B4EEB4]/80', 'openai');
+  const gptColor = getModernGptColor(lowerName);
+  if (gptColor) {
+    return createModelStyle(gptColor, 'openai');
   }
 
-  const gpt6ColorClasses = getGpt6ColorClasses(lowerName);
-  if (gpt6ColorClasses) {
-    return gpt6ColorClasses;
+  if (lowerName.includes('mini')) {
+    return createModelStyle('bg-[#B4EEB4]/45 text-green-900 border-[#B4EEB4]/80', 'openai');
   }
 
   const gpt5ColorClasses = getGpt5ColorClasses(lowerName);

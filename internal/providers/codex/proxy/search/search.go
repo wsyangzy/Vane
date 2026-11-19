@@ -101,9 +101,12 @@ type Failure struct {
 }
 
 type Attempt struct {
-	Sent   bool
-	Status int
-	Error  string
+	Sent         bool
+	Status       int
+	Error        string
+	UsageCredits *int
+	StartedAt    time.Time
+	DurationMs   *int64
 }
 
 type Outcome struct {
@@ -232,19 +235,29 @@ func runQuery(ctx context.Context, client *http.Client, cfg Config, req Request,
 	if err != nil {
 		return nil, Attempt{}, &Failure{Reason: "search_not_configured", Detail: "搜索服务地址或请求参数无效"}
 	}
+	startedAt := time.Now()
+	attempt := Attempt{Sent: true, StartedAt: startedAt}
+	finishAttempt := func() Attempt {
+		duration := time.Since(startedAt).Milliseconds()
+		attempt.DurationMs = &duration
+		return attempt
+	}
 	resp, err := client.Do(call)
 	if err != nil {
 		detail := "搜索服务连接失败"
 		if callCtx.Err() != nil {
 			detail = "搜索服务请求取消或超时"
 		}
-		return nil, Attempt{Sent: true, Error: detail}, &Failure{Reason: "network_error", Detail: detail}
+		attempt.Error = detail
+		return nil, finishAttempt(), &Failure{Reason: "network_error", Detail: detail}
 	}
 	defer resp.Body.Close()
+	attempt.Status = resp.StatusCode
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, (2<<20)+1))
 	if err != nil || len(raw) > 2<<20 {
-		return nil, Attempt{Sent: true, Status: resp.StatusCode}, &Failure{Reason: "response_read_error", Detail: "搜索服务响应读取失败或超过 2 MiB", Status: resp.StatusCode}
+		return nil, finishAttempt(), &Failure{Reason: "response_read_error", Detail: "搜索服务响应读取失败或超过 2 MiB", Status: resp.StatusCode}
 	}
+	attempt.UsageCredits = decodeUsageCredits(raw)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		detail := string(raw)
 		if cfg.APIKey != "" {
@@ -253,11 +266,12 @@ func runQuery(ctx context.Context, client *http.Client, cfg Config, req Request,
 		if len(detail) > 4096 {
 			detail = detail[:4096]
 		}
-		return nil, Attempt{Sent: true, Status: resp.StatusCode, Error: detail}, &Failure{Reason: "search_upstream_error", Detail: detail, Status: resp.StatusCode}
+		attempt.Error = detail
+		return nil, finishAttempt(), &Failure{Reason: "search_upstream_error", Detail: detail, Status: resp.StatusCode}
 	}
 	items, parseErr := decodeResults(cfg.Vendor, job.images, raw)
 	if parseErr != nil {
-		return nil, Attempt{Sent: true, Status: resp.StatusCode}, &Failure{Reason: "response_read_error", Detail: "搜索服务未返回有效的 " + cfg.Name() + " 搜索结果", Status: resp.StatusCode}
+		return nil, finishAttempt(), &Failure{Reason: "response_read_error", Detail: "搜索服务未返回有效的 " + cfg.Name() + " 搜索结果", Status: resp.StatusCode}
 	}
 	results := []Result{}
 	add := func(title, link, snippet string) {
@@ -272,7 +286,19 @@ func runQuery(ctx context.Context, client *http.Client, cfg Config, req Request,
 	for _, item := range items {
 		add(item.Title, item.URL, item.Snippet)
 	}
-	return results, Attempt{Sent: true, Status: resp.StatusCode}, nil
+	return results, finishAttempt(), nil
+}
+
+func decodeUsageCredits(raw []byte) *int {
+	var response struct {
+		Usage *struct {
+			Credits *int `json:"credits"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(raw, &response) != nil || response.Usage == nil || response.Usage.Credits == nil || *response.Usage.Credits < 0 {
+		return nil
+	}
+	return response.Usage.Credits
 }
 
 func matchesDomain(host, domain string) bool {

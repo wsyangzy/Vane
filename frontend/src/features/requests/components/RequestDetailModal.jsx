@@ -4,7 +4,7 @@
 // 2025-12-01
 // ============================================
 
-import { Fragment, useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { Fragment, memo, useState, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   X,
   Copy,
@@ -21,19 +21,20 @@ import {
   Database,
   AlertCircle,
   ShieldCheck,
-  TrendingUp,
-  TrendingDown,
   Zap,
   Calculator,
   Replace,
   Route,
   CheckCircle2,
-  ChevronDown,
-  Percent
+  ChevronDown
 } from 'lucide-react';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
 import RequestDispatchDetails from './RequestDispatchDetails.jsx';
+import RequestFallbackChain from './RequestFallbackChain.jsx';
+import RequestCostWaterfall from './RequestCostWaterfall.jsx';
+import RequestContextMap from './RequestContextMap.jsx';
+import RequestAuxiliaryUsage from './RequestAuxiliaryUsage.jsx';
 import RequestPrivacyDetails from './RequestPrivacyDetails.jsx';
 import LocalRequestFailure from './LocalRequestFailure.jsx';
 import './requestDetail.css';
@@ -43,11 +44,8 @@ import { formatMultiplierDisplayValue } from '@/shared/lib/multiplier.js';
 import { Tooltip } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import {
-  formatCacheHitRate,
   getBillableInputTokens,
   getDisplayInputTokens,
-  getDisplayTotalTokens,
-  getRequestCacheHitRate,
   isCacheInclusiveProvider
 } from '../utils/tokenDisplay.js';
 import {
@@ -63,6 +61,7 @@ import {
 } from '../utils/endpointChain.js';
 import {
   formatReasoningFieldValue,
+  getAuxiliaryRequestMeta,
   getRequestBillingMultiplierSources,
   getRequestPricingFallback,
   getReasoningEffortMeta,
@@ -233,23 +232,6 @@ const RouteBadges = ({ route }) => (
   </span>
 );
 
-/**
- * Token 指标卡片
- */
-// displayValue 用于非 token 数值（如命中率）；hint 是标签下方的补充说明
-const TokenCard = ({ icon: Icon, label, value, displayValue, hint, colorClass }) => (
-  <div className={`rounded-lg p-4 border ${colorClass.border} ${colorClass.bg}`}>
-    <div className="flex items-center justify-between mb-2">
-      <Icon className={`w-4 h-4 ${colorClass.icon}`} />
-    </div>
-    <div className={`text-2xl font-bold font-mono ${colorClass.text}`}>
-      {displayValue ?? (value || 0).toLocaleString()}
-    </div>
-    <div className="text-xs text-slate-500 mt-1">{label}</div>
-    {hint && <div className="mt-0.5 text-[11px] text-slate-400">{hint}</div>}
-  </div>
-);
-
 const FirstByteDetailBadge = ({ ms, status }) => {
   if (ms === null || ms === undefined) {
     return (
@@ -266,7 +248,9 @@ const FirstByteDetailBadge = ({ ms, status }) => {
  * 请求详情模态框主组件
  */
 const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialTab = 'overview' }) => {
-  const [activeTab, setActiveTab] = useState(initialTab);
+  const [tabView, setTabView] = useState(() => ({ active: initialTab, visited: [] }));
+  const activeTab = tabView.active;
+  const firstChainView = !tabView.visited.includes('chain');
   const [copiedError, setCopiedError] = useState(false);
   const [copiedRequestId, setCopiedRequestId] = useState(false);
   // 记录「已展开此前失败跳」的请求 ID：弹窗组件常驻，换一条请求打开时自动回到收起状态
@@ -342,34 +326,23 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
   };
 
   const isCodexRequest = isCacheInclusiveProvider(request.provider);
-  const isClaudeRequest = !isCodexRequest;
 
-  // 计算 Token 总数：Codex/OpenAI input_tokens 已包含 cached_tokens；兼容旧 Codex 记录的非缓存 input。
-  const inputTokenCount = getDisplayInputTokens(request);
-  const outputTokenCount = request.outputTokens || 0;
-  const reasoningTokenCount = request.reasoningTokens || 0;
-  const visibleOutputTokenCount = Math.max(0, outputTokenCount - reasoningTokenCount);
   const billingOutputTokenSource = request.billingOutputTokenSource || 'output_tokens';
   const billingRuleSnapshot = request.billingRuleSnapshot || null;
   const pricingFallback = getRequestPricingFallback(request);
-  const billableOutputTokenCount = request.billableOutputTokens ?? outputTokenCount;
-  const totalTokens = getDisplayTotalTokens(request);
-  const inputPercent = totalTokens > 0 ? Math.round((inputTokenCount / totalTokens) * 100) : 0;
-  const outputPercent = totalTokens > 0 ? Math.round((outputTokenCount / totalTokens) * 100) : 0;
-  const cachePercent = !isCodexRequest && totalTokens > 0 ? Math.max(0, 100 - inputPercent - outputPercent) : 0;
   const outputSourceLabelMap = {
     output_tokens: '总输出',
     reasoning_tokens: '推理',
     visible_output_tokens: '可见补全'
   };
   const billingOutputSourceLabel = outputSourceLabelMap[billingOutputTokenSource] || outputSourceLabelMap.output_tokens;
+  const auxiliaryRequestMeta = getAuxiliaryRequestMeta(request);
 
   // 请求类型：全页统一用"流式 / 非流式"，与网络信息页、非流改道的叫法一致
   const StreamIcon = request.isStreaming ? Waves : RefreshCw;
   const streamLabel = request.isStreaming ? '流式' : '非流式';
   const streamColor = request.isStreaming ? 'text-blue-600 bg-blue-50' : 'text-slate-600 bg-slate-50';
   const streamOutcomeMeta = getStreamOutcomeMeta(getRequestOutcome(request));
-  const cacheHitRate = getRequestCacheHitRate(request);
   const isFailure = isFailureStatus(request.status);
   const isCancelled = isCancelledStatus(request.status);
   const cancelReason = request.cancel_reason || request.cancelReason || '';
@@ -512,19 +485,22 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
 
         {/* Tab 导航 - 固定不滚动 */}
         <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/50 px-5 py-3">
-          <div className="flex gap-1 p-1 bg-slate-100/60 border border-slate-200/70 rounded-xl">
-            {/* 无内容的标签置灰并标注"无"，仍可点击查看说明；等宽排布避免窄窗口下换行 */}
+          <div className="request-detail-tabs flex gap-1 p-1 bg-slate-100/60 border border-slate-200/70 rounded-xl">
+            {/* 无内容的标签置灰，仍可点击查看说明 */}
             {[
               { id: 'overview', label: '概览', icon: Activity },
-              { id: 'tokens', label: 'Token 详情', icon: Database },
-              { id: 'network', label: '网络信息', icon: Server },
+              { id: 'tokens', label: '用量与成本', icon: Database },
+              { id: 'network', label: '网络与响应', icon: Server },
               { id: 'privacy', label: '隐私防护', icon: ShieldCheck, empty: !hasPrivacyRecord },
               { id: 'chain', label: '调度链路', icon: Layers, empty: !dispatchTrace && chainNodes.length === 0 }
             ].map((tab) => (
               <button
                 key={tab.id}
                 aria-label={tab.label}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => setTabView(current => current.active === tab.id ? current : {
+                  active: tab.id,
+                  visited: current.visited.includes(current.active) ? current.visited : [...current.visited, current.active],
+                })}
                 aria-current={activeTab === tab.id ? 'page' : undefined}
                 className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap px-2 py-2 rounded-lg text-sm font-medium transition-colors border ${
                   activeTab === tab.id
@@ -535,9 +511,9 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 } focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50`}
               >
                 <tab.icon className="w-4 h-4 flex-shrink-0" />
-                <span className="truncate">{tab.label}</span>
+                <span className="request-detail-tab-label">{tab.label}</span>
                 {tab.empty && (
-                  <span className="rounded bg-slate-200/70 px-1 text-[10px] font-medium leading-4 text-slate-500">无</span>
+                  <span className="request-detail-tab-empty rounded bg-slate-200/70 px-1 text-[10px] font-medium leading-4 text-slate-500">无</span>
                 )}
               </button>
             ))}
@@ -627,16 +603,15 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
                   <h3 className="text-sm font-semibold text-slate-900">模型信息</h3>
                 </div>
-                <div className="p-4">
-                  <div className="flex items-center justify-between py-3">
-                    <span className="text-sm font-medium text-slate-500">模型名称</span>
-                    <ModelTag model={request.model} provider={request.provider} method={request.method} path={request.path} />
+                <div className="px-4">
+                  <div className="flex items-center justify-between gap-3 py-2.5">
+                    <span className="shrink-0 text-sm font-medium text-slate-500">模型名称</span>
+                    <ModelTag model={request.model} provider={request.provider} method={request.method} path={request.path} compact />
                   </div>
                   {hasReasoning && (
-                    <div className="border-t border-slate-100 pt-3 mt-1 space-y-2">
-                      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Reasoning / Thinking</div>
+                    <div className="border-t border-slate-100">
                       {reasoningEffort && (
-                        <div className="flex items-center justify-between py-1.5">
+                        <div className="flex items-center justify-between py-2.5">
                           <span className="text-sm font-medium text-slate-500">{REASONING_FIELD_LABELS.effort}</span>
                           <Tooltip content={reasoningEffortMeta.description}>
                             <span className={`inline-flex items-center whitespace-nowrap rounded border px-2 py-0.5 text-xs font-medium ${reasoningEffortMeta.className}`}>
@@ -654,7 +629,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                           const isType = key === 'type';
                           const mappedValue = formatReasoningFieldValue(key, value);
                           return (
-                            <div key={key} className="flex items-start justify-between gap-4 py-1.5">
+                            <div key={key} className="flex items-start justify-between gap-3 py-2.5">
                               <span className="shrink-0 text-sm font-medium text-slate-500">{label}</span>
                               {isType ? (
                                 <span className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium whitespace-nowrap ${
@@ -671,7 +646,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                     </div>
                   )}
                   {serviceTierMeta && (
-                    <div className="flex items-center justify-between py-3 border-t border-slate-100">
+                    <div className="flex items-center justify-between py-2.5 border-t border-slate-100">
                       <span className="text-sm font-medium text-slate-500">服务档位</span>
                       <Tooltip content={serviceTierMeta.description}>
                         <span className={`inline-flex items-center whitespace-nowrap rounded border px-2 py-0.5 text-xs font-medium ${serviceTierMeta.className}`}>
@@ -1156,6 +1131,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
           {/* 端点链路 Tab */}
           {activeTab === 'chain' && (
             <div className="space-y-4">
+              <RequestFallbackChain request={request} animate={firstChainView} />
               {dispatchTrace && <div className="rounded-xl border border-slate-200 bg-white"><RequestDispatchDetails trace={dispatchTrace} expanded /></div>}
               {!dispatchTrace && <>
               {/* 统计摘要条 */}
@@ -1326,127 +1302,19 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
             </div>
           )}
 
-          {/* Token 详情 Tab */}
+          {/* 用量与成本 Tab */}
           {activeTab === 'tokens' && (
             <div className="space-y-4">
-              {/* Token 卡片 - 基础 */}
-              <div className="grid grid-cols-2 gap-3">
-                <TokenCard
-                  icon={TrendingUp}
-                  label="输入 Token"
-                  value={inputTokenCount}
-                  colorClass={{ bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-600', icon: 'text-blue-600' }}
-                />
-                <TokenCard
-                  icon={TrendingDown}
-                  label="输出 Token"
-                  value={outputTokenCount}
-                  colorClass={{ bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-600', icon: 'text-emerald-600' }}
-                />
-              </div>
-
-              {isCodexRequest && (
-                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                  <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between gap-3">
-                    <h3 className="text-sm font-semibold text-slate-900">输出拆分</h3>
-                    <span className="text-xs text-slate-500">计费口径：{billingOutputSourceLabel}</span>
-                  </div>
-                  <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-y md:divide-y-0 divide-slate-100">
-                    {[
-                      { label: '原始输出', value: outputTokenCount, tone: 'text-emerald-600' },
-                      { label: '推理', value: reasoningTokenCount, tone: 'text-violet-600' },
-                      { label: '可见补全', value: visibleOutputTokenCount, tone: 'text-sky-600' },
-                      { label: '计费输出', value: billableOutputTokenCount, tone: 'text-orange-600' }
-                    ].map((item) => (
-                      <div key={item.label} className="p-4">
-                        <div className="text-xs font-medium text-slate-500">{item.label}</div>
-                        <div className={`mt-1 text-lg font-bold font-mono ${item.tone}`}>
-                          {item.value.toLocaleString()}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Token 卡片 - 缓存。缓存创建总计就是 5 分钟 + 1 小时之和，合进卡片说明，不再单占一格 */}
-              <div className="grid grid-cols-2 gap-3">
-                {isClaudeRequest && (
-                  <>
-                    <TokenCard
-                      icon={Database}
-                      label="缓存创建 (5分钟)"
-                      value={request.cacheCreation5mTokens || 0}
-                      hint={`缓存创建合计 ${(request.cacheCreationTokens || 0).toLocaleString()}`}
-                      colorClass={{ bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-600', icon: 'text-purple-600' }}
-                    />
-                    <TokenCard
-                      icon={Database}
-                      label="缓存创建 (1小时)"
-                      value={request.cacheCreation1hTokens || 0}
-                      colorClass={{ bg: 'bg-violet-50', border: 'border-violet-200', text: 'text-violet-600', icon: 'text-violet-600' }}
-                    />
-                  </>
-                )}
-                {isCodexRequest && request.cacheCreationTokens > 0 && (
-                  billingRuleSnapshot?.cache_write_pricing ? <>
-                    <TokenCard icon={Database} label="缓存写入 · 30m 计费" value={billingRuleSnapshot.cache_write_30m_tokens || 0}
-                      colorClass={{ bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-600', icon: 'text-purple-600' }} />
-                    <TokenCard icon={Database} label="缓存写入 · 12h 计费" value={billingRuleSnapshot.cache_write_12h_tokens || 0}
-                      colorClass={{ bg: 'bg-violet-50', border: 'border-violet-200', text: 'text-violet-600', icon: 'text-violet-600' }} />
-                  </> : <TokenCard icon={Database} label="缓存写入" value={request.cacheCreationTokens}
-                    colorClass={{ bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-600', icon: 'text-purple-600' }} />
-                )}
-                <TokenCard
-                  icon={Zap}
-                  label="缓存读取"
-                  value={request.cacheReadTokens || 0}
-                  colorClass={{ bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-600', icon: 'text-amber-600' }}
-                />
-                <TokenCard
-                  icon={Percent}
-                  label="缓存命中概率"
-                  displayValue={formatCacheHitRate(cacheHitRate)}
-                  hint={isCodexRequest ? '缓存读取 ÷ 输入（Codex 输入已含缓存）' : '缓存读取 ÷ (输入 + 缓存创建 + 缓存读取)'}
-                  colorClass={{ bg: 'bg-sky-50', border: 'border-sky-200', text: 'text-sky-600', icon: 'text-sky-600' }}
-                />
-              </div>
-
-              {/* Token 总计 */}
-              <div className="bg-gradient-to-r from-indigo-50 to-blue-50 rounded-xl p-6 border border-indigo-100">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-white rounded-lg shadow-sm">
-                      <FileText className="w-5 h-5 text-indigo-600" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-medium text-slate-600">总 Token 消耗</div>
-                      <div className="text-xs text-slate-400">{isCodexRequest ? 'Input + Output' : 'Input + Output + Cache'}</div>
-                    </div>
-                  </div>
-                  <div className="text-3xl font-bold text-indigo-600 font-mono">
-                    {totalTokens.toLocaleString()}
-                  </div>
-                </div>
-
-                {/* 分布条 */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-xs text-slate-600">
-                    <span>输入 {inputPercent}%</span>
-                    <span>输出 {outputPercent}%</span>
-                    {!isCodexRequest && <span>缓存 {cachePercent}%</span>}
-                  </div>
-                  <div className="h-2 bg-slate-200 rounded-full overflow-hidden flex">
-                    <div className="bg-blue-500" style={{ width: `${inputPercent}%` }} />
-                    <div className="bg-emerald-500" style={{ width: `${outputPercent}%` }} />
-                    {!isCodexRequest && <div className="bg-amber-500" style={{ width: `${cachePercent}%` }} />}
-                  </div>
-                </div>
-              </div>
+              {auxiliaryRequestMeta
+                ? <RequestAuxiliaryUsage request={request} meta={auxiliaryRequestMeta} />
+                : <>
+                  <RequestContextMap request={request} />
+                  <RequestCostWaterfall request={request} />
+                </>}
             </div>
           )}
 
-          {/* 网络信息 Tab */}
+          {/* 网络与响应 Tab */}
           {activeTab === 'network' && (
             <div className="request-detail-network-grid">
               <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -1543,4 +1411,4 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
   );
 };
 
-export default RequestDetailModal;
+export default memo(RequestDetailModal);

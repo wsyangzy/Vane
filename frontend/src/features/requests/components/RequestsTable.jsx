@@ -14,12 +14,14 @@ import ModelTag from './ModelTag.jsx';
 import Pagination from './Pagination.jsx';
 import RequestRouteCell from './RequestRouteCell.jsx';
 import RequestChannelTooltip from './RequestChannelTooltip.jsx';
-import { describeRequestRoutePath } from '../utils/dispatchTrace.js';
+import { summarizeRequestRoute } from '../utils/dispatchTrace.js';
+import { isHealthCooldown } from '../utils/blockage.js';
 import { getDisplayInputTokens } from '../utils/tokenDisplay.js';
 import { auxiliaryColumnLayout, requestColumnLayout, requestRowHeight } from '../utils/tableLayout.js';
 import {
   getEndpointChainItems,
   getRequestChannelLabel,
+  getRequestCredentialGroupLabel,
   getRequestResourcePath,
   parseChainNode,
 } from '../utils/endpointChain.js';
@@ -58,27 +60,38 @@ const getReasoningDisplay = (raw, compact) => {
   );
 };
 
-const ChannelCell = ({ request, compact }) => {
+const ChannelCell = ({ request, route, compact }) => {
   const chain = getEndpointChainItems(request);
   const channelLabel = getRequestChannelLabel(request, chain.map(parseChainNode));
   const nodes = getRequestResourcePath(request);
   const transferCount = Math.max(0, nodes.length - 1);
-  const tooltip = <RequestChannelTooltip nodes={nodes} channelLabel={channelLabel} />;
-  const tooltipClasses = 'border-slate-200! bg-white! text-slate-700! max-w-[min(640px,calc(100vw-16px))]!';
+  const trace = request.dispatchTrace;
+  const sent = !['-', '未发送', '待调度'].includes(channelLabel);
+  const group = sent ? getRequestCredentialGroupLabel(request, nodes) : '-';
+  const cooldown = channelLabel === '未发送' && trace?.attemptCount === 0 && trace.skipped?.some(item => isHealthCooldown(item.reason));
+  const tooltip = <RequestChannelTooltip nodes={nodes} channelLabel={channelLabel} resources={route.resources} cooldown={cooldown} />;
 
   return (
-    <span className="inline-flex w-full max-w-full items-center justify-center gap-1 min-w-0">
-      <Tooltip asChild content={tooltip} contentClassName={tooltipClasses}><span className="min-w-0 truncate text-purple-600 text-xs font-medium">{channelLabel}</span></Tooltip>
-      {transferCount > 0 && (
-        <Tooltip asChild content={tooltip} contentClassName={tooltipClasses}><span
-          className={`inline-flex shrink-0 items-center gap-0.5 py-0.5 text-indigo-600 text-[10px] font-medium rounded whitespace-nowrap ${compact ? '' : 'border border-indigo-100 bg-indigo-50 px-1'}`}
-          aria-label={`调用资源切换 ${transferCount} 次`}
-        >
-          <Route className="w-2.5 h-2.5" />
-          {!compact && <span>{transferCount}</span>}
-        </span></Tooltip>
-      )}
-    </span>
+    <Tooltip asChild content={tooltip}>
+      <span tabIndex={0} className="inline-flex max-w-full min-w-0 items-center gap-0.5 align-middle text-xs leading-4">
+        <span className="min-w-0 truncate">
+          <span className="font-medium text-purple-600">{channelLabel}</span>
+          {group !== '-' && <>
+            <span className="text-slate-400"> / </span>
+            <span className="text-slate-600">{group}</span>
+          </>}
+        </span>
+        {transferCount > 0 && (
+          <span
+            className={`inline-flex shrink-0 items-center gap-0.5 rounded text-[10px] font-medium text-indigo-600 ${compact ? '' : 'border border-indigo-100 bg-indigo-50 px-1'}`}
+            aria-label={`调用资源切换 ${transferCount} 次`}
+          >
+            <Route className="w-2.5 h-2.5" />
+            {!compact && <span>{transferCount}</span>}
+          </span>
+        )}
+      </span>
+    </Tooltip>
   );
 };
 
@@ -112,7 +125,7 @@ const LatencyCell = ({ request, compact }) => compact ? (
  * @param {Object} column - 列配置及当前分配宽度
  * @param {Object} request - 请求数据
  */
-const renderCell = (column, request, onViewDispatch, showDate, auxiliary) => {
+const renderCell = (column, request, onViewDispatch, showDate, auxiliary, route) => {
   const columnId = column.id;
   const compact = column.layoutWidth < 100;
   const tokenText = (value) => value == null ? '—' : column.layoutWidth < 62 ? formatNumber(Number(value)) : value;
@@ -158,7 +171,17 @@ const renderCell = (column, request, onViewDispatch, showDate, auxiliary) => {
       );
     case 'status':
       return <span className={`inline-flex max-w-full [&>div]:max-w-full [&>div]:gap-1 [&>div]:px-1 [&>div]:text-[11px] ${column.layoutWidth < 58 ? '[&_svg]:hidden' : ''}`}><RequestStatusBadge request={request} /></span>;
-    case 'model':
+    case 'model': {
+      const routePath = route.resources.length > 1 ? (
+        <div className="space-y-1.5 text-left">
+          {route.paths.map(({ model, resources }, index) => (
+            <div key={index}>
+              <div>{model}</div>
+              <div className="font-normal text-slate-300">{resources.join(' → ')}</div>
+            </div>
+          ))}
+        </div>
+      ) : route.paths.map(({ model }) => model).join('\n') || route.models.join(' → ');
       return (
         <ModelTag
           compact
@@ -171,12 +194,13 @@ const renderCell = (column, request, onViewDispatch, showDate, auxiliary) => {
           originalModel={request.originalModelName || request.original_model_name || ''}
           rewriteTarget={request.modelRewriteTarget || request.model_rewrite_target || request.model || ''}
           routeSnapshot={request.routeSnapshot || request.route_snapshot}
-          routePath={describeRequestRoutePath(request)}
+          routePath={routePath}
           routeExecuted={request.dispatchTrace?.ruleExecuted ?? null}
         />
       );
+    }
     case 'channel':
-      return <ChannelCell request={request} compact={column.layoutWidth < 88} />;
+      return <ChannelCell request={request} route={route} compact={column.layoutWidth < 112} />;
     case 'serviceTier': {
       const tier = getRequestServiceTierMeta(request);
       if (!tier) return <span className="text-xs text-slate-400">—</span>;
@@ -187,7 +211,7 @@ const renderCell = (column, request, onViewDispatch, showDate, auxiliary) => {
       </Tooltip>;
     }
     case 'endpoint':
-      return <RequestRouteCell request={request} compact={column.layoutWidth < 112} onViewDetails={onViewDispatch ? () => onViewDispatch(request) : undefined} />;
+      return <RequestRouteCell request={request} compact={column.layoutWidth < 90} onViewDetails={onViewDispatch ? () => onViewDispatch(request) : undefined} />;
     case 'duration':
       return <LatencyCell request={request} compact={column.layoutWidth < 126} />;
     case 'inputTokens':
@@ -226,6 +250,7 @@ const AuxiliaryRequestContent = ({ request, meta, onViewDetails }) => {
 const RequestRow = ({ request, columns, rowHeight, onCopyId, onDoubleClick, onViewDispatch, showDate }) => {
   const clickTimer = useRef(null);
   const auxiliary = getAuxiliaryRequestMeta(request);
+  const route = summarizeRequestRoute(request);
 
   useEffect(() => () => clearTimeout(clickTimer.current), []);
 
@@ -253,7 +278,7 @@ const RequestRow = ({ request, columns, rowHeight, onCopyId, onDoubleClick, onVi
           <td key={column.id} data-column-id={column.id} colSpan={column.colSpan || 1} className={`min-w-0 px-0.5 ${column.id === 'endpoint' ? 'py-0.5' : 'py-1.5'} text-center align-middle whitespace-nowrap`}>
             <div className="min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap [&>span]:max-w-full [&>span]:min-w-0">{auxiliary && column.id === 'model'
               ? <AuxiliaryRequestContent request={request} meta={auxiliary} onViewDetails={onDoubleClick} />
-              : renderCell(column, request, onViewDispatch, showDate, auxiliary)}</div>
+              : renderCell(column, request, onViewDispatch, showDate, auxiliary, route)}</div>
           </td>
         ))}
       </tr>

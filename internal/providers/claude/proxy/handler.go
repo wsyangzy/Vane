@@ -430,6 +430,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	userAgent := r.Header.Get("User-Agent")
 	lifecycleManager.StartRequest(clientIP, userAgent, r.Method, r.URL.Path, isSSE)
 
+	if r.Method == http.MethodPost && strings.TrimRight(r.URL.Path, "/") == "/v1/messages" {
+		h.usageTracker.RecordContextSummary(connID, "messages", bodyBytes)
+	}
 	h.trackRequestMetadata(lifecycleManager, bodyBytes, r.URL.Path)
 
 	// 统一请求处理

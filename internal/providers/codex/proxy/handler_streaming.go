@@ -91,6 +91,9 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		}
 		if result, _ := h.tokenParser.ParseStreamingLine(append([]byte("data: "), event.data...)); result != nil {
 			lastResult = result
+			if h.usageTracker != nil && event.err == nil {
+				h.usageTracker.RecordStreamUsage(requestID, buildTokenUsage(result, ""), result.Model, result.ServiceTier)
+			}
 			if !modelLogged && result.Model != "" {
 				h.logger.Info("[Codex 模型提取]", "request_id", requestID, "model", result.Model)
 				modelLogged = true

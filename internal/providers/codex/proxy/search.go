@@ -115,7 +115,15 @@ func (h *Handler) serveConfiguredSearch(w http.ResponseWriter, r *http.Request, 
 		if !attempt.Sent {
 			continue
 		}
-		chain = append(chain, chainNode{Hop: len(chain) + 1, Channel: "搜索服务", Endpoint: cfg.Name(), Attempts: 1, StatusCode: attempt.Status, Error: attempt.Error, Local: attempt.Status == 0})
+		startMs := attempt.StartedAt.Sub(start).Milliseconds()
+		if startMs < 0 {
+			startMs = 0
+		}
+		chain = append(chain, chainNode{
+			Hop: len(chain) + 1, Channel: "搜索服务", Endpoint: cfg.Name(), Attempts: 1,
+			StartMs: startMs, DurationMs: attempt.DurationMs, StatusCode: attempt.Status,
+			UsageCredits: attempt.UsageCredits, Error: attempt.Error, Local: attempt.Status == 0,
+		})
 	}
 	if len(chain) > 0 {
 		h.recordForwarding(requestID, cfg.Name(), "搜索服务", model, chain)

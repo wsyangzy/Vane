@@ -72,6 +72,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			alterSQL:    "ALTER TABLE request_logs ADD COLUMN privacy_redaction_summary TEXT",
 			description: "隐私脱敏摘要字段",
 		},
+		{
+			checkColumn: "context_summary",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN context_summary TEXT",
+			description: "上下文分类统计字段",
+		},
 		// 端点倍率快照字段（用于详情页计费过程展示）
 		{
 			checkColumn: "cost_multiplier",

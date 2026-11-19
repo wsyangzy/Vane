@@ -107,6 +107,12 @@ type TokenUsage struct {
 	InputIncludesCacheRead   bool  // OpenAI/Codex input_tokens 包含缓存读取和写入，仅计费时扣除
 }
 
+type streamUsageSnapshot struct {
+	tokens TokenUsage
+	model  string
+	tier   string
+}
+
 // UpdateOptions 统一的请求更新选项
 // 支持可选字段更新，只更新非nil的字段
 type UpdateOptions struct {
@@ -128,6 +134,7 @@ type UpdateOptions struct {
 	RouteSnapshot        *string        // 请求级路由快照 JSON（只含规则标识与阶段序号）
 	PrivacyRedacted      *bool          // 是否命中隐私脱敏
 	PrivacySummary       *string        // 隐私脱敏摘要（仅规则名与命中数，绝不含原文）
+	ContextSummary       *string        // 请求上下文分类、条目标签和估算量
 	EndTime              *time.Time     // 结束时间
 	Duration             *time.Duration // 持续时间
 	FailureReason        *string        // 失败原因（用于中间过程记录）

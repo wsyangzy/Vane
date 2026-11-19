@@ -3,7 +3,7 @@
 // 请求追踪与统一调度方案入口
 // ============================================
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useEffectEvent, useCallback, useMemo, useRef } from 'react';
 import { ListTree } from 'lucide-react';
 import { useToast } from '@/shared/ui/index.js';
 import { fetchRequests, fetchModels, fetchUsageStats, fetchGroups } from '@/services/http/api.js';
@@ -14,9 +14,12 @@ import { useColumnConfig } from './hooks/useColumnConfig.js';
 import { useTimeRange } from './hooks/useTimeRange.js';
 import { useAutoRefresh } from './hooks/useAutoRefresh.js';
 import { FiltersPanel, StatsOverview, RequestsTable, Toolbar, RequestDetailModal } from './components/index.js';
+import RequestRecoveryDialog from './components/RequestRecoveryDialog.jsx';
 import { DEFAULT_FILTERS, PAGINATION_CONFIG } from './utils/constants.js';
 import { buildRequestFilterResources } from './utils/filterResources.js';
 import { readRequestDispatchTrace } from './utils/dispatchTrace.js';
+import { isRequestInProgress } from './utils/requestOutcome.js';
+import { collectRecoveryGroups } from './utils/requestRecovery.js';
 
 // ============================================
 // Requests 页面
@@ -46,6 +49,7 @@ const RequestsPage = ({ initialProvider = '' }) => {
   const [detailInitialTab, setDetailInitialTab] = useState('overview');
   const detailReturnFocusRef = useRef(null);
   const requestPageRef = useRef(null);
+  const [openRecoveryGroups, setOpenRecoveryGroups] = useState(null);
 
   // 筛选器 Hook
   const {
@@ -89,13 +93,19 @@ const RequestsPage = ({ initialProvider = '' }) => {
     () => buildRequestFilterResources(claudeChannels, codexChannels),
     [claudeChannels, codexChannels]
   );
-  const displayRequests = useMemo(() => {
-    const resources = [
-      ...claudeChannels.map(channel => ({ ...channel, provider: 'claude' })),
-      ...codexChannels.map(channel => ({ ...channel, provider: 'codex' })),
-    ];
-    return requests.map(request => ({ ...request, dispatchTrace: readRequestDispatchTrace(request, resources) }));
-  }, [requests, claudeChannels, codexChannels]);
+  const dispatchResources = useMemo(() => [
+    ...claudeChannels.map(channel => ({ ...channel, provider: 'claude' })),
+    ...codexChannels.map(channel => ({ ...channel, provider: 'codex' })),
+  ], [claudeChannels, codexChannels]);
+  const displayRequests = useMemo(() => requests.map(request => ({
+    ...request, dispatchTrace: readRequestDispatchTrace(request, dispatchResources)
+  })), [requests, dispatchResources]);
+  const detailRequestId = selectedRequest?.rawRequestId || selectedRequest?.requestId;
+  const detailIsActive = isDetailModalOpen && isRequestInProgress(selectedRequest);
+  const updateDetailRequest = useEffectEvent(next => {
+    setSelectedRequest({ ...next, dispatchTrace: readRequestDispatchTrace(next, dispatchResources) });
+  });
+  const recoveryGroups = useMemo(() => isWailsEnvironment() ? collectRecoveryGroups(displayRequests) : [], [displayRequests]);
 
   // ==================== 数据加载 ====================
 
@@ -224,17 +234,57 @@ const RequestsPage = ({ initialProvider = '' }) => {
   };
 
   // 关闭详情模态框
-  const handleCloseDetailModal = () => {
+  const handleCloseDetailModal = useCallback(() => {
     setIsDetailModalOpen(false);
     setSelectedRequest(null);
     if (detailReturnFocusRef.current?.isConnected) detailReturnFocusRef.current.focus();
-  };
+  }, []);
 
   // ==================== 生命周期 ====================
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (!detailIsActive || !detailRequestId) return undefined;
+    let stopped = false;
+    let reading = false;
+    let timer;
+    let lastSnapshot;
+
+    const poll = async () => {
+      if (stopped || reading || document.hidden) return;
+      reading = true;
+      try {
+        const { requests } = await fetchRequests({ request_id: detailRequestId, pageSize: 1 });
+        const next = requests.find(row => row.rawRequestId === detailRequestId);
+        if (stopped || !next) return;
+        const snapshot = JSON.stringify(next);
+        if (snapshot !== lastSnapshot) {
+          lastSnapshot = snapshot;
+          updateDetailRequest(next);
+        }
+        if (!isRequestInProgress(next)) stopped = true;
+      } catch {
+        // Keep the last snapshot while the connection or archive catches up.
+      } finally {
+        reading = false;
+        if (!stopped && !document.hidden) timer = window.setTimeout(poll, 1000);
+      }
+    };
+    const onVisibilityChange = () => {
+      window.clearTimeout(timer);
+      if (!document.hidden) void poll();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    void poll();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [detailIsActive, detailRequestId]);
 
   // ==================== 渲染 ====================
 
@@ -261,6 +311,7 @@ const RequestsPage = ({ initialProvider = '' }) => {
           isViewConfigOpen={isViewConfigOpen}
           onViewConfigToggle={handleViewConfigToggle}
           onRefresh={loadData}
+          onOpenRecovery={recoveryGroups.length > 0 ? () => setOpenRecoveryGroups(recoveryGroups) : undefined}
           columns={columnConfigs}
           visibleColumns={visibleColumns}
           onToggleColumn={toggleColumn}
@@ -305,13 +356,14 @@ const RequestsPage = ({ initialProvider = '' }) => {
 
       {/* 请求详情模态框 */}
       <RequestDetailModal
-        key={`${isDetailModalOpen}/${selectedRequest?.requestId || ''}/${detailInitialTab}`}
+        key={`${isDetailModalOpen}/${detailRequestId || ''}/${detailInitialTab}`}
         isOpen={isDetailModalOpen}
         onClose={handleCloseDetailModal}
         request={selectedRequest}
         initialTab={detailInitialTab}
         positioningRef={requestPageRef}
       />
+      {openRecoveryGroups && <RequestRecoveryDialog groups={openRecoveryGroups} onClose={() => setOpenRecoveryGroups(null)} />}
     </div>
   );
 };

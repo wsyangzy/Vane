@@ -131,8 +131,10 @@ func (tp *TokenParser) ParseSSEEvent(line string) *ParseResult {
 	if line == "" && tp.collectingData && tp.eventBuffer.Len() > 0 {
 		switch tp.currentEvent {
 		case "message_start":
-			// 仅解析message_start以获取模型信息（不需要ParseResult）
 			tp.parseMessageStart()
+			if tp.partialUsage != nil {
+				return &ParseResult{TokenUsage: tp.partialUsage, ModelName: tp.modelName}
+			}
 			return nil
 		case "message_delta", "content_block_delta":
 			// 解析带 usage 的增量事件

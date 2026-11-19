@@ -68,6 +68,10 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 			}
 			if opts.Status != nil {
 				req.Status = *opts.Status
+				switch req.Status {
+				case "forwarding", "retry", "suspended", "awaiting_endpoint":
+					req.streamUsage = nil
+				}
 			}
 			if opts.RetryCount != nil {
 				req.RetryCount = *opts.RetryCount
@@ -99,6 +103,9 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 			}
 			if opts.PrivacySummary != nil {
 				req.PrivacySummary = *opts.PrivacySummary
+			}
+			if opts.ContextSummary != nil {
+				req.ContextSummary = *opts.ContextSummary
 			}
 			if opts.FailureReason != nil {
 				req.FailureReason = *opts.FailureReason
@@ -137,6 +144,23 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 
 	// 🔧 [P5.1] HotPool 未启用时，update 操作无意义（无活跃请求记录）
 	slog.Debug("HotPool 未启用，跳过 update", "request_id", requestID)
+}
+
+// RecordStreamUsage keeps the latest report from this attempt for live projection.
+// Completion still owns the token usage written to SQLite.
+func (ut *UsageTracker) RecordStreamUsage(requestID string, tokens *TokenUsage, model, tier string) {
+	if ut.hotPool == nil || tokens == nil {
+		return
+	}
+	if tokens.InputTokens == 0 && tokens.OutputTokens == 0 && tokens.CacheCreationTokens == 0 &&
+		tokens.CacheReadTokens == 0 && tokens.ReasoningTokens == 0 {
+		return
+	}
+	_ = ut.hotPool.Update(requestID, func(req *ActiveRequest) {
+		if req.EndTime == nil {
+			req.streamUsage = &streamUsageSnapshot{tokens: *tokens, model: model, tier: tier}
+		}
+	})
 }
 
 // RecordPrivacyRedaction 记录隐私脱敏命中摘要。

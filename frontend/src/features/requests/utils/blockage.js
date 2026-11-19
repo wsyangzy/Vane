@@ -25,6 +25,7 @@ const labels = {
 };
 
 export const blockageLabel = (reason) => labels[reason] || reason || '可发送，等待业务请求验证';
+export const isHealthCooldown = (reason) => ['cooldown', 'cooling_down', 'account_cooling_down'].includes(reason);
 const date = (value) => value && Number.isFinite(new Date(value).getTime()) ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '';
 const usd = (value) => `$${Number(value).toFixed(4)}`;
 
@@ -46,7 +47,7 @@ export function describeBlockageRecovery(value, now = Date.now()) {
   else if (state.reason === 'account_disabled' || state.reason === 'candidate_disabled') action = '检查此分组的凭证与端点配置，并在调度方案中启用需要参与的成员。';
   else if (state.reason?.startsWith('state_')) action = '使用原分组继续会话，或在当前分组新建会话后重试。';
   else if (state.reason?.includes('repair') || state.reason === 'credential_rejected') action = '核对并更新此分组的凭证；修复后允许同一分组重新尝试。';
-  else if (['cooldown', 'cooling_down', 'account_cooling_down'].includes(state.reason)) action = '核对上游最近失败原因；修复后可让同一分组重新尝试，失败时仍按原策略冷却。';
+  else if (isHealthCooldown(state.reason)) action = '核对上游最近失败原因；修复后可让同一分组重新尝试，失败时仍按原策略冷却。';
   else if (state.reason === 'quota_exhausted') action = '在“额度与健康”刷新供应商额度；有明确重置时间时可等待重置。';
   else if (['model_unsupported', 'model_unavailable', 'protocol_incompatible'].includes(state.reason)) action = '检查分组支持的模型、模型映射和端点协议配置，再使用匹配的模型发起请求。';
   else if (state.reason?.startsWith('subscription_')) action = '在订阅账号中核对账号是否启用，完成重新登录或凭证刷新，并检查分组绑定；客户端凭证透传时检查客户端登录与身份头。';

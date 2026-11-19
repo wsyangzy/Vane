@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
     environment TEXT NOT NULL DEFAULT 'release', -- 运行环境: dev/release（两版共享本库，靠此列隔离追踪视图）
     privacy_redacted BOOLEAN DEFAULT 0,        -- 发送上游前是否命中隐私脱敏
     privacy_redaction_summary TEXT,            -- 隐私脱敏命中摘要（仅规则名与命中数，绝不含原文）
+    context_summary TEXT,                      -- 上下文分类计数与估算 token
 
     -- 状态信息 (更新: 生命周期状态与错误原因分离 - 2025-09-28)
     status TEXT NOT NULL DEFAULT 'pending', -- 生命周期状态: pending/forwarding/processing/retry/suspended/completed/failed/cancelled

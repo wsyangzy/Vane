@@ -7,6 +7,31 @@ import (
 	"sort"
 )
 
+// FindRequestDetail follows a single request across active tracking and archival.
+func (ut *UsageTracker) FindRequestDetail(ctx context.Context, requestID string) (*RequestDetail, error) {
+	if requestID == "" {
+		return nil, nil
+	}
+	if ut.hotPool != nil {
+		if active := ut.hotPool.getForProjection(requestID); active != nil {
+			detail := ut.activeRequestToDetail(active, true)
+			return &detail, nil
+		}
+	}
+	opts := ut.scopedQueryOptions(&QueryOptions{RequestID: requestID, Limit: 1})
+	rows, err := ut.queryRequestDetailsFromSource(ctx, ut.readDB, opts)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		rows, err = ut.QueryRequestDetails(ctx, opts)
+		if err != nil || len(rows) == 0 {
+			return nil, err
+		}
+	}
+	return &rows[0], nil
+}
+
 // QueryRequestDetails queries detailed request records
 func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOptions) ([]RequestDetail, error) {
 	opts = ut.scopedQueryOptions(opts)
@@ -76,7 +101,7 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 	}
 	optionalColumns := make(map[string]bool, 5)
 	columnRows, err := db.QueryContext(ctx, `SELECT name FROM pragma_table_info('request_logs')
-		WHERE name IN ('model_reasoning_effort', 'service_tier', 'billing_rule_snapshot', 'http_status_is_upstream', 'route_snapshot', 'stream_outcome')`)
+		WHERE name IN ('model_reasoning_effort', 'service_tier', 'billing_rule_snapshot', 'http_status_is_upstream', 'route_snapshot', 'stream_outcome', 'context_summary')`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect request detail schema: %w", err)
 	}
@@ -125,6 +150,7 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 		` + optionalTextExpr("service_tier") + ` as service_tier,
 		COALESCE(privacy_redacted, false) as privacy_redacted,
 		COALESCE(privacy_redaction_summary, '') as privacy_redaction_summary,
+		` + optionalTextExpr("context_summary") + ` as context_summary,
 		COALESCE(is_streaming, false) as is_streaming,
 		COALESCE(provider, 'claude') as provider,
 		status, ` + optionalTextExpr("stream_outcome") + ` as stream_outcome, CASE WHEN ` + optionalBoolExpr("http_status_is_upstream") + ` = 1 THEN http_status_code ELSE NULL END as http_status_code, ` + optionalBoolExpr("http_status_is_upstream") + ` as http_status_is_upstream, retry_count,
@@ -163,6 +189,10 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 
 	args := []interface{}{queryEnvironment(opts)}
 
+	if opts.RequestID != "" {
+		query += " AND request_id = ?"
+		args = append(args, opts.RequestID)
+	}
 	if opts.StartDate != nil {
 		query += " AND start_time >= ?"
 		args = append(args, ut.formatStartTimeQueryBound(*opts.StartDate))
@@ -263,7 +293,7 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 			&detail.RouteSnapshot,
 			&detail.ReasoningEffort,
 			&detail.ServiceTier,
-			&detail.PrivacyRedacted, &detail.PrivacyRedactionSummary,
+			&detail.PrivacyRedacted, &detail.PrivacyRedactionSummary, &detail.ContextSummary,
 			&detail.IsStreaming,
 			&detail.Provider,
 			&detail.Status, &detail.StreamOutcome, &detail.HTTPStatusCode, &detail.HTTPStatusIsUpstream, &detail.RetryCount,

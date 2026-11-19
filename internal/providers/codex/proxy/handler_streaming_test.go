@@ -71,6 +71,29 @@ func TestHandleStreamingReturnsCapacityErrorBeforeClientOutput(t *testing.T) {
 	}
 }
 
+func TestCodexStreamPublishesReportedUsageBeforeArchival(t *testing.T) {
+	tracker := newPrivacyTestTracker(t)
+	handler := &Handler{tokenParser: NewTokenParser(), logger: newTestLogger(), usageTracker: tracker}
+	const id = "req-codex-live"
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	handler.recordStart(id, req, true, "channel", "gpt-model", modelRewriteResult{}, "", "")
+	stream := "event: response.completed\ndata: " +
+		`{"type":"response.completed","response":{"model":"gpt-model","usage":{"input_tokens":120,"output_tokens":30,"input_tokens_details":{"cached_tokens":20},"output_tokens_details":{"reasoning_tokens":15}}}}` + "\n\n"
+	resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(stream))}
+
+	streamErr, served := handler.handleStreaming(httptest.NewRecorder(), resp, id, time.Now(), "gpt-model", "endpoint", "group", "channel", 1,
+		func(*UpstreamStreamError, bool) {
+			detail, err := tracker.FindRequestDetail(t.Context(), id)
+			if err != nil || detail == nil || detail.EndTime != nil || detail.InputTokens != 120 || detail.OutputTokens != 30 ||
+				detail.CacheReadTokens != 20 || detail.ReasoningTokens != 15 {
+				t.Fatalf("Codex live usage before finalization: %+v, %v", detail, err)
+			}
+		})
+	if streamErr != nil || !served {
+		t.Fatalf("unexpected stream result: %v, served=%v", streamErr, served)
+	}
+}
+
 func TestServeHTTPPreservesHTTP200AndRawSSEErrorAfterExhaustion(t *testing.T) {
 	const raw = "event: response.failed\n" +
 		"data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"capacity\"}}}\n\n"

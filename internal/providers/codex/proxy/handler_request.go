@@ -186,6 +186,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 5. 记录请求开始（追踪：Provider=codex + 渠道 + 请求体模型）
 	h.recordStart(requestID, r, isStreaming, channelName, requestModel, modelRewriteResult{}, reasoningJSON, serviceTier)
+	if r.Method == http.MethodPost && isCodexGenerationPath(strings.TrimRight(r.URL.Path, "/")) {
+		h.usageTracker.RecordContextSummary(requestID, "responses", body)
+	}
 	if isCodexSearchRequest(r) {
 		if h.serveSearchAdapter(w, r, originalBody, requestID, startTime) {
 			return

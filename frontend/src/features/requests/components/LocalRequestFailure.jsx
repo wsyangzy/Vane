@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Check, Copy, CircleSlash, Unplug } from 'lucide-react';
 import { Tooltip } from '@/shared/ui/index.js';
 import { describeFailureReason } from '../utils/failureSummary.js';
+import { isHealthCooldown } from '../utils/blockage.js';
 import RequestCandidateRecovery from './RequestCandidateRecovery.jsx';
 
 export default function LocalRequestFailure({ details, provider }) {
@@ -40,11 +41,14 @@ export default function LocalRequestFailure({ details, provider }) {
             {item.recovery?.costs && <p className="text-xs font-medium leading-5 text-slate-700 [overflow-wrap:anywhere]">{item.recovery.costs}</p>}
             {item.blockage?.cause && <p className="text-xs leading-5 text-slate-600 [overflow-wrap:anywhere]">触发原因：{describeFailureReason(item.blockage.cause) || item.blockage.cause}</p>}
             {item.recovery?.recovery && <p className="text-xs leading-5 text-slate-600 [overflow-wrap:anywhere]">{item.recovery.recovery}</p>}
-            {item.recovery?.action && <p className="text-xs leading-5 text-slate-700 [overflow-wrap:anywhere]">处理：{item.recovery.action}</p>}
+            {item.recovery?.action && !isHealthCooldown(item.reason) && <p className="text-xs leading-5 text-slate-700 [overflow-wrap:anywhere]">处理：{item.recovery.action}</p>}
             {item.blockage?.observedAt && <p className="text-xs leading-5 text-slate-400">记录时间：{new Date(item.blockage.observedAt).toLocaleString('zh-CN', { hour12: false })}</p>}
             <RequestCandidateRecovery target={{ ...item.blockage, provider: item.blockage?.provider || provider }} />
           </li>)}
         </ul>
+        {details.blockingCandidates.some(item => isHealthCooldown(item.reason)) && <p className="text-xs leading-5 text-slate-700">
+          可等待冷却结束，或在请求追踪的「恢复端点」中批量解除冷却。此操作只影响后续请求，不会重放当前失败请求。
+        </p>}
       </div>}
       {details.localHops.length > 0 && <ul className="divide-y divide-amber-200/70 rounded-lg border border-amber-200/80 bg-white/60">
         {details.localHops.map((hop, index) => <li key={`${hop.hop}/${index}`} className="min-w-0 space-y-1 px-3 py-2">

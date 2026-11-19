@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readRequestDispatchTrace, describeRequestRoutePath } from './dispatchTrace.js';
-import { getRequestResourcePath } from './endpointChain.js';
+import { readRequestDispatchTrace, describeRequestRoutePath, summarizeRequestRoute } from './dispatchTrace.js';
+import { getRequestChannelLabel, getRequestResourcePath } from './endpointChain.js';
 
 const candidate = (provider, channel, group, endpoint) => ({ provider, channel: String(channel), credential: `${channel}/${group}`, endpoint: String(endpoint), model: 'test-model', protocol: provider === 'codex' ? 'responses' : 'messages' });
 const resources = [
@@ -50,6 +50,58 @@ test('route tooltip follows actual attempts instead of unused targets or the old
   request.original_model_name = 'client-model';
   request.model_rewrite_target = 'upstream-model';
   assert.equal(describeRequestRoutePath(request), 'client-model → M\n渠道 A / 分组 A → 渠道 B / 分组 B');
+});
+
+test('the list keeps recorded channel and model destinations even when current resources are gone', () => {
+  const first = { ...candidate('codex', 1, 11, 101), model: 'gpt-6-luna' };
+  const next = { ...candidate('codex', 2, 21, 201), model: 'gpt-6.1-terra' };
+  const vetoed = candidate('codex', 3, 31, 301);
+  const request = { provider: 'codex', model: 'gpt-6.1-terra', endpointChain: [
+    { channel: 'NewCodex', credential_group: 'sale', endpoint: '默认', attempts: 1 },
+    { channel: 'ZeroCat', credential_group: '稳定', endpoint: '主站', attempts: 1 },
+  ], routeSnapshot: trace([
+    { candidate: vetoed, action: 'skipped', reason: 'cooldown' },
+    { candidate: first, action: 'attempt' },
+    { candidate: next, action: 'attempt' },
+  ], { attempts: 2, requested_model: 'gpt-6-luna', decision: { kind: 'model' },
+    default_source: { channel_name: 'ZeroCat', group_name: '混合池' } }) };
+  const route = summarizeRequestRoute(request);
+  assert.deepEqual(route.resources, ['ZeroCat / 混合池', 'NewCodex / sale', 'ZeroCat / 稳定']);
+  assert.deepEqual(route.models, ['gpt-6-luna', 'gpt-6.1-terra']);
+  assert.equal(route.sourceModel, 'gpt-6-luna');
+  const blocked = summarizeRequestRoute({ ...request, routeSnapshot: { ...request.routeSnapshot, attempts: 0,
+    candidates: [{ candidate: next, action: 'skipped', reason: 'cooldown' }] } });
+  assert.deepEqual(blocked.resources, []);
+  assert.deepEqual(blocked.models, []);
+});
+
+test('Codex search rows show the actual native-to-search-service route', () => {
+  const request = {
+    provider: 'codex', path: '/v1/alpha/search', model: 'search-original',
+    channel: 'ZeroCat', group: '混合池',
+    dispatchTrace: { attemptCount: 1, attempts: [{ channel: 'ZeroCat', credentialGroup: '混合池', endpoint: '主站', model: 'search-original' }] },
+    endpointChain: [
+      { channel: 'ZeroCat', credential_group: '混合池', endpoint: '主站', status_code: 400, attempts: 1 },
+      { channel: '搜索服务', endpoint: 'Tavily', status_code: 200, attempts: 1 },
+      { channel: '搜索服务', endpoint: 'Tavily', status_code: 200, attempts: 1 },
+    ],
+  };
+  const nodes = getRequestResourcePath(request);
+  const route = summarizeRequestRoute(request);
+  assert.deepEqual(nodes.map(node => [node.channel, node.endpoint, node.attempts]), [
+    ['ZeroCat', '主站', 1], ['搜索服务', 'Tavily', 2],
+  ]);
+  assert.equal(getRequestChannelLabel(request, nodes), 'ZeroCat');
+  assert.deepEqual(route.resources, ['ZeroCat / 混合池', '搜索服务 / Tavily']);
+
+  const serviceOnly = {
+    provider: 'codex', path: '/v1/alpha/search', status: 'completed',
+    dispatchTrace: { attemptCount: 0, finished: true, stopReason: 'endpoint_exhausted', attempts: [] },
+    endpointChain: [{ channel: '搜索服务', endpoint: 'Tavily', status_code: 200, attempts: 1 }],
+  };
+  const serviceNodes = getRequestResourcePath(serviceOnly);
+  assert.equal(getRequestChannelLabel(serviceOnly, serviceNodes), '搜索服务');
+  assert.deepEqual(summarizeRequestRoute(serviceOnly).resources, ['搜索服务 / Tavily']);
 });
 
 test('model rewrite paths use the original model in the persisted dispatch snapshot for both providers', () => {

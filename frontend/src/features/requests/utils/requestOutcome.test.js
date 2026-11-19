@@ -28,3 +28,16 @@ test('completed streams, cancellation and final failures retain distinct meaning
   assert.equal(getRequestDisplayStatus({ status: 'failed' }), 'failed');
   assert.equal(getRequestOutcome({ status: 'cancelled', stream_outcome: 'canceled' }), 'canceled');
 });
+
+test('successful Codex search fallback is not overridden by the failed native dispatch snapshot', () => {
+  const request = {
+    provider: 'codex', path: '/v1/alpha/search', status: 'completed', stream_outcome: 'completed',
+    route_snapshot: JSON.stringify({
+      profile_id: 1, decision: { kind: 'default' }, attempts: 1,
+      finished_at: '2026-11-19T10:28:59+08:00', successful: false,
+      stop_reason: 'upstream_error', candidates: [],
+    }),
+  };
+  assert.equal(getRequestDisplayStatus(request), 'completed');
+  assert.equal(getRequestOutcome(request), 'completed');
+});

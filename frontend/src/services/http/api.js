@@ -366,6 +366,7 @@ export const fetchRequests = async (params = {}) => {
       privacy_redaction_summary: request.privacy_redaction_summary || request.privacyRedactionSummary || '',
       privacyRedacted: Boolean(request.privacy_redacted ?? request.privacyRedacted),
       privacyRedactionSummary: request.privacy_redaction_summary || request.privacyRedactionSummary || '',
+      contextSummary: parseJSONObject(request.context_summary ?? request.contextSummary),
       provider: request.provider || '',
       http_status_code: httpStatusIsUpstream ? httpStatusCode : null,
       httpStatusCode: httpStatusIsUpstream ? httpStatusCode : null,

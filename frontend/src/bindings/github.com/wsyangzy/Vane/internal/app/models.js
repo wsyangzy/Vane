@@ -5393,6 +5393,14 @@ export class RequestQueryParams {
      * @param {Partial<RequestQueryParams>} [$$source = {}] - The source object to create the RequestQueryParams.
      */
     constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * Exact lookup takes precedence over list filters.
+             * @member
+             * @type {string | undefined}
+             */
+            this["request_id"] = undefined;
+        }
         if (!("page" in $$source)) {
             /**
              * @member
@@ -5505,10 +5513,10 @@ export class RequestQueryParams {
      * @returns {RequestQueryParams}
      */
     static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType2;
+        const $$createField9_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("models" in $$parsedSource) {
-            $$parsedSource["models"] = $$createField8_0($$parsedSource["models"]);
+            $$parsedSource["models"] = $$createField9_0($$parsedSource["models"]);
         }
         return new RequestQueryParams(/** @type {Partial<RequestQueryParams>} */($$parsedSource));
     }
@@ -5663,6 +5671,13 @@ export class RequestRecord {
              */
             this["privacy_redaction_summary"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["context_summary"] = undefined;
+        }
         if (!("provider" in $$source)) {
             /**
              * 提供商标识: claude/codex
@@ -5677,6 +5692,13 @@ export class RequestRecord {
              * @type {string}
              */
             this["status"] = "";
+        }
+        if (!("in_progress" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["in_progress"] = false;
         }
         if (/** @type {any} */(false)) {
             /**
