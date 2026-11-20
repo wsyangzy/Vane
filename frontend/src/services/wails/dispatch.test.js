@@ -35,6 +35,12 @@ test('routing profile contract preserves nullable fallbacks, strings and duratio
   assert.equal(JSON.stringify(payload).includes('ui-only-row-key'), false);
   assert.equal(JSON.stringify(payload).includes('never-forward-this'), false);
   assert.equal(JSON.stringify(payload).includes('search-secret-never-in-profile'), false);
+
+  const configured = mapRoutingProfile({ ...dto, search: { ...dto.search, has_api_key: true, configured_vendors: ['brave', 'exa'], service_endpoints: { exa: 'https://example.com/exa/search' } } });
+  assert.deepEqual(configured.search.configuredVendors, ['brave', 'exa']);
+  assert.deepEqual(buildRoutingProfilePayload(configured).search, {
+    ...dto.search, service_endpoints: { exa: 'https://example.com/exa/search' }
+  });
 });
 
 test('workspace and quota mapping distinguish unknown from numeric zero across model scopes', () => {

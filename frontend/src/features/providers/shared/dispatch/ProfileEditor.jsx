@@ -233,7 +233,7 @@ export default function ProfileEditor({ profile, profiles, channels, accounts, p
         {!visibleRules.length && <p className="py-2 text-center text-xs text-slate-400">未配置匹配规则时，使用上方的默认编排。</p>}
         {hiddenIntentRules > 0 && <p className="text-[11px] text-slate-400">{hiddenIntentRules} 条依赖意图的规则已随总开关停用；开启意图路由后可编辑。</p>}
       </Section>
-      {draft.provider === 'codex' && <ProfileSearchEditor key={draft.id} profileId={draft.id} value={draft.search} onChange={(search) => update({ search })} disabled={busy} />}
+      {draft.provider === 'codex' && <ProfileSearchEditor key={draft.id} profileId={draft.id} savedSearch={profile.search} value={draft.search} onChange={(search) => update({ search })} disabled={busy} />}
       <Section title="意图路由 · 可选" action={<CheckBox label="启用意图路由" value={intentEnabled} onChange={(enabled) => setDraft((previous) => setIntentRoutingEnabled(previous, enabled))} />}>
         <p className="flex items-start gap-2 text-[11px] leading-5 text-slate-500"><Sparkles size={14} className="mt-0.5 shrink-0" /><span>{intentEnabled ? '按用户消息分类后选择目标，会产生额外模型用量。模型与非流规则仍优先执行。' : showStoredIntent ? '意图路由已关闭，仍可编辑已保存的引用。' : '已关闭：不分类，也不执行意图路由。已有定义和分类器设置保留，开启后再配置。'}</span></p>
         {(intentEnabled || showStoredIntent && (classifier || draft.intents.length > 0)) && <>

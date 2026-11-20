@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strings"
@@ -24,6 +25,7 @@ type Config struct {
 	APIKey     string
 	Timeout    time.Duration
 	MaxResults int
+	Fallbacks  []Config
 }
 
 func DefaultConfig() Config {
@@ -101,6 +103,8 @@ type Failure struct {
 }
 
 type Attempt struct {
+	Service      string
+	Operation    string
 	Sent         bool
 	Status       int
 	Error        string
@@ -113,11 +117,54 @@ type Outcome struct {
 	Reply    Reply
 	Failure  *Failure
 	Attempts []Attempt
+	Service  string
 }
 
 type work struct {
 	query
 	images bool
+	page   string
+}
+
+func (req Request) AllowsLiveAccess() bool {
+	return req.Settings.ExternalWebAccess == nil || *req.Settings.ExternalWebAccess
+}
+
+func (req Request) hasCommand(name string) bool {
+	raw := bytes.TrimSpace(req.Commands[name])
+	return len(raw) > 0 && !bytes.Equal(raw, []byte("null")) && !bytes.Equal(raw, []byte("[]"))
+}
+
+func (cfg Config) supportsPageExtraction() bool {
+	return cfg.Vendor == "" || cfg.Vendor == "tavily" || cfg.Vendor == "exa"
+}
+
+func (cfg Config) supportsImageSearch() bool {
+	return cfg.Vendor != "exa"
+}
+
+func (req Request) HasAdapterCommand(cfg Config) bool {
+	query := req.hasCommand("search_query")
+	images := req.hasCommand("image_query")
+	open := req.hasCommand("open")
+	for _, candidate := range append([]Config{cfg}, cfg.Fallbacks...) {
+		if (query || images && candidate.supportsImageSearch() || open && candidate.supportsPageExtraction()) && candidate.Validate() == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (cfg Config) Available() bool {
+	if cfg.Validate() == nil {
+		return true
+	}
+	for _, other := range cfg.Fallbacks {
+		if other.Validate() == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // Run sends only extracted queries and filters, never client credentials,
@@ -135,6 +182,28 @@ func Run(ctx context.Context, client *http.Client, cfg Config, req Request, refe
 	for _, name := range commandNames {
 		raw := req.Commands[name]
 		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || bytes.Equal(bytes.TrimSpace(raw), []byte("[]")) {
+			continue
+		}
+		if name == "open" {
+			var pages []struct {
+				URL   string `json:"url"`
+				RefID string `json:"ref_id"`
+			}
+			if json.Unmarshal(raw, &pages) != nil {
+				out.Failure = &Failure{Reason: "search_request_invalid", Detail: "open 必须为网页地址数组"}
+				break
+			}
+			for _, page := range pages {
+				link := page.URL
+				if link == "" {
+					link = page.RefID
+				}
+				if target, ok := publicPageURL(link); ok && domainAllowed(target.Hostname(), req.Settings.Filters.AllowedDomains, req.Settings.Filters.BlockedDomains) {
+					jobs = append(jobs, work{page: target.String()})
+				} else {
+					notes = append(notes, "打开网页需要符合域名规则的公开 HTTP(S) URL。搜索引用需由原生线路打开。")
+				}
+			}
 			continue
 		}
 		if name != "search_query" && name != "image_query" {
@@ -163,26 +232,25 @@ func Run(ctx context.Context, client *http.Client, cfg Config, req Request, refe
 	}
 	sort.Strings(unsupported)
 	if len(unsupported) > 0 {
-		notes = append(notes, "Search adapter does not support these commands: "+strings.Join(unsupported, ", ")+". Use the native search route for opening pages, clicking links, finding text, and other native tools.")
+		notes = append(notes, "Search adapter does not support these commands: "+strings.Join(unsupported, ", ")+". Use the native search route for these commands.")
 	}
 	if len(jobs) > 8 {
 		out.Failure = &Failure{Reason: "search_request_invalid", Detail: "每次最多执行 8 条查询"}
 	}
 	if out.Failure == nil && len(jobs) == 0 {
-		out.Failure = &Failure{Reason: "search_command_unsupported", Detail: "搜索适配支持 search_query 和 image_query；其他命令请使用原生线路"}
+		out.Failure = &Failure{Reason: "search_command_unsupported", Detail: "搜索适配支持网页查询、图片查询及通过公开 URL 打开网页"}
 	}
-	if out.Failure == nil && req.Settings.ExternalWebAccess != nil && !*req.Settings.ExternalWebAccess {
+	if out.Failure == nil && !req.AllowsLiveAccess() {
 		out.Failure = &Failure{Reason: "search_cached_unsupported", Detail: "搜索适配没有官方缓存索引；请使用原生线路，或将客户端 web_search 设置为 live"}
 	}
 	if out.Failure == nil {
-		if err := cfg.Validate(); err != nil {
-			out.Failure = &Failure{Reason: "search_not_configured", Detail: err.Error()}
+		if !cfg.Available() {
+			out.Failure = &Failure{Reason: "search_not_configured", Detail: cfg.Validate().Error()}
 		}
 	}
 	if out.Failure == nil {
 		for _, job := range jobs {
-			results, attempt, failure := runQuery(ctx, client, cfg, req, job)
-			out.Attempts = append(out.Attempts, attempt)
+			results, failure := out.runWithFallback(ctx, client, cfg, req, job)
 			if failure != nil {
 				// Keep a real error response as the final error when another query
 				// fails locally; individual tool notes still explain both failures.
@@ -211,12 +279,81 @@ func Run(ctx context.Context, client *http.Client, cfg Config, req Request, refe
 	return out
 }
 
+func (out *Outcome) runWithFallback(ctx context.Context, client *http.Client, cfg Config, req Request, job work) ([]Result, *Failure) {
+	var lastFailure *Failure
+	var emptyService string
+	attemptCount := len(out.Attempts)
+	for _, candidate := range append([]Config{cfg}, cfg.Fallbacks...) {
+		if ctx.Err() != nil {
+			break
+		}
+		if candidate.Validate() != nil {
+			continue
+		}
+		results, attempt, failure := runQuery(ctx, client, candidate, req, job)
+		if attempt.Sent {
+			out.Attempts = append(out.Attempts, attempt)
+			out.Service = attempt.Service
+		}
+		if failure == nil && len(results) == 0 {
+			emptyService = attempt.Service
+			continue
+		}
+		if failure == nil || failure.Reason == "search_request_invalid" {
+			if len(out.Attempts) == attemptCount {
+				out.Attempts = append(out.Attempts, attempt)
+			}
+			return results, failure
+		}
+		// Prefer the last actual failure over later unsupported providers.
+		if attempt.Sent || lastFailure == nil {
+			lastFailure = failure
+		}
+	}
+	if emptyService != "" && ctx.Err() == nil {
+		out.Service = emptyService
+		return nil, nil
+	}
+	if lastFailure == nil {
+		lastFailure = &Failure{Reason: "network_error", Detail: "搜索请求已取消"}
+	}
+	if len(out.Attempts) == attemptCount {
+		out.Attempts = append(out.Attempts, Attempt{})
+	}
+	return nil, lastFailure
+}
+
+func publicPageURL(link string) (*url.URL, bool) {
+	if len(link) == 0 || len(link) > 4096 {
+		return nil, false
+	}
+	u, err := url.Parse(link)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
+		return nil, false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if ip, err := netip.ParseAddr(host); err == nil {
+		ip = ip.Unmap()
+		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.Zone() != "" || netip.MustParsePrefix("100.64.0.0/10").Contains(ip) {
+			return nil, false
+		}
+	} else {
+		// Domains are fetched by the external extractor. Never pass local hostnames.
+		suffix := host[strings.LastIndexByte(host, '.')+1:]
+		if !strings.Contains(host, ".") || suffix == "localhost" || suffix == "local" || suffix == "internal" || suffix == "home" || suffix == "lan" || suffix == "arpa" || suffix == "" || suffix[0] >= '0' && suffix[0] <= '9' {
+			return nil, false
+		}
+	}
+	u.Fragment, u.RawFragment = "", ""
+	return u, true
+}
+
 func runQuery(ctx context.Context, client *http.Client, cfg Config, req Request, job work) ([]Result, Attempt, *Failure) {
 	include := intersectDomains(job.Domains, req.Settings.Filters.AllowedDomains)
 	if len(job.Domains) > 0 && len(req.Settings.Filters.AllowedDomains) > 0 && len(include) == 0 {
 		return nil, Attempt{}, &Failure{Reason: "search_request_invalid", Detail: "查询域名与允许域名没有交集"}
 	}
-	if cfg.Vendor == "exa" && job.images {
+	if job.images && !cfg.supportsImageSearch() {
 		return nil, Attempt{}, &Failure{Reason: "search_command_unsupported", Detail: "Exa 适配支持网页查询；图片查询请选择 Tavily、Brave 或 SearXNG"}
 	}
 	if cfg.Vendor == "brave" && job.images && job.RecencyDays != nil && *job.RecencyDays > 0 {
@@ -231,12 +368,23 @@ func runQuery(ctx context.Context, client *http.Client, cfg Config, req Request,
 	}
 	callCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
-	call, err := buildCall(callCtx, cfg, job, include, req.Settings.Filters.BlockedDomains)
+	operation := "查询"
+	var call *http.Request
+	var err error
+	if job.page != "" {
+		if !cfg.supportsPageExtraction() {
+			return nil, Attempt{}, &Failure{Reason: "search_command_unsupported", Detail: cfg.Name() + " 未配置网页正文提取能力"}
+		}
+		operation = "网页提取"
+		call, err = buildExtractCall(callCtx, cfg, job.page)
+	} else {
+		call, err = buildCall(callCtx, cfg, job, include, req.Settings.Filters.BlockedDomains)
+	}
 	if err != nil {
 		return nil, Attempt{}, &Failure{Reason: "search_not_configured", Detail: "搜索服务地址或请求参数无效"}
 	}
 	startedAt := time.Now()
-	attempt := Attempt{Sent: true, StartedAt: startedAt}
+	attempt := Attempt{Sent: true, StartedAt: startedAt, Service: cfg.Name(), Operation: operation}
 	finishAttempt := func() Attempt {
 		duration := time.Since(startedAt).Milliseconds()
 		attempt.DurationMs = &duration
@@ -255,11 +403,15 @@ func runQuery(ctx context.Context, client *http.Client, cfg Config, req Request,
 	attempt.Status = resp.StatusCode
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, (2<<20)+1))
 	if err != nil || len(raw) > 2<<20 {
+		attempt.Error = "搜索服务响应读取失败或超过 2 MiB"
 		return nil, finishAttempt(), &Failure{Reason: "response_read_error", Detail: "搜索服务响应读取失败或超过 2 MiB", Status: resp.StatusCode}
 	}
 	attempt.UsageCredits = decodeUsageCredits(raw)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		detail := string(raw)
+		if job.page != "" {
+			detail = fmt.Sprintf("%s 网页提取返回 HTTP %d", cfg.Name(), resp.StatusCode)
+		}
 		if cfg.APIKey != "" {
 			detail = strings.ReplaceAll(detail, cfg.APIKey, "[REDACTED]")
 		}
@@ -269,9 +421,16 @@ func runQuery(ctx context.Context, client *http.Client, cfg Config, req Request,
 		attempt.Error = detail
 		return nil, finishAttempt(), &Failure{Reason: "search_upstream_error", Detail: detail, Status: resp.StatusCode}
 	}
-	items, parseErr := decodeResults(cfg.Vendor, job.images, raw)
+	var items []Result
+	var parseErr error
+	if job.page != "" {
+		items, parseErr = decodeExtractResults(cfg.Vendor, raw)
+	} else {
+		items, parseErr = decodeResults(cfg.Vendor, job.images, raw)
+	}
 	if parseErr != nil {
-		return nil, finishAttempt(), &Failure{Reason: "response_read_error", Detail: "搜索服务未返回有效的 " + cfg.Name() + " 搜索结果", Status: resp.StatusCode}
+		attempt.Error = cfg.Name() + " 返回了无效的" + operation + "响应"
+		return nil, finishAttempt(), &Failure{Reason: "response_read_error", Detail: attempt.Error, Status: resp.StatusCode}
 	}
 	results := []Result{}
 	add := func(title, link, snippet string) {
@@ -279,12 +438,21 @@ func runQuery(ctx context.Context, client *http.Client, cfg Config, req Request,
 		if err != nil || u.Hostname() == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") || !domainAllowed(u.Hostname(), include, req.Settings.Filters.BlockedDomains) {
 			return
 		}
+		if job.page != "" {
+			if _, ok := publicPageURL(link); !ok || strings.TrimSpace(snippet) == "" {
+				return
+			}
+		}
 		if len(results) < cfg.MaxResults {
 			results = append(results, Result{Type: "text_result", Domain: u.Hostname(), Title: title, URL: link, Snippet: snippet})
 		}
 	}
 	for _, item := range items {
 		add(item.Title, item.URL, item.Snippet)
+	}
+	if job.page != "" && len(results) == 0 {
+		attempt.Error = cfg.Name() + " 未返回符合规则的网页正文"
+		return nil, finishAttempt(), &Failure{Reason: "search_extract_failed", Detail: attempt.Error, Status: resp.StatusCode}
 	}
 	return results, finishAttempt(), nil
 }

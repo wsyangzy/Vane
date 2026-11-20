@@ -112,13 +112,15 @@ export function validateProfileDraft(profile) {
     if (!['auto', 'native', 'service'].includes(search.mode)) return '请选择有效的搜索线路';
     if (!Number.isInteger(Number(search.maxResults)) || Number(search.maxResults) < 1 || Number(search.maxResults) > 20) return '搜索结果数需为 1–20 的整数';
     if (!Number.isFinite(Number(search.timeoutMs)) || Number(search.timeoutMs) < 1000 || Number(search.timeoutMs) > 120000) return '搜索超时需为 1–120 秒';
-    if (search.endpoint || search.mode === 'service') {
+    const endpoints = Object.values(search.serviceEndpoints || {}).filter(Boolean);
+    if (search.endpoint || search.mode === 'service') endpoints.push(search.endpoint);
+    for (const address of endpoints) {
       try {
-        const endpoint = new URL(search.endpoint);
+        const endpoint = new URL(address);
         if (!['http:', 'https:'].includes(endpoint.protocol) || !endpoint.hostname || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) return '搜索服务地址需为完整的 HTTP(S) 接口地址';
       } catch { return '请输入完整的搜索服务接口地址'; }
     }
-    if (search.apiKey && /\s/.test(search.apiKey)) return '搜索服务 API Key 不能包含空白';
+    if ([search.apiKey, ...Object.values(search.apiKeys || {})].some(key => key && /[\s\u0000]/.test(key))) return '搜索服务 API Key 不能包含空白或控制字符';
   }
   if (!Number.isInteger(Number(profile.maxAttempts)) || Number(profile.maxAttempts) < 1 || Number(profile.maxAttempts) > 100) return '尝试次数需为 1–100 的整数';
   if (!Number.isFinite(Number(profile.maxDurationMs)) || Number(profile.maxDurationMs) < 1000 || Number(profile.maxDurationMs) > 600000) return '调度预算需为 1–600 秒';

@@ -1975,6 +1975,13 @@ export class CodexRoutingProfileInput {
              */
             this["search_api_key"] = null;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {{ [_ in string]?: string } | undefined}
+             */
+            this["search_api_keys"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -1986,9 +1993,13 @@ export class CodexRoutingProfileInput {
      */
     static createFrom($$source = {}) {
         const $$createField0_0 = $$createType28;
+        const $$createField2_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("profile" in $$parsedSource) {
             $$parsedSource["profile"] = $$createField0_0($$parsedSource["profile"]);
+        }
+        if ("search_api_keys" in $$parsedSource) {
+            $$parsedSource["search_api_keys"] = $$createField2_0($$parsedSource["search_api_keys"]);
         }
         return new CodexRoutingProfileInput(/** @type {Partial<CodexRoutingProfileInput>} */($$parsedSource));
     }

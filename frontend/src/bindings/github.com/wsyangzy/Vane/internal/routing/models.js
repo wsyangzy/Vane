@@ -2401,6 +2401,20 @@ export class SearchPolicy {
              */
             this["has_api_key"] = false;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {{ [_ in string]?: string } | undefined}
+             */
+            this["service_endpoints"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string[] | undefined}
+             */
+            this["configured_vendors"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -2411,7 +2425,15 @@ export class SearchPolicy {
      * @returns {SearchPolicy}
      */
     static createFrom($$source = {}) {
+        const $$createField6_0 = $$createType37;
+        const $$createField7_0 = $$createType38;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("service_endpoints" in $$parsedSource) {
+            $$parsedSource["service_endpoints"] = $$createField6_0($$parsedSource["service_endpoints"]);
+        }
+        if ("configured_vendors" in $$parsedSource) {
+            $$parsedSource["configured_vendors"] = $$createField7_0($$parsedSource["configured_vendors"]);
+        }
         return new SearchPolicy(/** @type {Partial<SearchPolicy>} */($$parsedSource));
     }
 }
@@ -2508,3 +2530,5 @@ const $$createType33 = ClassifierConfig.createFrom;
 const $$createType34 = $Create.Nullable($$createType33);
 const $$createType35 = SearchPolicy.createFrom;
 const $$createType36 = $Create.Nullable($$createType35);
+const $$createType37 = $Create.Map($Create.Any, $Create.Any);
+const $$createType38 = $Create.Array($Create.Any);

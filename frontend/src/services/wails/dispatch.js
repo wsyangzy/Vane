@@ -15,7 +15,13 @@ export function mapRoutingProfile(value) {
     members: (value.members || []).map((member) => ({ profileId: number(member.profile_id), channelId: number(member.channel_id), groupId: number(member.group_id), position: number(member.position), weight: number(member.weight, 1), enabled: Boolean(member.enabled), upstreamModel: member.upstream_model || '' })),
     rules: (value.rules || []).map((rule) => ({ id: number(rule.id), profileId: number(rule.profile_id), enabled: Boolean(rule.enabled), kind: rule.kind, name: rule.name || '', priority: number(rule.priority), matchModel: rule.match_model || '', requireStream: nullableBoolean(rule.require_stream), intentId: rule.intent_id || '', mode: rule.mode || 'prefer', targets: (rule.targets || []).map(mapTarget), fallbackToDefault: nullableBoolean(rule.fallback_to_default) })),
     intents: (value.intents || []).map((intent) => ({ id: intent.id, profileId: number(intent.profile_id), name: intent.name || '', description: intent.description || '', enabled: Boolean(intent.enabled), priority: number(intent.priority), targets: (intent.targets || []).map(mapTarget), mode: intent.mode || 'prefer', fallbackIntent: intent.fallback_intent || '', fallbackToDefault: nullableBoolean(intent.fallback_to_default) })),
-    search: value.provider === 'codex' ? { mode: value.search?.mode || 'auto', vendor: value.search?.vendor || 'tavily', endpoint: value.search?.endpoint ?? 'https://api.tavily.com/search', timeoutMs: number(value.search?.timeout, 30e9) / 1e6, maxResults: number(value.search?.max_results, 5), hasAPIKey: Boolean(value.search?.has_api_key) } : null,
+    search: value.provider === 'codex' ? {
+      mode: value.search?.mode || 'auto', vendor: value.search?.vendor || 'tavily',
+      endpoint: value.search?.endpoint ?? 'https://api.tavily.com/search',
+      timeoutMs: number(value.search?.timeout, 30e9) / 1e6, maxResults: number(value.search?.max_results, 5),
+      hasAPIKey: Boolean(value.search?.has_api_key), configuredVendors: value.search?.configured_vendors || [],
+      serviceEndpoints: value.search?.service_endpoints || {},
+    } : null,
     classifier: value.classifier ? { enabled: Boolean(value.classifier.enabled), model: value.classifier.model || '', provider: value.classifier.provider || value.provider, channelId: number(value.classifier.channel_id), groupId: number(value.classifier.group_id), timeoutMs: number(value.classifier.timeout, 8e9) / 1e6, confidence: number(value.classifier.confidence), failureMode: value.classifier.failure_mode || 'default' } : null
   };
 }
@@ -27,7 +33,13 @@ export function buildRoutingProfilePayload(value) {
     members: (value.members || []).map((member, position) => ({ profile_id: number(value.id), channel_id: number(member.channelId), group_id: number(member.groupId), position, weight: number(member.weight), enabled: Boolean(member.enabled), upstream_model: member.upstreamModel?.trim() || '' })),
     rules: (value.rules || []).map((rule) => ({ id: number(rule.id), profile_id: number(value.id), enabled: Boolean(rule.enabled), kind: rule.kind, name: rule.name.trim(), priority: number(rule.priority), match_model: rule.matchModel.trim(), require_stream: nullableBoolean(rule.requireStream), intent_id: rule.intentId || '', mode: rule.mode, targets: rule.targets.map(buildTarget), fallback_to_default: nullableBoolean(rule.fallbackToDefault) })),
     intents: (value.intents || []).map((intent) => ({ id: intent.id.trim(), profile_id: number(value.id), name: intent.name.trim(), description: intent.description.trim(), enabled: Boolean(intent.enabled), priority: number(intent.priority), targets: intent.targets.map(buildTarget), mode: intent.mode, fallback_intent: intent.fallbackIntent.trim(), fallback_to_default: nullableBoolean(intent.fallbackToDefault) })),
-    search: value.provider === 'codex' && value.search ? { mode: value.search.mode, vendor: value.search.vendor, endpoint: value.search.endpoint.trim(), timeout: Math.round(number(value.search.timeoutMs) * 1e6), max_results: number(value.search.maxResults), has_api_key: false } : null,
+    search: value.provider === 'codex' && value.search ? {
+      mode: value.search.mode, vendor: value.search.vendor, endpoint: value.search.endpoint.trim(),
+      timeout: Math.round(number(value.search.timeoutMs) * 1e6), max_results: number(value.search.maxResults), has_api_key: false,
+      ...(Object.keys(value.search.serviceEndpoints || {}).length > 0 && {
+        service_endpoints: Object.fromEntries(Object.entries(value.search.serviceEndpoints).map(([vendor, endpoint]) => [vendor, endpoint.trim()]))
+      }),
+    } : null,
     classifier: value.classifier ? { enabled: Boolean(value.classifier.enabled), model: value.classifier.model.trim(), provider: value.classifier.provider, channel_id: number(value.classifier.channelId), group_id: number(value.classifier.groupId), timeout: Math.round(number(value.classifier.timeoutMs) * 1e6), confidence: number(value.classifier.confidence), failure_mode: value.classifier.failureMode } : null
   };
 }
@@ -59,7 +71,15 @@ async function invoke(method, ...args) {
 }
 export async function listRoutingProfiles(provider) { return mapDispatchWorkspace(await invoke('ListRoutingProfiles', provider)); }
 export async function getCodexSearchAPIKey(profileId, vendor) { return invoke('GetCodexSearchAPIKey', number(profileId), vendor); }
-export async function saveRoutingProfile(profile) { const payload = buildRoutingProfilePayload(profile); return mapRoutingProfile(profile.provider === 'codex' ? await invoke('SaveCodexRoutingProfile', { profile: payload, search_api_key: profile.search?.apiKey ?? null }) : await invoke('SaveRoutingProfile', payload)); }
+export async function saveRoutingProfile(profile) {
+  const payload = buildRoutingProfilePayload(profile);
+  if (profile.provider !== 'codex') return mapRoutingProfile(await invoke('SaveRoutingProfile', payload));
+  return mapRoutingProfile(await invoke('SaveCodexRoutingProfile', {
+    profile: payload,
+    search_api_key: profile.search?.apiKey ?? null,
+    search_api_keys: profile.search?.apiKeys || {},
+  }));
+}
 export async function deleteRoutingProfile(provider, id) { await invoke('DeleteRoutingProfile', provider, number(id)); }
 export async function setDefaultRoutingProfile(provider, id) { await invoke('SetDefaultRoutingProfile', provider, number(id)); }
 export async function previewDispatch(input) { return mapDispatchPreview(await invoke('PreviewDispatch', buildDispatchInput(input))); }

@@ -49,7 +49,7 @@ func TestRunTranslatesQueriesFiltersAndCitations(t *testing.T) {
 	if out.Failure != nil || calls != 1 || len(out.Reply.Results) != 1 || out.Reply.EncryptedOutput != nil {
 		t.Fatalf("unexpected result: %+v calls=%d", out, calls)
 	}
-	if out.Reply.Results[0].RefID != "turnabcsearch0" || !strings.Contains(out.Reply.Output, "\ue200cite\ue202turnabcsearch0\ue201") || !strings.Contains(out.Reply.Output, "does not support these commands: open") {
+	if out.Reply.Results[0].RefID != "turnabcsearch0" || !strings.Contains(out.Reply.Output, "\ue200cite\ue202turnabcsearch0\ue201") || !strings.Contains(out.Reply.Output, "搜索引用需由原生线路打开") {
 		t.Fatalf("missing citations or capability notice: %s", out.Reply.Output)
 	}
 }
@@ -76,6 +76,8 @@ func TestRunRejectsUnsupportedRequestsBeforeSending(t *testing.T) {
 	defer server.Close()
 	for _, tc := range []struct{ body, reason string }{
 		{`{"model":"m","commands":{"open":[{"ref_id":"ref"}]}}`, "search_command_unsupported"},
+		{`{"model":"m","commands":{"open":[{"url":"https://docs.example.org"}]},"settings":{"external_web_access":false}}`, "search_cached_unsupported"},
+		{`{"model":"m","commands":{"open":[{"url":"http://127.0.0.1"},{"url":"https://docs.example.org"}]},"settings":{"filters":{"allowed_domains":["other.example.org"]}}}`, "search_command_unsupported"},
 		{`{"model":"m","commands":{"search_query":[{"q":"test"}]},"settings":{"external_web_access":false}}`, "search_cached_unsupported"},
 		{`{"model":"m","commands":{"search_query":[{"q":""}]}}`, "search_request_invalid"},
 		{`{"model":"m","commands":{"search_query":[{"q":"test","domains":["one.test"]}]},"settings":{"filters":{"allowed_domains":["two.test"]}}}`, "search_request_invalid"},
@@ -91,6 +93,38 @@ func TestRunRejectsUnsupportedRequestsBeforeSending(t *testing.T) {
 	out := Run(context.Background(), server.Client(), cfg, parseTestRequest(t, `{"model":"m","commands":{"search_query":[{"q":"test"}]}}`), "t")
 	if calls != 0 || out.Failure == nil || out.Failure.Reason != "search_not_configured" {
 		t.Fatalf("invalid request reached search service: calls=%d outcome=%+v", calls, out)
+	}
+}
+
+func TestRunFallsBackOnlyForQueriesWithoutUsableResults(t *testing.T) {
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct{ Query string }
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+		}
+		calls = append(calls, r.URL.Path+":"+payload.Query)
+		switch r.URL.Path + ":" + payload.Query {
+		case "/tavily:first", "/exa:second":
+			fmt.Fprint(w, `{"results":[{"title":"Docs","url":"https://docs.example.org/guide"}]}`)
+		case "/tavily:second", "/tavily:third":
+			fmt.Fprint(w, `{"results":[]}`)
+		default:
+			http.Error(w, "quota exhausted", http.StatusTooManyRequests)
+		}
+	}))
+	defer server.Close()
+	cfg := testConfig(server.URL + "/tavily")
+	exa := testConfig(server.URL + "/exa")
+	exa.Vendor = "exa"
+	cfg.Fallbacks = []Config{exa}
+	req := parseTestRequest(t, `{"model":"m","commands":{"search_query":[{"q":"first"},{"q":"second"},{"q":"third"}]}}`)
+	out := Run(context.Background(), server.Client(), cfg, req, "t")
+	if out.Failure != nil || len(out.Reply.Results) != 2 || len(out.Attempts) != 5 || out.Service != "Tavily" {
+		t.Fatalf("unexpected fallback outcome: %+v", out)
+	}
+	if got := strings.Join(calls, ","); got != "/tavily:first,/tavily:second,/exa:second,/tavily:third,/exa:third" {
+		t.Fatalf("unexpected service order: %s", got)
 	}
 }
 
