@@ -14,6 +14,8 @@ import (
 //
 // RuleKey / RuleMode 仅在命中凭证分组的组合计费规则时有值。
 type BillingDecisionSnapshot struct {
+	LiveInputEstimated   bool    `json:"live_input_estimated,omitempty"`
+	LiveOutputEstimated  bool    `json:"live_output_estimated,omitempty"`
 	RequestedServiceTier string  `json:"requested_service_tier,omitempty"`
 	ResponseServiceTier  string  `json:"response_service_tier,omitempty"`
 	BillingServiceTier   string  `json:"billing_service_tier,omitempty"`

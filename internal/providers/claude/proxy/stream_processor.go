@@ -306,8 +306,11 @@ func (sp *StreamProcessor) processSSELine(line string) {
 			return
 		}
 
-		if sp.usageTracker != nil && result.Status != "non_token_response" {
-			sp.usageTracker.RecordStreamUsage(sp.requestID, result.TokenUsage, result.ModelName, "")
+		if sp.usageTracker != nil {
+			sp.usageTracker.RecordStreamOutput(sp.requestID, result.OutputBytes, result.ReasoningBytes)
+			if result.Status != "non_token_response" {
+				sp.usageTracker.RecordStreamUsage(sp.requestID, result.TokenUsage, result.ModelName, "", result.OutputPending)
+			}
 		}
 	}
 }

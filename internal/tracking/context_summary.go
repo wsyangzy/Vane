@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	maxContextSummaryBytes = 2 << 20
+	maxContextSummaryBytes = 8 << 20
 	maxContextEntries      = 24
 )
 
@@ -68,17 +68,28 @@ var (
 // RecordContextSummary keeps structural labels and estimates. Request bodies,
 // tool arguments and filesystem paths are never persisted in this summary.
 func (ut *UsageTracker) RecordContextSummary(requestID, protocol string, body []byte) {
-	if ut == nil || ut.config == nil || !ut.config.Enabled || !ut.hotPoolEnabled || requestID == "" {
+	if ut == nil || ut.config == nil || !ut.config.Enabled || !ut.hotPoolEnabled || ut.hotPool == nil || requestID == "" {
 		return
 	}
-	if summary := summarizeContext(protocol, body); summary != "" {
-		ut.RecordRequestUpdate(requestID, UpdateOptions{ContextSummary: &summary})
+	summary := buildContextSummary(protocol, body)
+	if summary == nil {
+		return
 	}
+	var estimate int64
+	for _, part := range summary.Parts {
+		estimate += int64(part.Tokens)
+	}
+	data, _ := json.Marshal(summary)
+	encoded := string(data)
+	_ = ut.hotPool.Update(requestID, func(req *ActiveRequest) {
+		req.ContextSummary = encoded
+		req.contextInputEstimate = estimate
+	})
 }
 
-func summarizeContext(protocol string, body []byte) string {
+func buildContextSummary(protocol string, body []byte) *contextRequestSummary {
 	if len(body) == 0 || len(body) > maxContextSummaryBytes {
-		return ""
+		return nil
 	}
 	var payload struct {
 		System       json.RawMessage
@@ -90,7 +101,7 @@ func summarizeContext(protocol string, body []byte) string {
 		Conversation json.RawMessage
 	}
 	if json.Unmarshal(body, &payload) != nil {
-		return ""
+		return nil
 	}
 
 	builder := contextBuilder{parts: make(map[string]map[contextEntry]contextEntry), calls: make(map[string]contextEntry)}
@@ -107,7 +118,7 @@ func summarizeContext(protocol string, body []byte) string {
 	contextBlocks(input, builder.addInput)
 	partial := hasContextValue(payload.Previous) || hasContextValue(payload.Conversation)
 	if len(builder.parts) == 0 && !partial {
-		return ""
+		return nil
 	}
 	return builder.summary(partial)
 }
@@ -434,7 +445,7 @@ func (b *contextBuilder) addMessage(role string, raw json.RawMessage) {
 	}
 }
 
-func (b *contextBuilder) summary(partial bool) string {
+func (b *contextBuilder) summary(partial bool) *contextRequestSummary {
 	parts := make(map[string]contextPart, len(b.parts))
 	for group, entries := range b.parts {
 		part := contextPart{Breakdown: make([]contextEntry, 0, len(entries))}
@@ -462,6 +473,5 @@ func (b *contextBuilder) summary(partial bool) string {
 		}
 		parts[group] = part
 	}
-	data, _ := json.Marshal(contextRequestSummary{Version: 2, Parts: parts, Partial: partial, Turns: b.turn})
-	return string(data)
+	return &contextRequestSummary{Version: 2, Parts: parts, Partial: partial, Turns: b.turn}
 }

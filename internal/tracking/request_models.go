@@ -108,9 +108,10 @@ type TokenUsage struct {
 }
 
 type streamUsageSnapshot struct {
-	tokens TokenUsage
-	model  string
-	tier   string
+	tokens        TokenUsage
+	model         string
+	tier          string
+	outputPending bool
 }
 
 // UpdateOptions 统一的请求更新选项

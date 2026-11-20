@@ -71,6 +71,8 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 				switch req.Status {
 				case "forwarding", "retry", "suspended", "awaiting_endpoint":
 					req.streamUsage = nil
+					req.streamOutputBytes = 0
+					req.streamReasoningBytes = 0
 				}
 			}
 			if opts.RetryCount != nil {
@@ -148,7 +150,7 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 
 // RecordStreamUsage keeps the latest report from this attempt for live projection.
 // Completion still owns the token usage written to SQLite.
-func (ut *UsageTracker) RecordStreamUsage(requestID string, tokens *TokenUsage, model, tier string) {
+func (ut *UsageTracker) RecordStreamUsage(requestID string, tokens *TokenUsage, model, tier string, outputPending bool) {
 	if ut.hotPool == nil || tokens == nil {
 		return
 	}
@@ -158,7 +160,20 @@ func (ut *UsageTracker) RecordStreamUsage(requestID string, tokens *TokenUsage, 
 	}
 	_ = ut.hotPool.Update(requestID, func(req *ActiveRequest) {
 		if req.EndTime == nil {
-			req.streamUsage = &streamUsageSnapshot{tokens: *tokens, model: model, tier: tier}
+			req.streamUsage = &streamUsageSnapshot{tokens: *tokens, model: model, tier: tier, outputPending: outputPending}
+		}
+	})
+}
+
+// RecordStreamOutput records only the size of generation deltas for the live detail.
+func (ut *UsageTracker) RecordStreamOutput(requestID string, outputBytes, reasoningBytes int) {
+	if ut.hotPool == nil || requestID == "" || outputBytes+reasoningBytes == 0 {
+		return
+	}
+	_ = ut.hotPool.Update(requestID, func(req *ActiveRequest) {
+		if req.EndTime == nil && (req.streamUsage == nil || req.streamUsage.outputPending) {
+			req.streamOutputBytes += int64(outputBytes)
+			req.streamReasoningBytes += int64(reasoningBytes)
 		}
 	})
 }

@@ -23,6 +23,12 @@ func TestClaudeStreamPublishesReportedUsageBeforeCompletion(t *testing.T) {
 	if err != nil || first == nil || first.InputTokens != 25 || first.CacheReadTokens != 10 || first.EndTime != nil {
 		t.Fatalf("message_start usage: %+v, %v", first, err)
 	}
+	processor.parseTokensInline([]byte("event: content_block_delta\ndata: " +
+		`{"type":"content_block_delta","delta":{"type":"text_delta","text":"sample output"}}` + "\n\n"))
+	growing, err := tracker.FindRequestDetail(t.Context(), id)
+	if err != nil || growing == nil || growing.InputTokens != 25 || growing.OutputTokens != 4 || growing.EndTime != nil {
+		t.Fatalf("content_block_delta estimate: %+v, %v", growing, err)
+	}
 	processor.parseTokensInline([]byte("event: message_delta\ndata: " +
 		`{"usage":{"output_tokens":17}}` + "\n\n"))
 	delta, err := tracker.FindRequestDetail(t.Context(), id)

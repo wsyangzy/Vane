@@ -1,10 +1,10 @@
-import { memo, useMemo, useState } from 'react';
-import { ArrowDownLeft, ArrowUpRight, ChartNoAxesCombined, ChevronDown, Database, Layers, PanelsTopLeft, Server, TriangleAlert } from 'lucide-react';
+import { Fragment, memo, useMemo, useState } from 'react';
+import { ArrowDownLeft, ArrowUpRight, ChartNoAxesCombined, ChevronDown, Database, Layers, Server, TriangleAlert } from 'lucide-react';
 import { getEndpointChainItems } from '../utils/endpointChain.js';
 import { isRequestInProgress } from '../utils/requestOutcome.js';
-import { accumulateWaterfall, buildContextCostEstimate, buildCostSteps, buildFallbackAttempts, formatRequestInsightCost, hasReportedRequestUsage } from '../utils/requestInsights.js';
+import { accumulateWaterfall, buildContextCostEstimate, buildCostSteps, buildFallbackAttempts, formatRequestInsightCost } from '../utils/requestInsights.js';
 import { getServiceTierMeta } from '../utils/requestMetadata.js';
-import { revealInsight } from './revealInsight.js';
+import { revealInsight, useInsightPlayback } from './revealInsight.js';
 import AnimatedMetric from './AnimatedMetric.jsx';
 import './requestInsights.css';
 
@@ -14,11 +14,11 @@ const attemptStates = {
   cancelled: '已取消', incomplete: '响应未完成', unknown: '结果未记录',
 };
 
-function WaterfallMetrics({ input, output, cost, time, animate }) {
+function WaterfallMetrics({ input, output, cost, time, animate, estimated }) {
   return <>
     <td><AnimatedMetric value={input} live={animate} /></td>
     <td><AnimatedMetric value={output} live={animate} /></td>
-    <td><AnimatedMetric value={cost} live={animate} format="cost" /></td>
+    <td>{estimated && cost != null && '≈ '}<AnimatedMetric value={cost} live={animate} format="cost" /></td>
     <td><AnimatedMetric value={time} live={animate} format="duration" /></td>
   </>;
 }
@@ -48,58 +48,64 @@ function WaterfallGroup({ label, detail, Icon, open, toggle, metrics, row, scale
   </tr>;
 }
 
-function ContextCostValues({ row }) {
-  return <>
-    <span>{row.tokens.toLocaleString()} Token</span>
-    <strong title={`约 $${row.cost}`}>≈ {formatRequestInsightCost(row.cost)}</strong>
+function WaterfallStep({ row, index, scale, animate, unpriced, nested, open, onToggle }) {
+  const Icon = row.residual ? TriangleAlert : row.output != null ? ArrowUpRight : row.id === 'input' ? ArrowDownLeft : Database;
+  const label = <>
+    {row.estimated ? <i className="request-waterfall-dot" aria-hidden="true" /> : <Icon size={13} aria-hidden="true" />}
+    <span className="request-waterfall-name">
+      <strong>{row.label}</strong>
+      {nested && row.items > 1 && <small>×{row.items}</small>}
+      {row.detail && <small>{row.detail}</small>}
+      {!unpriced && row.pricing && <small className="request-waterfall-pricing">
+        <span>{formatRequestInsightCost(row.pricing.unit)} / 百万 Token</span>
+        {row.pricing.multiplier != null && <span>分项 ×{row.pricing.multiplier}</span>}
+        {row.pricing.totalMultiplier != null && <span>总倍率 ×{row.pricing.totalMultiplier}</span>}
+      </small>}
+    </span>
   </>;
+  return <tr className="request-waterfall-child" data-tone={row.tone} data-nested={nested} style={{ '--insight-step': index }}>
+    <th scope="row">
+      {onToggle ? <button type="button" className="request-waterfall-label" aria-expanded={open} onClick={onToggle}>
+        <ChevronDown size={12} className="request-waterfall-chevron" aria-hidden="true" />{label}
+      </button> : <span className="request-waterfall-label">{label}</span>}
+    </th>
+    <WaterfallTrack row={row} scale={scale} />
+    <WaterfallMetrics input={row.input} output={row.output} cost={unpriced ? null : row.cost} animate={animate}
+      estimated={row.estimated || row.provisional} />
+  </tr>;
 }
 
-function ContextCostEstimate({ estimate }) {
-  return <details className="request-context-cost request-context-contents">
-    <summary className="request-context-cost-line">
-      <span><ChevronDown size={13} aria-hidden="true" /><PanelsTopLeft size={14} aria-hidden="true" />上下文成本估算</span>
-      <strong>{formatRequestInsightCost(estimate.cost)}</strong>
-    </summary>
-    <p>将输入、缓存读取及写入的成本合计按上下文 Token 占比分摊。各条目的缓存命中情况未记录。</p>
-    <ul>
-      {estimate.rows.map(row => <li key={row.id} data-tone={row.tone}>
-        {row.entries?.length ? <details>
-          <summary className="request-context-cost-line">
-            <span><ChevronDown size={12} aria-hidden="true" /><i aria-hidden="true" />{row.label}</span>
-            <ContextCostValues row={row} />
-          </summary>
-          <ul>
-            {row.entries.map(entry => <li key={entry.id} className="request-context-cost-line">
-              <span>{entry.label}{entry.items > 1 && <small>×{entry.items}</small>}</span>
-              <ContextCostValues row={entry} />
-            </li>)}
-          </ul>
-        </details> : <div className="request-context-cost-line">
-          <span><i aria-hidden="true" />{row.label}</span>
-          <ContextCostValues row={row} />
-        </div>}
-      </li>)}
-    </ul>
-  </details>;
-}
-
-export default memo(function RequestCostWaterfall({ request }) {
+export default memo(function RequestCostWaterfall({ request, animate: animateOnOpen }) {
+  const [playbackRef, animate] = useInsightPlayback(animateOnOpen);
   const data = useMemo(() => buildCostSteps(request), [request]);
   const estimate = useMemo(() => buildContextCostEstimate(request, data), [request, data]);
   const attempts = useMemo(() => request.dispatchTrace?.attempts?.length || getEndpointChainItems(request).length
     ? buildFallbackAttempts(request).filter(row => row.state !== 'skipped')
     : [], [request]);
   const live = isRequestInProgress(request);
-  const waitingForUsage = live && !hasReportedRequestUsage(request);
-  const unpriced = data.unpriced || (live && !waitingForUsage && request.billingRuleSnapshot?.input_price == null);
+  const waitingForUsage = live && !data.rows.length;
+  const unpriced = data.unpriced && !waitingForUsage;
   const [requestedMode, setMode] = useState('cost');
-  const mode = unpriced && !waitingForUsage ? 'tokens' : requestedMode;
+  const mode = unpriced ? 'tokens' : requestedMode;
+  const [inputView, setInputView] = useState('context');
+  const [expandedContext, setExpandedContext] = useState({});
   const [showBilling, setShowBilling] = useState(true);
   const [showAttempts, setShowAttempts] = useState(false);
-  const { steps, scale } = useMemo(() => accumulateWaterfall(data.rows, mode), [data.rows, mode]);
-  const highest = data.rows.reduce((a, b) => !b.residual && b.cost > (a?.cost || 0) ? b : a, null);
-  const metrics = { input: waitingForUsage ? null : data.input, output: waitingForUsage ? null : data.output, cost: waitingForUsage || unpriced ? null : data.total };
+  const showContext = Boolean(estimate) && inputView === 'context';
+  const rows = useMemo(() => {
+    const billingRows = showContext ? data.rows.filter(row => row.input == null) : data.rows;
+    const marked = billingRows.map(row => ({
+      ...row, provisional: row.input != null ? data.inputEstimated : row.output != null && data.outputEstimated,
+    }));
+    return showContext ? [...estimate.rows, ...marked] : marked;
+  }, [data, estimate, showContext]);
+  const { steps, scale } = useMemo(() => accumulateWaterfall(rows, mode), [rows, mode]);
+  const highest = rows.reduce((a, b) => !b.residual && b.cost > (a?.cost || 0) ? b : a, null);
+  const estimatedUsage = data.inputEstimated || data.outputEstimated;
+  const inputEstimateLabel = request.contextSummary?.partial
+    ? '输入仅估算本次发送内容，暂按未缓存计价'
+    : '输入按请求体估算，暂按未缓存计价';
+  const metrics = { input: data.input, output: data.output, cost: unpriced ? null : data.total, estimated: estimatedUsage };
   const axisScale = steps.some(row => row.value !== 0) ? scale : 0;
   const axisLabel = value => mode === 'cost' ? formatRequestInsightCost(value) : compact.format(Math.round(value));
   const total = mode === 'cost' ? data.total : data.tokens;
@@ -115,22 +121,29 @@ export default memo(function RequestCostWaterfall({ request }) {
   return <section className="request-insight" aria-label="成本瀑布图">
     <header className="request-insight-heading">
       <ChartNoAxesCombined size={15} aria-hidden="true" /><h3>成本瀑布</h3>
-      {live && <span className="request-insight-live" role="status">{waitingForUsage ? (request.firstByteMs == null ? '等待上游用量' : '接收响应 · 等待用量') : '已收到用量'}</span>}
+      {live && <span className="request-insight-live" role="status">{waitingForUsage ? '等待首个用量分项' : estimatedUsage ? '实时估算' : '上游用量已更新'}</span>}
       {request.model && <span className="request-waterfall-model" title={request.model}>{request.model}</span>}
       <div className="request-insight-toggle" role="group" aria-label="瀑布图指标">
-        <button type="button" disabled={unpriced && !waitingForUsage} aria-pressed={mode === 'cost'} onClick={() => setMode('cost')}>成本</button>
+        <button type="button" disabled={unpriced} aria-pressed={mode === 'cost'} onClick={() => setMode('cost')}>成本</button>
         <button type="button" aria-pressed={mode === 'tokens'} onClick={() => setMode('tokens')}>Token</button>
       </div>
     </header>
-    <dl className="request-cost-summary">
-      <div><dt>{live ? '当前估算成本' : '请求总成本'}</dt><dd>{waitingForUsage ? '—' : unpriced ? '未定价' : <AnimatedMetric value={data.total} live={live} format="cost" />}</dd></div>
-      <div><dt>计费 Token</dt><dd><AnimatedMetric value={waitingForUsage ? null : data.tokens} live={live} />{!waitingForUsage && <small><AnimatedMetric value={data.input} live={live} /> 输入 · <AnimatedMetric value={data.output} live={live} /> 输出</small>}</dd></div>
-      <div><dt>最高成本分项</dt><dd>{highest?.label || '—'}{highest && <small><AnimatedMetric value={highest.cost} live={live} format="cost" /></small>}</dd></div>
+    <dl className="request-cost-summary" ref={playbackRef}>
+      <div><dt>{live ? '当前成本' : '请求总成本'}</dt><dd>{unpriced ? '未定价' : <>{estimatedUsage && '≈ '}<AnimatedMetric value={data.total} live={animate} format="cost" /></>}</dd></div>
+      <div><dt>{estimatedUsage ? '预计计费 Token' : '计费 Token'}</dt><dd><AnimatedMetric value={data.tokens} live={animate} /><small><AnimatedMetric value={data.input} live={animate} /> 输入 · <AnimatedMetric value={data.output} live={animate} /> 输出</small></dd></div>
+      <div><dt>最高成本分项</dt><dd>{highest?.label || '—'}{highest && <small>{(highest.estimated || highest.provisional) && '≈ '}<AnimatedMetric value={highest.cost} live={animate} format="cost" /></small>}</dd></div>
     </dl>
-    {!steps.length && !attempts.length
-      ? <p className="request-insight-empty">{waitingForUsage ? '收到上游用量后显示计费分项。' : '此请求暂无计费或执行记录。'}</p>
+    {estimate && <div className="request-waterfall-input-view">
+      <span>输入拆分</span>
+      <div className="request-insight-toggle" role="group" aria-label="输入拆分">
+        <button type="button" aria-pressed={showContext} onClick={() => setInputView('context')}>上下文</button>
+        <button type="button" aria-pressed={!showContext} onClick={() => setInputView('billing')}>计费项</button>
+      </div>
+    </div>}
+    {!live && !steps.length && !attempts.length
+      ? <p className="request-insight-empty">此请求暂无计费或执行记录。</p>
       : <div className="request-waterfall-scroll" role="region" aria-label="成本瀑布明细" tabIndex={0}>
-        <table key={mode} data-live={live} className="request-waterfall" aria-label={mode === 'cost' ? '累计成本分解' : '累计计费 Token 分解'}>
+        <table data-live={animateOnOpen} className="request-waterfall" aria-label={mode === 'cost' ? '累计成本分解' : '累计计费 Token 分解'}>
           <colgroup><col className="request-waterfall-step-col" /><col /><col className="request-waterfall-number-col" span={2} /><col className="request-waterfall-cost-col" /><col className="request-waterfall-number-col" /></colgroup>
           <thead ref={revealInsight}><tr>
             <th scope="col">步骤</th>
@@ -143,28 +156,20 @@ export default memo(function RequestCostWaterfall({ request }) {
             <th scope="col">输入</th><th scope="col">输出</th><th scope="col">成本</th><th scope="col">耗时</th>
           </tr></thead>
           {steps.length > 0 && <tbody>
-            <WaterfallGroup label="计费分项" detail={pricingDetail} Icon={Layers} open={showBilling}
-              toggle={() => setShowBilling(value => !value)} metrics={metrics} row={showBilling ? null : totalBar} scale={scale} animate={live} />
-            {showBilling && steps.map((row, index) => <tr className="request-waterfall-child" data-tone={row.tone} key={row.id}
-              style={{ '--insight-step': index }}>
-              <th scope="row"><span className="request-waterfall-label">
-                {row.residual ? <TriangleAlert size={13} aria-hidden="true" /> : row.output != null ? <ArrowUpRight size={13} aria-hidden="true" /> : row.id === 'input' ? <ArrowDownLeft size={13} aria-hidden="true" /> : <Database size={13} aria-hidden="true" />}
-                <span className="request-waterfall-name"><strong>{row.label}</strong>
-                  {row.detail && <small>{row.detail}</small>}
-                  {!unpriced && row.pricing && <small className="request-waterfall-pricing">
-                    <span>{formatRequestInsightCost(row.pricing.unit)} / 百万 Token</span>
-                    {row.pricing.multiplier != null && <span>分项 ×{row.pricing.multiplier}</span>}
-                    {row.pricing.totalMultiplier != null && <span>总倍率 ×{row.pricing.totalMultiplier}</span>}
-                  </small>}
-                </span>
-              </span></th>
-              <WaterfallTrack row={row} scale={scale} />
-              <WaterfallMetrics input={row.input} output={row.output} cost={unpriced ? null : row.cost} animate={live} />
-            </tr>)}
+            <WaterfallGroup label={showContext ? '上下文与输出' : '计费分项'} detail={pricingDetail} Icon={Layers} open={showBilling}
+              toggle={() => setShowBilling(value => !value)} metrics={metrics} row={showBilling ? null : totalBar} scale={scale} animate={animate} />
+            {showBilling && steps.map((row, index) => <Fragment key={row.id}>
+              <WaterfallStep row={row} index={index} scale={scale} animate={animate} unpriced={unpriced}
+                open={Boolean(expandedContext[row.id])}
+                onToggle={row.entries?.length ? () => setExpandedContext(value => ({ ...value, [row.id]: !value[row.id] })) : undefined} />
+              {expandedContext[row.id] && accumulateWaterfall(row.entries || [], mode, row.start).steps.map((entry, entryIndex) =>
+                <WaterfallStep key={entry.id} row={entry} index={entryIndex} scale={scale} animate={false} unpriced={unpriced} nested />)}
+            </Fragment>)}
           </tbody>}
+          {waitingForUsage && <tbody><tr><td colSpan={6} className="request-waterfall-waiting">请求用量会随上游响应更新</td></tr></tbody>}
           {attempts.length > 0 && <tbody>
             <WaterfallGroup label="上游尝试" detail={attemptCount ? `${attemptCount} 次` : `${attempts.length} 个链路节点`} Icon={Server} open={showAttempts}
-              toggle={() => setShowAttempts(value => !value)} animate={live} />
+              toggle={() => setShowAttempts(value => !value)} animate={animate} />
             {showAttempts && attempts.map((row, index) => <tr className="request-waterfall-child" key={row.id} data-outcome={row.state}>
               <th scope="row"><span className="request-waterfall-label">
                 <Server size={13} aria-hidden="true" />
@@ -174,18 +179,19 @@ export default memo(function RequestCostWaterfall({ request }) {
                 </span>
               </span></th>
               <WaterfallTrack />
-              <WaterfallMetrics time={row.duration} animate={live} />
+              <WaterfallMetrics time={row.duration} animate={animate} />
             </tr>)}
           </tbody>}
           <tfoot><tr className="request-waterfall-total">
             <th scope="row">{live ? '当前累计' : '请求合计'}</th>
             <WaterfallTrack row={totalBar} scale={scale} />
-            <WaterfallMetrics {...metrics} time={live ? null : request.duration} animate={live} />
+            <WaterfallMetrics {...metrics} time={live ? null : request.duration} animate={animate} />
           </tr></tfoot>
         </table>
       </div>}
-    {estimate && !unpriced && !waitingForUsage && <ContextCostEstimate estimate={estimate} />}
-    {unpriced && !waitingForUsage && <p className="request-insight-note">此请求未匹配模型价格，成本尚未计算。</p>}
+    {showContext && !unpriced && <p className="request-insight-note">≈ 按上下文 Token 占比分摊输入和缓存成本。逐条缓存命中情况未知。</p>}
+    {estimatedUsage && <p className="request-insight-note">{[data.inputEstimated && inputEstimateLabel, data.outputEstimated && '输出根据已接收的响应片段估算'].filter(Boolean).join('。')}。上游报告到达后会校准。</p>}
+    {unpriced && <p className="request-insight-note">此请求未匹配模型价格，成本尚未计算。</p>}
     {data.rows.some(row => row.residual) && <p className="request-insight-note">历史成本差额为记录总价与已知分项的差值。</p>}
   </section>;
 });

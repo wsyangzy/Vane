@@ -10,6 +10,15 @@ import (
 	"testing"
 )
 
+func summarizeContext(protocol string, body []byte) string {
+	summary := buildContextSummary(protocol, body)
+	if summary == nil {
+		return ""
+	}
+	data, _ := json.Marshal(summary)
+	return string(data)
+}
+
 func TestContextSummaryRecordsStructureWithoutPayload(t *testing.T) {
 	body := []byte(`{"instructions":"private instruction","tools":[{"name":"private tool"}],"previous_response_id":"private link","input":[{"role":"developer","content":[{"type":"input_text","text":"<project_instructions>private path"},{"type":"input_text","text":"<skills_instructions>private skill"}]},{"role":"user","content":"private prompt"},{"type":"function_call_output","output":"private output"},{"type":"compaction","encrypted_content":"private summary"}]}`)
 	raw := summarizeContext("responses", body)
@@ -37,7 +46,7 @@ func TestContextSummaryRecordsStructureWithoutPayload(t *testing.T) {
 }
 
 func TestContextSummaryAcceptsLargePromptWithinBound(t *testing.T) {
-	const payloadBytes = 600 << 10
+	const payloadBytes = 3 << 20
 	body, err := json.Marshal(struct {
 		Input string `json:"input"`
 	}{Input: strings.Repeat("x", payloadBytes)})

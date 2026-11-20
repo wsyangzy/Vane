@@ -44,7 +44,9 @@ export default memo(function RequestAuxiliaryUsage({ request, meta = getAuxiliar
         <thead><tr><th scope="col">上游服务</th><th scope="col">结果</th>{hasTavilyUsage && <th scope="col">credits</th>}<th scope="col">耗时</th></tr></thead>
         <tbody>{attempts.map(item => <tr key={item.id} data-outcome={item.state}>
           <th scope="row"><strong>{item.endpoint}</strong><small>{item.channel || '服务端点'}</small></th>
-          <td>{stateLabels[item.state]}{item.statusCode ? ` · HTTP ${item.statusCode}` : ''}</td>
+          <td>{stateLabels[item.state]}{item.statusCode ? ` · HTTP ${item.statusCode}` : ''}
+            {item.state === 'failed' && item.reason && <small className="mt-0.5 block max-w-64 truncate text-slate-500" title={item.reason}>{item.reason}</small>}
+          </td>
           {hasTavilyUsage && <td>{item.usageCredits == null
             ? item.isTavily ? '未记录' : '—'
             : <AnimatedMetric value={item.usageCredits} live={live} />}</td>}

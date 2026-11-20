@@ -20,10 +20,11 @@ export default memo(function AnimatedMetric({ value, live = false, format = 'num
   const current = useRef(display);
   const reducedMotion = typeof window !== 'undefined'
     && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
-  const animate = live && !reducedMotion;
+  const animate = Boolean(live) && !reducedMotion;
+  const waiting = live === 'waiting' && !reducedMotion;
 
   useEffect(() => {
-    if (target == null) return undefined;
+    if (target == null || waiting) return undefined;
     if (!animate) {
       current.current = target;
       return undefined;
@@ -34,8 +35,8 @@ export default memo(function AnimatedMetric({ value, live = false, format = 'num
     const startedAt = performance.now();
     let frame = 0;
     const tick = now => {
-      const progress = Math.min(1, (now - startedAt) / 380);
-      const eased = 1 - ((1 - progress) ** 3);
+      const progress = Math.min(1, (now - startedAt) / 360);
+      const eased = progress * (2 - progress);
       const next = from + (target - from) * eased;
       current.current = next;
       setDisplay(next);
@@ -43,7 +44,7 @@ export default memo(function AnimatedMetric({ value, live = false, format = 'num
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [target, animate]);
+  }, [target, animate, waiting]);
 
   return <span className={className} aria-live="off">
     {target == null ? '—' : formatValue(animate ? display : target, format)}

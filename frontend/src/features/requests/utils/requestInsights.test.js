@@ -40,6 +40,32 @@ test('context attribution reconciles to the known input side and requires a comp
   assert.equal(buildContextCostEstimate(request, buildCostSteps({ ...request, cost: 2 })), null);
 });
 
+test('live context rows and their expanded entries occupy the input portion of the waterfall', () => {
+  const request = {
+    provider: 'codex', inputTokens: 40, outputTokens: 10, inputCost: .04, outputCost: .02, cost: .06,
+    billingRuleSnapshot: { live_input_estimated: true, live_output_estimated: true },
+    contextSummary: { version: 2, parts: {
+      system: { tokens: 30, breakdown: [{ kind: 'prompt', tokens: 30 }] },
+      tools: { tokens: 10, breakdown: [{ kind: 'tool', name: 'sample', tokens: 10 }] },
+    } },
+  };
+  const context = buildContextMap(request);
+  assert.equal(context.total, 40);
+  assert.equal(context.calibrated, false);
+  const billing = buildCostSteps(request);
+  const estimate = buildContextCostEstimate(request, billing);
+  const rows = [...estimate.rows, ...billing.rows.filter(row => row.input == null)];
+  for (const [mode, total] of [['tokens', 50], ['cost', .06]]) {
+    const { steps } = accumulateWaterfall(rows, mode);
+    const tools = steps[1];
+    const [entry] = accumulateWaterfall(tools.entries, mode, tools.start).steps;
+    assert.equal(entry.start, tools.start);
+    assert.equal(entry.end, tools.end);
+    assert.equal(steps.at(-1).start, tools.end);
+    assert.ok(Math.abs(steps.at(-1).end - total) < 1e-12);
+  }
+});
+
 test('split Claude cache creation replaces aggregate cache rows', () => {
   const data = buildCostSteps({ provider: 'claude', inputTokens: 10, cacheReadTokens: 30, cacheCreationTokens: 50, cacheCreation5mTokens: 20, cacheCreation1hTokens: 30, outputTokens: 5, cacheCreationCost: 9, cacheCreation5mCost: 2, cacheCreation1hCost: 3, cost: 5 });
   assert.equal(data.tokens, 95);

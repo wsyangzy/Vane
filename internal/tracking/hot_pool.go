@@ -91,6 +91,9 @@ type ActiveRequest struct {
 	// 这是一个内存标记，仅在热池存活期间有效，不持久化到数据库
 	TokenRecordedByFailedPath bool `json:"-"`
 	streamUsage               *streamUsageSnapshot
+	contextInputEstimate      int64
+	streamOutputBytes         int64
+	streamReasoningBytes      int64
 
 	// 内部字段
 	mu sync.RWMutex `json:"-"` // 保护单个请求的并发访问

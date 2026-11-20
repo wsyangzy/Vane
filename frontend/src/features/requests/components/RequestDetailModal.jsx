@@ -74,7 +74,7 @@ import {
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
 import { describeFailureReason, getRequestFailureDetails } from '../utils/failureSummary.js';
-import { getRequestOutcome } from '../utils/requestOutcome.js';
+import { getRequestOutcome, isRequestInProgress } from '../utils/requestOutcome.js';
 import { describeRouteSnapshot, describeRouteExecution } from '@/features/providers/shared/routing/routeTargets.js';
 
 // Provider responses, local processing and cancellation each have their own presentation.
@@ -248,6 +248,7 @@ const FirstByteDetailBadge = ({ ms, status }) => {
  * 请求详情模态框主组件
  */
 const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialTab = 'overview' }) => {
+  const [animateInsights] = useState(() => isRequestInProgress(request));
   const [tabView, setTabView] = useState(() => ({ active: initialTab, visited: [] }));
   const activeTab = tabView.active;
   const firstChainView = !tabView.visited.includes('chain');
@@ -329,6 +330,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
 
   const billingOutputTokenSource = request.billingOutputTokenSource || 'output_tokens';
   const billingRuleSnapshot = request.billingRuleSnapshot || null;
+  const estimatedCost = billingRuleSnapshot?.live_input_estimated || billingRuleSnapshot?.live_output_estimated;
   const pricingFallback = getRequestPricingFallback(request);
   const outputSourceLabelMap = {
     output_tokens: '总输出',
@@ -538,10 +540,10 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 <div className="flex items-center justify-between gap-3 rounded-xl border border-orange-100 bg-orange-50/70 p-3.5">
                   <div className="flex items-center gap-2">
                     <DollarSign className="w-4 h-4 text-orange-500" />
-                    <span className="text-sm font-medium text-slate-600">{isRoutingClassifier ? '路由分类成本' : '总成本'}</span>
+                    <span className="text-sm font-medium text-slate-600">{isRoutingClassifier ? '路由分类成本' : estimatedCost ? '当前估算成本' : '总成本'}</span>
                   </div>
                   <div className="text-2xl font-bold text-orange-600 font-mono">
-                    {formatCost(request.cost)}
+                    {estimatedCost && '≈ '}{formatCost(request.cost)}
                   </div>
                 </div>
               </div>
@@ -911,7 +913,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                     <div className="px-4 py-3 bg-gradient-to-r from-emerald-50 to-teal-50 border-b border-emerald-100 flex items-center justify-between">
                       <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
                         <Calculator className="w-4 h-4 text-emerald-600" />
-                        计费详情
+                        {estimatedCost ? '计费估算' : '计费详情'}
                       </h3>
                       <span className="text-xs text-slate-500">仅供参考，以实际扣费为准</span>
                     </div>
@@ -1308,8 +1310,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
               {auxiliaryRequestMeta
                 ? <RequestAuxiliaryUsage request={request} meta={auxiliaryRequestMeta} />
                 : <>
-                  <RequestContextMap request={request} />
-                  <RequestCostWaterfall request={request} />
+                  <RequestContextMap request={request} animate={animateInsights} />
+                  <RequestCostWaterfall request={request} animate={animateInsights} />
                 </>}
             </div>
           )}

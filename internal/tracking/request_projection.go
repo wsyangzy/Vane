@@ -74,6 +74,8 @@ func (ut *UsageTracker) activeRequestToDetail(req *ActiveRequest, includeLiveUsa
 	billingRulesCaptured := req.BillingRulesCaptured
 	billingGroupMultiplier := req.BillingGroupMultiplier
 	streamUsage := req.streamUsage
+	contextInputEstimate := req.contextInputEstimate
+	streamOutputBytes, streamReasoningBytes := req.streamOutputBytes, req.streamReasoningBytes
 	req.mu.RUnlock()
 
 	if includeLiveUsage && endTimeSnapshot == nil && streamUsage != nil {
@@ -89,6 +91,17 @@ func (ut *UsageTracker) activeRequestToDetail(req *ActiveRequest, includeLiveUsa
 		if streamUsage.tier != "" {
 			responseTier = streamUsage.tier
 		}
+	}
+	liveDetail := includeLiveUsage && endTimeSnapshot == nil
+	inputEstimated := liveDetail && inputTokens+cacheCreationTokens+cacheReadTokens == 0 && contextInputEstimate > 0
+	outputEstimated := liveDetail && streamOutputBytes+streamReasoningBytes > 0 && (streamUsage == nil || streamUsage.outputPending)
+	if inputEstimated {
+		inputTokens = contextInputEstimate
+	}
+	if outputEstimated {
+		// Count bytes across deltas so many short chunks do not round up separately.
+		reasoningTokens = (streamReasoningBytes + 3) / 4
+		outputTokens = max(outputTokens, (streamOutputBytes+3)/4+reasoningTokens)
 	}
 	billableOutputTokens := BillableOutputTokens(outputTokens, reasoningTokens, billingOutputTokenSource)
 
@@ -186,6 +199,10 @@ func (ut *UsageTracker) activeRequestToDetail(req *ActiveRequest, includeLiveUsa
 			tierSource:    tierSource,
 		})
 		multiplier = &multiplierValue
+		if resolvedSnapshot != nil {
+			resolvedSnapshot.LiveInputEstimated = inputEstimated
+			resolvedSnapshot.LiveOutputEstimated = outputEstimated
+		}
 		if snapshotJSON := billingDecisionSnapshotJSON(resolvedSnapshot); snapshotJSON != "" {
 			billingRuleSnapshot = snapshotJSON
 		}
@@ -203,11 +220,17 @@ func (ut *UsageTracker) activeRequestToDetail(req *ActiveRequest, includeLiveUsa
 			modelCacheReadCostMultSnap = multiplierValue.ModelCacheReadCostMultiplier
 		}
 	}
-	if !hasPricing && provider == "codex" {
-		billingRuleSnapshot = billingDecisionSnapshotJSON(unpricedBillingDecisionSnapshot(billingIdentity{
+	if !hasPricing && (provider == "codex" || liveDetail) {
+		snapshot := unpricedBillingDecisionSnapshot(billingIdentity{
 			provider: provider, requestedTier: requestedTier, responseTier: responseTier,
 			serviceTier: serviceTier, tierSource: tierSource,
-		}))
+		})
+		if snapshot == nil {
+			snapshot = &BillingDecisionSnapshot{PricingFallback: "missing_price", PricingProvider: provider}
+		}
+		snapshot.LiveInputEstimated = inputEstimated
+		snapshot.LiveOutputEstimated = outputEstimated
+		billingRuleSnapshot = billingDecisionSnapshotJSON(snapshot)
 	}
 
 	resolveSnapshot := func(value float64, accessor func(*EndpointMultiplier) float64) float64 {

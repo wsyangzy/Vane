@@ -270,7 +270,7 @@ const RequestsPage = ({ initialProvider = '' }) => {
         // Keep the last snapshot while the connection or archive catches up.
       } finally {
         reading = false;
-        if (!stopped && !document.hidden) timer = window.setTimeout(poll, 1000);
+        if (!stopped && !document.hidden) timer = window.setTimeout(poll, 400);
       }
     };
     const onVisibilityChange = () => {

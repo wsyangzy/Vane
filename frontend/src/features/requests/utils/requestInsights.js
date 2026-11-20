@@ -12,10 +12,6 @@ export function formatRequestInsightCost(value) {
   if (value !== 0 && Math.abs(value) < 1e-8) return value < 0 ? '>−$0.00000001' : '<$0.00000001';
   return currency.format(value);
 }
-export const hasReportedRequestUsage = request => [
-  request.inputTokens, request.outputTokens, request.reasoningTokens, request.billableOutputTokens,
-  request.cacheReadTokens, request.cacheCreationTokens, request.cacheCreation5mTokens, request.cacheCreation1hTokens,
-].some(value => value > 0);
 
 const contextCategories = {
   system: ['系统提示词', 'violet'],
@@ -67,6 +63,7 @@ export function buildFallbackAttempts(request) {
     const usageCredits = rawUsageCredits == null ? null : amount(rawUsageCredits);
     let state = 'unknown';
     if (node.skipReason) state = 'skipped';
+    else if (searchServiceCall && (node.local || node.error || node.statusCode >= 400)) state = 'failed';
     else if (searchServiceCall && node.statusCode >= 200 && node.statusCode < 300) state = 'answered';
     else if (node.action === 'success' || (last && (trace?.successful || successful(status)))) state = 'answered';
     else if (last && ['canceled', 'cancelled'].includes(status)) state = 'cancelled';
@@ -98,7 +95,9 @@ export function summarizeTavilyUsage(attempts) {
 export function buildContextMap(request) {
   const read = amount(request.cacheReadTokens);
   const write = amount(request.cacheCreationTokens);
-  const input = isCacheInclusiveProvider(request.provider) ? getDisplayInputTokens(request) : amount(request.inputTokens) + read + write;
+  const inputEstimated = Boolean(request.billingRuleSnapshot?.live_input_estimated);
+  const input = inputEstimated ? 0
+    : isCacheInclusiveProvider(request.provider) ? getDisplayInputTokens(request) : amount(request.inputTokens) + read + write;
   const summary = request.contextSummary;
   const detailed = summary?.version === 2;
   const estimated = summary?.version === 1 || detailed;
@@ -134,7 +133,7 @@ export function buildContextMap(request) {
         : estimate;
       groupRunning = entryNext;
       return {
-        id: `${row.id}-${index}`, group: row.id, tone: row.tone, kind: item.kind,
+        id: `${row.id}-${item.kind}-${item.name ?? item.turn ?? index}`, group: row.id, tone: row.tone, kind: item.kind,
         label: item.kind === 'turn' ? `第 ${item.turn} 轮` : item.name || contextEntryLabels[item.kind] || row.label,
         tokens: entryTokens, items: amount(item.count),
       };
@@ -256,17 +255,21 @@ export function buildCostSteps(request) {
   const residual = total - sum;
   if (Math.abs(residual) > Math.max(1e-9, total * 1e-6)) rows.push({ id: 'residual', label: '历史成本差额', tone: 'slate', tokens: 0, cost: residual, residual: true });
   const input = rows.reduce((value, row) => value + (row.input ?? 0), 0);
-  return { rows, total, input, output, tokens: input + output, unpriced };
+  return {
+    rows, total, input, output, tokens: input + output, unpriced,
+    inputEstimated: Boolean(snapshot.live_input_estimated),
+    outputEstimated: Boolean(snapshot.live_output_estimated),
+  };
 }
 
 export function buildContextCostEstimate(request, billing) {
-  if (billing.unpriced || billing.rows.some(row => row.residual)) return null;
+  if (billing.rows.some(row => row.residual)) return null;
   const context = buildContextMap(request);
-  // Partial inputs may reference provider-held content absent from the summary.
-  if (!context.calibrated || context.total !== billing.input) return null;
+  const canAllocate = context.calibrated || (billing.inputEstimated && context.estimated);
+  // An estimated input covers the locally visible context. A reported input must reconcile to the complete context.
+  if (!canAllocate || context.total === 0 || context.total !== billing.input) return null;
   const cost = billing.rows.reduce((total, row) => total + (row.input != null ? row.cost : 0), 0);
-  if (!context.rows.some(row => row.entries?.length)) return null;
-  const withCost = row => ({ ...row, cost: cost * (row.tokens / context.total) });
+  const withCost = row => ({ ...row, input: row.tokens, cost: cost * (row.tokens / context.total), estimated: true });
   const rows = context.rows.filter(row => row.tokens > 0).map(row => ({
     ...withCost(row),
     entries: row.entries?.filter(entry => entry.tokens > 0).map(withCost).sort((a, b) => b.tokens - a.tokens),
@@ -274,8 +277,8 @@ export function buildContextCostEstimate(request, billing) {
   return { cost, rows };
 }
 
-export function accumulateWaterfall(rows, mode) {
-  let running = 0;
+export function accumulateWaterfall(rows, mode, startAt = 0) {
+  let running = startAt;
   const steps = rows.map(row => {
     const value = mode === 'tokens' ? row.tokens : row.cost;
     const start = running;
