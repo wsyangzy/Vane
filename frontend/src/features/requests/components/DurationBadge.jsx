@@ -3,7 +3,7 @@ import { formatDuration } from '@/services/http/api.js';
 const FAILED_REQUEST_STATUSES = new Set(['failed', 'error', 'timeout', 'partial_failed']);
 const CANCELLED_REQUEST_STATUSES = new Set(['cancelled']);
 
-const getDurationTone = (ms, status) => {
+const getDurationTone = (ms, status, live) => {
   const seconds = (Number(ms) || 0) / 1000;
 
   if (FAILED_REQUEST_STATUSES.has(status)) {
@@ -11,6 +11,9 @@ const getDurationTone = (ms, status) => {
   }
   if (CANCELLED_REQUEST_STATUSES.has(status)) {
     return 'bg-slate-50 text-slate-400 border-slate-200';
+  }
+  if (live) {
+    return 'bg-blue-50 text-blue-600 border-blue-200';
   }
   if (seconds >= 80) {
     return 'bg-[#FF6900]/12 text-[#FF6900] border-[#FF6900]/30';
@@ -26,14 +29,14 @@ const sizeClasses = {
   xs: 'px-1.5 py-0.5 rounded-full text-[11px]'
 };
 
-const DurationBadge = ({ ms, status = '', size = 'sm', className = '' }) => {
+const DurationBadge = ({ ms, status = '', size = 'sm', live = false, children, className = '' }) => {
   const text = formatDuration(ms);
-  const tone = getDurationTone(ms, status);
+  const tone = getDurationTone(ms, status, live);
   const resolvedSize = sizeClasses[size] || sizeClasses.sm;
 
   return (
-    <span className={`inline-flex items-center font-mono border whitespace-nowrap ${resolvedSize} ${tone} ${className}`.trim()}>
-      {text}
+    <span className={`inline-flex min-w-0 items-center font-mono tabular-nums border whitespace-nowrap ${resolvedSize} ${tone} ${className}`.trim()}>
+      {children ?? text}
     </span>
   );
 };
