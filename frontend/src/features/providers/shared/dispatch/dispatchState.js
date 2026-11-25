@@ -17,7 +17,7 @@ export function setIntentRoutingEnabled(profile, enabled) {
 }
 
 export function mappingTargetAllowed(profile, target) {
-  return !target.profileId && profile.members.some((member) => member.enabled && member.channelId === target.channelId && (member.groupId === 0 || member.groupId === target.groupId));
+  return !target.profileId && profile.members.some((member) => member.enabled && member.channelId === target.channelId && (target.groupId === 0 || member.groupId === 0 || member.groupId === target.groupId));
 }
 
 export function ruleDraftIssue(profile, rule) {

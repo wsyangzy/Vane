@@ -20,9 +20,9 @@ const emptyState = { profiles: [], channels: [], accounts: [], candidates: [], q
 
 function ConfigurationNotice({ status }) {
   const failures = status?.checks.filter((check) => !check.passed) || [];
-  return <section aria-label="当前方案配置状态" className={`dispatch-configuration rounded-xl border p-3 ${status && !status.ready ? 'border-amber-200 bg-amber-50/60' : 'border-slate-200 bg-white'}`}>
+  return <section aria-label="当前默认方案配置状态" className={`dispatch-configuration rounded-xl border p-3 ${status && !status.ready ? 'border-amber-200 bg-amber-50/60' : 'border-slate-200 bg-white'}`}>
     <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-      <div className="flex min-w-0 items-center gap-2 text-xs"><ShieldCheck size={14} className={status?.ready ? 'text-emerald-500' : 'text-amber-500'} /><span className="font-medium text-slate-700">{status ? status.ready ? '当前方案配置就绪' : '当前方案需要完善' : '当前方案配置尚未检查'}</span></div>
+      <div className="flex min-w-0 items-center gap-2 text-xs"><ShieldCheck size={14} className={status?.ready ? 'text-emerald-500' : 'text-amber-500'} /><span className="font-medium text-slate-700">{status ? status.ready ? '当前默认方案配置就绪' : '当前默认方案需要检查' : '当前默认方案配置尚未检查'}</span></div>
     </div>
     {failures.length > 0 && <ul className="mt-2 space-y-1 text-xs leading-5 text-amber-800">{failures.map((check) => <li key={check.code} className="wrap-anywhere">{check.message || check.code}</li>)}</ul>}
   </section>;

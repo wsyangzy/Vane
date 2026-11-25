@@ -275,6 +275,47 @@ func TestRoutingConfigurationReportsInvalidAuthAndUnresolvableMember(t *testing.
 	}
 }
 
+func TestMappingAllGroupsSavePreservesScopeAndReportsUnavailableDefault(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		t.Run(provider, func(t *testing.T) {
+			a, members := dispatchTestApp(t, provider)
+			profile := routing.DefaultProfile(provider)
+			profile.Name, profile.IsDefault = "all participating groups", true
+			member := members[0]
+			profile.Members = []routing.RoutingMember{{ChannelID: member.ChannelID, GroupID: member.GroupID, Enabled: true}}
+			fallback := false
+			profile.Rules = []routing.RoutingRule{{Enabled: true, Kind: "mapping", MatchModel: "client-alias", Targets: []routing.RouteTarget{{ChannelID: member.ChannelID, GroupID: 0, UpstreamModel: "mapped-model"}}, FallbackToDefault: &fallback}}
+			profile, err := a.SaveRoutingProfile(profile)
+			require.NoError(t, err)
+			state, err := a.ListRoutingProfiles(provider)
+			require.NoError(t, err)
+			require.Len(t, state.Profiles, 1)
+			require.Zero(t, state.Profiles[0].Rules[0].Targets[0].GroupID)
+			plan, err := a.PreviewDispatch(DispatchInput{Provider: provider, ProfileID: profile.ID, Model: "client-alias", Streaming: true})
+			require.NoError(t, err)
+			require.Len(t, plan.EligibleCandidates, 1)
+			candidate := plan.EligibleCandidates[0]
+			require.Equal(t, member.GroupID, candidate.GroupID)
+			require.Equal(t, "mapped-model", candidate.Identity().Model)
+			require.NoError(t, a.poolRuntimes[provider].Fail(member.ChannelID, member.GroupID, candidate.EndpointID, "", routing.Failure{Scope: routing.ScopeCredential, Reason: "credential_rejected"}, time.Time{}))
+			profile.Name = "saved while credential needs repair"
+			_, err = a.SaveRoutingProfile(profile)
+			require.NoError(t, err, "resource unavailability does not prevent saving configuration")
+			status, err := a.CheckRoutingConfiguration(provider)
+			require.NoError(t, err)
+			checks := map[string]RoutingConfigurationCheck{}
+			for _, check := range status.Checks {
+				checks[check.Code] = check
+			}
+			require.False(t, status.Ready)
+			require.True(t, checks["default_profile"].Passed)
+			require.False(t, checks["candidate_preview"].Passed)
+			require.Contains(t, checks["candidate_preview"].Message, "当前默认方案暂无可立即使用的端点")
+			require.Contains(t, checks["candidate_preview"].Message, "模拟调度")
+		})
+	}
+}
+
 func TestRoutingProfilesUseMembersInsteadOfLegacyParticipation(t *testing.T) {
 	for _, provider := range []string{"claude", "codex"} {
 		t.Run(provider, func(t *testing.T) {

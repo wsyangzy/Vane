@@ -379,7 +379,6 @@ func TestMappingUsesModelRoutingWithinSelectedResources(t *testing.T) {
 func TestMappingRejectsTargetsOutsideOrchestration(t *testing.T) {
 	for _, target := range []RouteTarget{
 		{ChannelID: 2, GroupID: 3, UpstreamModel: "mapped"},
-		{ChannelID: 1, GroupID: 0, UpstreamModel: "mapped"},
 		{ChannelID: 1, GroupID: 3, UpstreamModel: "mapped"},
 		{ProfileID: 2, UpstreamModel: "mapped"},
 		{ChannelID: 1, GroupID: 1},
@@ -388,6 +387,63 @@ func TestMappingRejectsTargetsOutsideOrchestration(t *testing.T) {
 		p.Rules = []RoutingRule{{Kind: "mapping", Enabled: true, MatchModel: "alias", Targets: []RouteTarget{target}}}
 		if err := ValidateProfile(&p); err == nil {
 			t.Fatalf("invalid mapping target was accepted: %+v", target)
+		}
+	}
+}
+
+func TestMappingAllGroupsFollowsEnabledMembers(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		for _, mode := range []CandidateMode{OrderedChannels, UnifiedCandidates} {
+			t.Run(provider+"/"+string(mode), func(t *testing.T) {
+				cfg := runtimeTestConfig()
+				cfg.Provider, cfg.Profiles[0].Provider = provider, provider
+				cfg.Profiles[0].CandidateMode = mode
+				cfg.Candidates = append(cfg.Candidates,
+					DispatchCandidate{ChannelID: 1, GroupID: 3, EndpointID: "unselected", Enabled: true},
+					DispatchCandidate{ChannelID: 1, GroupID: 4, EndpointID: "selected", Enabled: true},
+				)
+				for i := range cfg.Candidates {
+					cfg.Candidates[i].Provider = provider
+				}
+				cfg.Profiles[0].Members = []RoutingMember{
+					{ChannelID: 1, GroupID: 2, Enabled: true},
+					{ChannelID: 1, GroupID: 1, Enabled: false},
+					{ChannelID: 1, GroupID: 4, Enabled: true},
+				}
+				cfg.Profiles[0].Rules = []RoutingRule{{ID: 1, Kind: "mapping", Enabled: true, MatchModel: "alias", Targets: []RouteTarget{{ChannelID: 1, GroupID: 0, UpstreamModel: "mapped"}}, FallbackToDefault: boolPointer(false)}}
+				if err := ValidateProfile(&cfg.Profiles[0]); err != nil {
+					t.Fatal(err)
+				}
+				r := NewProfileRuntime(cfg)
+				check := func(want []int64) {
+					t.Helper()
+					preview := r.Preview(context.Background(), 1, "alias", true, TurnInput{})
+					actual := r.Plan(context.Background(), 1, "alias", true, TurnInput{}, false)
+					if preview.Decision.Kind != "mapping" || !reflect.DeepEqual(preview.EligibleCandidates, actual.EligibleCandidates) {
+						t.Fatalf("preview and dispatch disagree: %+v / %+v", preview, actual)
+					}
+					got := []int64{}
+					for _, c := range preview.EligibleCandidates {
+						got = append(got, c.GroupID)
+						if c.ChannelID != 1 || c.Identity().Model != "mapped" {
+							t.Fatalf("mapping changed the channel or model: %+v", c)
+						}
+					}
+					if !reflect.DeepEqual(got, want) {
+						t.Fatalf("mapping admitted groups %v, want %v", got, want)
+					}
+				}
+				check([]int64{2, 4})
+				cfg.Profiles[0].Members[0].Enabled = false
+				r.Replace(cfg)
+				check([]int64{4})
+				cfg.Profiles[0].Members[2].Enabled = false
+				r.Replace(cfg)
+				check([]int64{})
+				cfg.Profiles[0].Members = []RoutingMember{{ChannelID: 1, GroupID: 0, Enabled: true}}
+				r.Replace(cfg)
+				check([]int64{1, 2, 3, 4})
+			})
 		}
 	}
 }

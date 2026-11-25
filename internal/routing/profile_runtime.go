@@ -594,6 +594,32 @@ func (r *ProfileRuntime) plan(ctx context.Context, profileID int64, model string
 	return plan
 }
 
+func profileStageTargets(p RoutingProfile, stage profileTargetStage) []RouteTarget {
+	if stage.kind != "mapping" {
+		return stage.targets
+	}
+	targets := []RouteTarget{}
+	for _, target := range stage.targets {
+		if !mappingTargetAllowed(p, target) {
+			continue
+		}
+		if target.GroupID != 0 {
+			targets = append(targets, target)
+			continue
+		}
+		// A channel-wide mapping follows enabled profile members, rather
+		// than admitting every credential group in the channel catalog.
+		for _, member := range p.Members {
+			if member.Enabled && member.ChannelID == target.ChannelID {
+				scoped := target
+				scoped.GroupID = member.GroupID
+				targets = append(targets, scoped)
+			}
+		}
+	}
+	return targets
+}
+
 func (r *ProfileRuntime) populateDispatchPlan(ctx context.Context, config RuntimeConfig, plan *DispatchPlan, preferred *Candidate, now time.Time) {
 	p := plan.Profile
 	plan.Stages = []DispatchPlanStage{}
@@ -602,15 +628,7 @@ func (r *ProfileRuntime) populateDispatchPlan(ctx context.Context, config Runtim
 	plan.Error = ""
 	seen := map[Candidate]bool{}
 	for index, stage := range decisionTargetStages(p, plan.Decision) {
-		targets := stage.targets
-		if stage.kind == "mapping" {
-			targets = nil
-			for _, target := range stage.targets {
-				if mappingTargetAllowed(p, target) {
-					targets = append(targets, target)
-				}
-			}
-		}
+		targets := profileStageTargets(p, stage)
 		cs := expandProfileTargets(config, p, targets, plan.Model)
 		admitted, rejected := []DispatchCandidate{}, []CandidateEvaluation{}
 		compatibility := map[Candidate]string{}
