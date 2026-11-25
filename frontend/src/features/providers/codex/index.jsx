@@ -2,7 +2,7 @@ import { checkPoolEndpoint } from '@/services/wails/pools.js';
 import DispatchWorkspace from '@/features/providers/shared/dispatch/DispatchWorkspace.jsx';
 import ChannelResourceGrid from '@/features/providers/shared/pools/ChannelResourceGrid.jsx';
 import { useCallback, useEffect, useState } from 'react';
-import { Database, Plus } from 'lucide-react';
+import { Database, Plus, ScanLine } from 'lucide-react';
 import { Button, EmptyState, ErrorMessage, LoadingSpinner, useToast } from '@/shared/ui/index.js';
 import SubscriptionManagement, { ClientConnectionButton } from '@/features/providers/shared/subscriptions/SubscriptionManagement.jsx';
 import ClientVersionBadge from '@/features/providers/shared/ClientVersionBadge.jsx';
@@ -91,6 +91,7 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
   const [deleteEndpointTarget, setDeleteEndpointTarget] = useState(null);
   const [endpointDetailTarget, setEndpointDetailTarget] = useState(null);
   const [pathBatchBusy, setPathBatchBusy] = useState(false);
+  const [pathDialogOpen, setPathDialogOpen] = useState(false);
   const [pathResults, setPathResults] = useState({});
 
   const selectedEndpointDetail = endpointDetailTarget ? (() => {
@@ -646,19 +647,19 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
 
       <DispatchWorkspace provider="codex" refreshToken={channels} onViewRequests={onViewRequests}
         resourcesBusy={loading || Boolean(actionLoading) || pathBatchBusy}
-        endpointPathBusy={pathBatchBusy}
-        endpointPathPanel={<EndpointPathsWorkspace channels={channels} disabled={loading || Boolean(actionLoading)}
-          results={pathResults} onResultsChange={setPathResults} onBusyChange={setPathBatchBusy}
-          onRefresh={() => fetchData({ silent: true, throwOnError: true })} />}
         onRefreshResources={() => fetchData({ silent: true, throwOnError: true })}
         resourceActions={<>
           <ClientConnectionButton provider="codex" onUpdated={() => fetchData({ silent: true, throwOnError: true })} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading)} />
+          <Button type="button" size="sm" variant="secondary" icon={ScanLine} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading) || pathBatchBusy} aria-haspopup="dialog" aria-expanded={pathDialogOpen} onClick={() => setPathDialogOpen(true)}>端点路径</Button>
           <SubscriptionManagement provider="codex" channels={channels} onUpdated={() => fetchData({ silent: true, throwOnError: true })} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading)} />
           {channels.length > 0 && <Button type="button" size="sm" icon={Plus} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading)} onClick={openCreateChannelForm}>添加渠道</Button>}
         </>} endpoints={channels.flatMap((channel) => channel.endpoints.map((endpoint) => ({
         channelId: channel.id, groupId: endpoint.credentialGroupId || getDefaultCredentialGroup(channel)?.id || 0, endpointId: String(endpoint.id),
         name: endpoint.name, address: endpoint.baseURL,
       })))} onError={(message) => toast.error(message)} onSuccess={(message) => toast.success(message)}>
+      {pathDialogOpen && <EndpointPathsWorkspace channels={channels} disabled={loading || Boolean(actionLoading)}
+        results={pathResults} onResultsChange={setPathResults} onBusyChange={setPathBatchBusy}
+        onRefresh={() => fetchData({ silent: true, throwOnError: true })} onClose={() => setPathDialogOpen(false)} />}
       {error && (
         <div className="mb-4">
           <ErrorMessage message={error} onClose={() => setError('')} />
