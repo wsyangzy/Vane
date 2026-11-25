@@ -119,6 +119,16 @@ export function GetSettingsStorageStatus() {
 }
 
 /**
+ * @param {app$0.ClientConfigBackupCommand} input
+ * @returns {$CancellablePromise<app$0.ClientConfigBackupResult>}
+ */
+export function ManageClientConfigBackups(input) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.SettingsService.ManageClientConfigBackups", input).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType9($result);
+    }));
+}
+
+/**
  * @param {string} category
  * @returns {$CancellablePromise<void>}
  */
@@ -160,3 +170,4 @@ const $$createType5 = app$0.PortInfo.createFrom;
 const $$createType6 = app$0.CategoryInfo.createFrom;
 const $$createType7 = $Create.Array($$createType6);
 const $$createType8 = app$0.SettingsStorageStatus.createFrom;
+const $$createType9 = app$0.ClientConfigBackupResult.createFrom;

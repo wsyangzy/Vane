@@ -3,7 +3,8 @@ import test from 'node:test';
 import { isSystemSetting, runtimeSettingSections, settingsForRuntimeSection, sharedRuntimeSettingSections } from './settingsSections.js';
 
 test('system settings contain application controls and exclude provider-specific and legacy controls', () => {
-  for (const category of ['server', 'auth', 'retention', 'logging', 'cache']) {
+  assert.equal(isSystemSetting({ provider: 'global', category: 'codex_client', key: 'compaction_mode' }), false);
+  for (const category of ['server', 'auth', 'retention', 'logging', 'cache', 'backup']) {
     assert.equal(isSystemSetting({ provider: 'global', category }), true);
     assert.equal(isSystemSetting({ provider: 'claude', category }), false);
     assert.equal(isSystemSetting({ provider: 'codex', category }), false);

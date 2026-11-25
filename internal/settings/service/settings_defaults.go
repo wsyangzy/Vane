@@ -181,6 +181,7 @@ func (s *SettingsService) GetAllDefaults() []*settingsstore.SettingRecord {
 
 	// Retention 设置
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryRetention)...)
+	defaults = append(defaults, s.getDefaultsForCategory(CategoryBackup)...)
 
 	// Cache 设置
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryCache)...)
@@ -274,6 +275,10 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*settingssto
 			{Category: CategoryTokenCounting, Key: "estimation_ratio", Value: "4.0", ValueType: ValueTypeFloat, Label: "本地估算比例", Description: "本地预估时，每个 Token 对应的平均字符数。", DisplayOrder: 2},
 		}
 
+	case CategoryBackup:
+		return []*settingsstore.SettingRecord{
+			{Category: CategoryBackup, Key: "directory", Value: "", ValueType: ValueTypeString, Label: "客户端配置备份目录", Description: "留空使用 Vane 数据目录下的 backup。保存后用于后续备份，原目录的文件保留。", DisplayOrder: 1},
+		}
 	case CategoryRetention:
 		return []*settingsstore.SettingRecord{
 			{Category: CategoryRetention, Key: "retention_days", Value: "0", ValueType: ValueTypeInt, Label: "数据保留天数", Description: "请求历史的保留时长，0 表示永久保留。", DisplayOrder: 1},

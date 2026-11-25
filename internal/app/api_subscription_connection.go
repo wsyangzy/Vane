@@ -16,7 +16,6 @@ import (
 	codexsub "github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
 	codexservice "github.com/wsyangzy/Vane/internal/providers/codex/service"
 	"github.com/wsyangzy/Vane/internal/routing"
-	"github.com/wsyangzy/Vane/internal/subscriptions/accounts"
 )
 
 type SubscriptionConnectionCommand struct {
@@ -138,15 +137,26 @@ func (a *App) ManageSubscriptionConnection(input SubscriptionConnectionCommand) 
 		return result, err
 	}
 	result.Revision = current.Revision()
-	result.BackupAvailable = clientconfig.BackupAvailable(path)
+	history, err := a.clientConfigHistory()
+	if err != nil {
+		return result, err
+	}
+	records, err := history.List(input.Provider, path)
+	if err != nil {
+		return result, err
+	}
+	result.BackupAvailable = len(records) > 0
 	// Restore stays available after a group/account has been deleted or disabled.
 	if input.Action == "restore" {
-		if err = clientconfig.Restore(path, input.Revision, accounts.UserVault{}); err != nil {
+		if len(records) == 0 {
+			return result, errors.New("没有可恢复的 Vane 配置备份")
+		}
+		if err = history.Restore(input.Provider, path, records[len(records)-1].ID, input.Revision); err != nil {
 			return result, err
 		}
 		current, err = clientconfig.Read(path)
 		result.Revision = current.Revision()
-		result.BackupAvailable = clientconfig.BackupAvailable(path)
+		result.BackupAvailable = true
 		return result, err
 	}
 	if input.Provider == "codex" {
@@ -271,7 +281,7 @@ func (a *App) ManageSubscriptionConnection(input SubscriptionConnectionCommand) 
 		if !result.Running {
 			return SubscriptionConnectionResult{}, errors.New("代理尚未运行，请先启动代理并重新预览")
 		}
-		if err = clientconfig.Apply(path, input.Revision, updated, accounts.UserVault{}); err != nil {
+		if _, err = history.Apply(input.Provider, path, input.Revision, "connection_apply", updated); err != nil {
 			return SubscriptionConnectionResult{}, err
 		}
 		result.BackupAvailable = true

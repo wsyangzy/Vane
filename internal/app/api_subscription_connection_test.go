@@ -24,6 +24,7 @@ import (
 func connectionTestApp(t *testing.T, provider string) (*App, routing.RoutingProfile, string) {
 	t.Helper()
 	dir := t.TempDir()
+	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("CODEX_HOME", dir)
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
 	path, err := subscriptionConfigPath(provider)
@@ -306,6 +307,8 @@ func TestUnifiedClientConnectionRejectsStaleDefaultAndKeepsRestoreAvailable(t *t
 }
 
 func TestCodexGlobalConfigMigratesSubscriptionRouteToUnifiedModeTwoAndIPv6(t *testing.T) {
+	backupHome := t.TempDir()
+	t.Setenv("APPDATA", backupHome)
 	t.Setenv("CODEX_HOME", t.TempDir())
 	path, _ := subscriptionConfigPath("codex")
 	os.WriteFile(path, []byte("model_provider = \"relay_subscription\"\n[model_providers.relay_subscription]\nbase_url = \"http://[::1]:9000/backend-api/codex\"\nrequires_openai_auth = true\n[model_providers.relay_subscription.http_headers]\nX-Relay-Key = 'keep-local-key'\n"), 0600)
@@ -313,6 +316,12 @@ func TestCodexGlobalConfigMigratesSubscriptionRouteToUnifiedModeTwoAndIPv6(t *te
 	if err := a.UpdateCodexGlobalConfig(CodexGlobalConfigInput{Model: "keep-model"}); err != nil {
 		t.Fatal(err)
 	}
+	history, err := a.clientConfigHistory()
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(backupHome, "Vane", "backup"), history.Directory)
+	backups, err := history.List("codex", path)
+	require.NoError(t, err)
+	require.Len(t, backups, 1)
 	got, _ := os.ReadFile(path)
 	var parsed map[string]any
 	require.NoError(t, toml.Unmarshal(got, &parsed))

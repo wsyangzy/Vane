@@ -27,6 +27,7 @@ import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import { SettingItem, SettingsSection, PortInfo, DispatchSettingsHelp } from './components/index.js';
 import { buildSettingsUpdates } from './settingsUpdates.js';
 import HistoryStorageSettings from './components/HistoryStorageSettings.jsx';
+import ClientConfigBackupSettings from './components/ClientConfigBackupSettings.jsx';
 import { isSystemSetting, sharedRuntimeSettingSections, systemSettingCategories } from '@/shared/lib/settingsSections.js';
 import { dispatchSettingGroups } from '@/shared/lib/dispatchPolicy.js';
 import {
@@ -56,12 +57,13 @@ const CATEGORY_ICONS = {
   auth: Lock,
   retention: Archive,
   logging: FileText,
-  cache: Gauge
+  cache: Gauge,
+  backup: Archive
 };
 
-const CATEGORY_ORDER = ['auth', 'request', 'health', 'retry', 'retention', 'logging', 'cache'];
+const CATEGORY_ORDER = ['auth', 'request', 'health', 'retry', 'retention', 'backup', 'logging', 'cache'];
 // Keep the columns independent and stable as descriptions wrap or values change.
-const PRIMARY_COLUMN_CATEGORIES = new Set(['auth', 'request', 'retention', 'logging']);
+const PRIMARY_COLUMN_CATEGORIES = new Set(['auth', 'request', 'retention', 'backup', 'logging']);
 
 const getCategoryOrder = (categoryName) => {
   const index = CATEGORY_ORDER.indexOf(categoryName);
@@ -762,6 +764,7 @@ const SettingsPage = () => {
     const renderSettingItem = (setting) => {
       const changeKey = `${setting.provider || 'global'}.${setting.category}.${setting.key}`;
       if (setting.category === 'retention' && setting.key === 'archive_directory') return <HistoryStorageSettings key={changeKey} setting={setting} value={getCurrentValue(setting)} onChange={handleSettingChange} disabled={saving} hasChange={changeKey in changes} onRevert={handleRevertSetting} refreshKey={settings} />;
+      if (setting.category === 'backup') return <ClientConfigBackupSettings key={changeKey} setting={setting} value={getCurrentValue(setting)} onChange={handleSettingChange} disabled={saving} hasChange={changeKey in changes} onRevert={handleRevertSetting} refreshKey={settings} />;
       const dependsOnSwitch = category.name === 'health' ? setting.key !== enabledKey : category.name === 'logging' && ['max_file_size', 'max_files', 'compress_rotated'].includes(setting.key);
       return (
         <SettingItem

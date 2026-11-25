@@ -4,6 +4,7 @@ import { Button, CustomSelect } from '@/shared/ui/index.js';
 import { listRoutingProfiles, manageSubscriptionConnection, setDefaultRoutingProfile } from '@/services/wails/index.js';
 import SubscriptionConnectionPreview from './SubscriptionConnectionPreview.jsx';
 import CompactionSettings from '@/features/providers/codex/components/CompactionSettings.jsx';
+import BackupRecordsModal from '@/features/settings/components/BackupRecordsModal.jsx';
 import { dispatchReason, profileSwitchBlockReason } from '../dispatch/dispatchState.js';
 import { getErrorMessage } from '@/shared/lib/errorMessage.js';
 
@@ -11,6 +12,8 @@ const errorText = (error) => dispatchReason(getErrorMessage(error, '操作失败
 
 export default function SubscriptionConnectionPanel({ provider, embedded = false, onBusyChange, onUpdated }) {
   const [expanded, setExpanded] = useState(false);
+  const [backupsOpen, setBackupsOpen] = useState(false);
+  const backupTriggerRef = useRef(null);
   const [status, setStatus] = useState(null);
   const [profiles, setProfiles] = useState([]);
   const [preview, setPreview] = useState(null);
@@ -58,7 +61,6 @@ export default function SubscriptionConnectionPanel({ provider, embedded = false
       });
       if (action === 'preview') { setPreview(result); setConfirmed(false); }
       if (action === 'apply') { setCatalogChoice(null); setCompactionChoice(null); setPreview(null); setConfirmed(false); setNotice('已备份并自动写入客户端配置。请重新启动客户端使配置生效，之后在 Vane 调整调度方案无需重启。'); }
-      if (action === 'restore') { setCatalogChoice(null); setPreview(null); setConfirmed(false); setNotice('已恢复接入 Vane 前的客户端配置，请重新启动客户端。'); }
       await load();
     } catch (e) { setPreview(null); setConfirmed(false); setError(errorText(e)); }
     finally { setBusy(''); }
@@ -154,12 +156,13 @@ export default function SubscriptionConnectionPanel({ provider, embedded = false
         </ol>
         <p>{provider === 'codex' ? '专用模板会自动添加 X-Relay-Key，用于连接 Vane；API 渠道和 Vane 托管账号的默认模板无需此项。' : '专用模板会自动补充连接 Vane 的认证配置。'}</p>
       </div>}
-      <div className="flex flex-wrap gap-2"><Button type="button" size="sm" className="gap-1.5" variant="secondary" onClick={load} disabled={Boolean(busy)}><RefreshCw size={14} />刷新状态</Button><Button ref={previewTriggerRef} type="button" size="sm" className="gap-1.5" onClick={() => run('preview')} disabled={Boolean(busy) || !status?.endpointReady || (provider === 'codex' && catalogMode === 'local' && !catalogPath.trim())}><FileCode2 size={14} />{busy === 'preview' ? '正在生成…' : '生成配置预览'}</Button><Button type="button" size="sm" className="gap-1.5" variant="secondary" onClick={() => run('restore')} disabled={Boolean(busy) || !status?.backupAvailable}><RotateCcw size={14} />恢复原客户端配置</Button></div>
+      <div className="flex flex-wrap gap-2"><Button type="button" size="sm" className="gap-1.5" variant="secondary" onClick={load} disabled={Boolean(busy)}><RefreshCw size={14} />刷新状态</Button><Button ref={previewTriggerRef} type="button" size="sm" className="gap-1.5" onClick={() => run('preview')} disabled={Boolean(busy) || !status?.endpointReady || (provider === 'codex' && catalogMode === 'local' && !catalogPath.trim())}><FileCode2 size={14} />{busy === 'preview' ? '正在生成…' : '生成配置预览'}</Button><Button ref={backupTriggerRef} type="button" size="sm" className="gap-1.5" variant="secondary" onClick={() => setBackupsOpen(true)} disabled={Boolean(busy)}><RotateCcw size={14} />备份记录与恢复</Button></div>
       {!embedded && <p className="text-xs leading-5 text-slate-500">在预览窗口核对配置后，可备份并写入目标文件。</p>}
       {error && <p role="alert" className="break-words text-xs text-rose-600 [overflow-wrap:anywhere]">{error}</p>}
       {statusError && <p role="alert" className="break-words text-xs text-rose-600 [overflow-wrap:anywhere]">{statusError}</p>}
       {notice && <p role="status" className="flex items-start gap-1 break-words text-xs text-emerald-700 [overflow-wrap:anywhere]"><Check size={14} className="shrink-0" />{notice}</p>}
     </div>}
+    {backupsOpen && <BackupRecordsModal provider={provider} triggerRef={backupTriggerRef} onClose={() => setBackupsOpen(false)} onRestored={() => { clearPreview(); setCatalogChoice(null); setCompactionChoice(null); load(); onUpdated?.(); }} />}
     {preview && <SubscriptionConnectionPreview provider={provider} preview={preview} confirmed={confirmed} onConfirmedChange={setConfirmed} busy={busy} stale={stalePreview} canApply={Boolean(status?.running && status?.endpointReady)} error={error} notice={notice} onCopy={copy} onRegenerate={() => run('preview')} onApply={() => run('apply')} onClose={() => { setPreview(null); setConfirmed(false); }} triggerRef={previewTriggerRef} />}
   </section>;
 }

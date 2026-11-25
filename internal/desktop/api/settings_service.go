@@ -6,6 +6,10 @@ import (
 
 type SettingsService struct{ app *app.App }
 
+func (s *SettingsService) ManageClientConfigBackups(input app.ClientConfigBackupCommand) (app.ClientConfigBackupResult, error) {
+	return s.app.ManageClientConfigBackups(input)
+}
+
 func (s *SettingsService) GetDataStoragePaths() app.DataStoragePaths {
 	return s.app.GetDataStoragePaths()
 }

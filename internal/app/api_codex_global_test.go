@@ -53,6 +53,7 @@ func TestUpdateCodexGlobalConfigPersistsOwnedDefaultsAndPreservesReasoningEffort
 	}
 
 	codexHome := t.TempDir()
+	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("CODEX_HOME", codexHome)
 	configPath := filepath.Join(codexHome, "config.toml")
 	if err := os.WriteFile(configPath, []byte(strings.Join([]string{
@@ -105,6 +106,7 @@ func TestUpdateCodexGlobalConfigPersistsOwnedDefaultsAndPreservesReasoningEffort
 
 func TestUpdateCodexGlobalConfigPreservesClientManagedReasoningEffort(t *testing.T) {
 	codexHome := t.TempDir()
+	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("CODEX_HOME", codexHome)
 	configPath := filepath.Join(codexHome, "config.toml")
 	if err := os.WriteFile(configPath, []byte(strings.Join([]string{
@@ -140,6 +142,7 @@ func TestUpdateCodexGlobalConfigPreservesClientManagedReasoningEffort(t *testing
 }
 
 func TestCodexGlobalConfigKeepsCatalogOnLocalListenerAndPreservesModeTwo(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
 	path := filepath.Join(os.Getenv("CODEX_HOME"), "config.toml")
 	catalogPath := filepath.Join(os.Getenv("CODEX_HOME"), "catalog.json")
@@ -180,6 +183,7 @@ image_generation = true
 }
 
 func TestCodexGlobalConfigMigratesExistingCompatibilityProviderWithoutWritingAuth(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
 	path := filepath.Join(os.Getenv("CODEX_HOME"), "config.toml")
 	original := `model = "keep-model"
@@ -217,6 +221,7 @@ command = "keep-command"
 }
 
 func TestCodexGlobalConfigCreatesModeTwoUsingApplicationToken(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
 	app := &App{config: &config.Config{Server: config.ServerConfig{Host: "127.0.0.1", Port: 19087}, Auth: config.AuthConfig{Enabled: true, Token: "application-token"}}}
 	if err := app.UpdateCodexGlobalConfig(CodexGlobalConfigInput{Model: "model"}); err != nil {

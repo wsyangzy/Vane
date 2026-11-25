@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/wsyangzy/Vane/internal/platform/clientconfig"
 	codexconfig "github.com/wsyangzy/Vane/internal/providers/codex/clientconfig"
 	codexservice "github.com/wsyangzy/Vane/internal/providers/codex/service"
 )
@@ -148,12 +149,14 @@ func renderCodexBool(value bool) string {
 // UpdateCodexGlobalConfig 更新 Codex 全局配置并写回 ~/.codex/config.toml
 // base_url 自动取自系统当前的 server.host:port，确保与「设置 → 服务端口」一致
 func (a *App) UpdateCodexGlobalConfig(input CodexGlobalConfigInput) error {
+	subscriptionConnectionMu.Lock()
+	defer subscriptionConnectionMu.Unlock()
 	path, content, existed, err := a.readCodexFileAllowMissing(codexconfig.GetCodexConfigPath)
 	if err != nil {
 		return err
 	}
 
-	original := append([]byte(nil), content...)
+	revision := (clientconfig.Snapshot{Data: content, Exists: existed}).Revision()
 	text := string(content)
 
 	// 1. 自动计算 base_url（取自系统 server 配置）
@@ -195,19 +198,23 @@ func (a *App) UpdateCodexGlobalConfig(input CodexGlobalConfigInput) error {
 	}
 	updated = string(rendered)
 
-	// 4. 写回文件（带回滚保护）
-	if err := codexconfig.WriteCodexFile(path, []byte(updated)); err != nil {
-		if rollbackErr := codexconfig.RestoreCodexFile(path, original, existed); rollbackErr != nil {
-			return fmt.Errorf("写入 config.toml 失败 (%s): %w；回滚也失败: %v", path, err, rollbackErr)
-		}
-		return fmt.Errorf("写入 config.toml 失败 (%s): %w", path, err)
+	// 4. The same history protects model updates and connection applications.
+	history, err := a.clientConfigHistory()
+	if err != nil {
+		return err
+	}
+	record, err := history.Apply("codex", path, revision, "model_settings", []byte(updated))
+	if err != nil {
+		return fmt.Errorf("写入 config.toml 失败: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := a.saveCodexDefaultConfig(ctx, input); err != nil {
-		if rollbackErr := codexconfig.RestoreCodexFile(path, original, existed); rollbackErr != nil {
-			return fmt.Errorf("保存 Codex 全局默认配置失败: %w；回滚 config.toml 也失败: %v", err, rollbackErr)
+		if record.ID != "" {
+			if rollbackErr := history.Restore("codex", path, record.ID, (clientconfig.Snapshot{Data: []byte(updated), Exists: true}).Revision()); rollbackErr != nil {
+				return fmt.Errorf("保存 Codex 全局默认配置失败: %w；回滚 config.toml 也失败: %v", err, rollbackErr)
+			}
 		}
 		return fmt.Errorf("保存 Codex 全局默认配置失败: %w", err)
 	}

@@ -174,6 +174,15 @@ func validateSettingValue(provider SettingsProvider, category, key, value string
 	if category == CategorySearch {
 		return fmt.Errorf("搜索配置已移至 Codex 调度方案")
 	}
+	if category == CategoryBackup {
+		if provider != ProviderGlobal || key != "directory" {
+			return fmt.Errorf("配置备份目录使用 global 作用域")
+		}
+		if value != "" && (!filepath.IsAbs(value) || strings.ContainsAny(value, "\r\n\x00") || strings.TrimSpace(value) != value) {
+			return fmt.Errorf("配置备份路径必须为本机绝对路径，或留空使用默认目录")
+		}
+		return nil
+	}
 	if category == CategoryRetention && key == "archive_directory" {
 		if value != "" && (!filepath.IsAbs(value) || strings.ContainsAny(value, "\r\n\x00") || strings.TrimSpace(value) != value) {
 			return fmt.Errorf("历史归档路径必须为本机绝对路径，或留空使用默认目录")

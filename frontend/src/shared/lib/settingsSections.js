@@ -6,7 +6,7 @@ export const sharedRuntimeSettingSections = [
   { category: 'retry', title: '调度保护', description: '请求尝试、故障冷却与规则回退', keys: dispatchSettingGroups.flatMap(group => group.keys) },
 ];
 
-export const systemSettingCategories = ['server', 'auth', ...sharedRuntimeSettingSections.map(section => section.category), 'retention', 'logging', 'cache'];
+export const systemSettingCategories = ['server', 'auth', ...sharedRuntimeSettingSections.map(section => section.category), 'retention', 'logging', 'cache', 'backup'];
 
 export function isSystemSetting(setting) {
   if ((setting.provider || 'global') !== 'global' || !systemSettingCategories.includes(setting.category)) return false;
