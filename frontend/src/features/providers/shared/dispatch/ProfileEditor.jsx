@@ -43,7 +43,7 @@ function TargetsEditor({ targets, onChange, profiles, channels, accounts, profil
           {!mapping && <Choice label="目标类型" value={useProfile ? 'profile' : 'channel'} options={[{ value: 'profile', label: '调度方案' }, { value: 'channel', label: '渠道 / 分组' }]} onChange={(targetKind) => update(index, { targetKind, profileId: 0, channelId: 0, groupId: 0 })} />}
           {useProfile ? <Choice label="目标方案" value={target.profileId} options={profiles.map((item) => ({ value: item.id, label: `${item.name}${item.enabled ? '' : '（已停用）'}` }))} onChange={(profileId) => update(index, { profileId })} /> : <Choice label={mapping ? '本方案渠道' : '目标渠道'} value={target.channelId} options={availableChannels.map((channel) => ({ value: channel.id, label: channel.name }))} onChange={(channelId) => update(index, { channelId, profileId: 0, groupId: 0 })} />}
           <Choice label="目标分组" disabled={Boolean(useProfile)} value={target.groupId} options={[{ value: 0, label: mapping ? '全部分组（本方案已参与）' : '全部分组 / 方案成员' }, ...groupsFor(target.channelId).map((account) => ({ value: account.groupId, label: `${account.groupName} · ${formatMultiplierDisplayValue(account.costMultiplier)}` }))]} onChange={(groupId) => update(index, { groupId })} />
-          <Field label={mapping ? '映射后的实际模型' : '实际模型（可选）'} required={mapping} placeholder={mapping ? '填写支持的模型名' : '沿用渠道模型策略'} value={target.upstreamModel} onChange={(upstreamModel) => update(index, { upstreamModel })} />
+          <Field label={mapping ? '映射后的实际模型' : '实际模型（可选）'} required={mapping} placeholder={mapping ? '填写支持的模型名' : '留空沿用渠道 / 分组模型策略'} value={target.upstreamModel} onChange={(upstreamModel) => update(index, { upstreamModel })} />
         </div>
       </div>;
     })}
@@ -237,10 +237,9 @@ export default function ProfileEditor({ profile, profiles, channels, accounts, p
         <div className="grid gap-2 sm:grid-cols-2">
           <div role="group" aria-label="模型路由规则" className="flex min-w-0 flex-col rounded-lg border border-indigo-100 bg-indigo-50/40 p-2.5">
             <h4 className="flex items-center gap-1.5 text-xs font-semibold text-slate-700"><GitBranch size={14} className="shrink-0 text-indigo-500" />模型路由</h4>
-            <p className="mt-1 text-[11px] leading-5 text-slate-500">按请求模型选择处理资源；模型映射是在本方案渠道内替换模型名，也属于模型路由。</p>
+            <p className="mt-1 text-[11px] leading-5 text-slate-500">按请求模型选择渠道、分组或方案；填写实际模型即可完成模型映射。</p>
             <div className="mt-auto flex flex-wrap gap-1.5 pt-2">
               <Button type="button" variant="ghost" size="sm" icon={Plus} aria-label="添加模型路由" disabled={Boolean(unfinishedRule)} className="border border-indigo-200/70 bg-white/80 hover:border-indigo-300 hover:bg-white hover:text-indigo-600" onClick={() => createRule('model')}>添加模型路由</Button>
-              <Button type="button" variant="ghost" size="sm" icon={Replace} aria-label="添加模型映射" disabled={Boolean(unfinishedRule)} className="border border-teal-200/70 bg-teal-50/50 text-teal-700 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-800" onClick={() => createRule('mapping')}>添加模型映射</Button>
             </div>
           </div>
           <div role="group" aria-label="非流改道规则" className="flex min-w-0 flex-col rounded-lg border border-amber-100 bg-amber-50/40 p-2.5">
