@@ -2,7 +2,7 @@
 package buildinfo
 
 var (
-	Version   = "1.0.1"
+	Version   = "1.0.2"
 	Commit    = "unknown"
 	BuildTime = "unknown"
 	BuildMode = "dev"

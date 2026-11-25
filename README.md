@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.1-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.0.2-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
   <img src="https://img.shields.io/badge/Go-1.27.3-00ADD8.svg" alt="Go">
@@ -63,13 +63,13 @@ Codex 的 API 凭证端点支持选择「标准 /v1 路径」或「按 API 基�
 
 查看本地会话与代理请求的 Token、费用和使用趋势。
 
-![Vane v1.0.1 用量概览](docs/images/overview.png)
+![Vane 用量概览](docs/images/overview.png)
 
 ### 渠道与调度方案
 
 分别管理 Claude、Codex 渠道，用调度方案选择请求使用的资源与路由规则。
 
-![Vane v1.0.1 渠道与调度方案](docs/images/endpoints.png)
+![Vane 渠道与调度方案](docs/images/endpoints.png)
 
 ### 请求追踪
 
