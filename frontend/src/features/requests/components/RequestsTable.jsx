@@ -172,14 +172,15 @@ const renderCell = (column, request, onViewDispatch, showDate, auxiliary, route)
     case 'status':
       return <span className={`inline-flex max-w-full [&>div]:max-w-full [&>div]:gap-1 [&>div]:px-1 [&>div]:text-[11px] ${column.layoutWidth < 58 ? '[&_svg]:hidden' : ''}`}><RequestStatusBadge request={request} /></span>;
     case 'model': {
-      const routePath = route.resources.length > 1 ? (
+      const routePath = route.resources.length > 1 || route.defaultSourceLabel ? (
         <div className="space-y-1.5 text-left">
           {route.paths.map(({ model, resources }, index) => (
             <div key={index}>
               <div>{model}</div>
-              <div className="font-normal text-slate-300">{resources.join(' → ')}</div>
+              <div className="font-normal text-slate-300">实际发送：{resources.join(' → ')}</div>
             </div>
           ))}
+          {route.defaultSourceLabel && <div className="border-t border-slate-700 pt-1.5 font-normal text-slate-400">默认候选：{route.defaultSourceLabel}</div>}
         </div>
       ) : route.paths.map(({ model }) => model).join('\n') || route.models.join(' → ');
       return (

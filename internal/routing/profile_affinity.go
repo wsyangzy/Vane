@@ -52,7 +52,7 @@ func (r *ProfileRuntime) SeedSessionAffinity(entries []SessionAffinity) {
 			candidate.StateVersion = 0
 			prior.StateVersion = 0
 			if resource.Enabled && candidate == prior {
-				r.affinity[entry.Key] = profileAffinity{candidate: resource.Identity(), model: entry.Model, expires: entry.ExpiresAt, success: entry.SuccessfulAt, used: now, session: true, profileID: entry.ProfileID}
+				r.affinity[entry.Key] = profileAffinity{candidate: resource.Identity(), revision: profile.Revision, model: entry.Model, expires: entry.ExpiresAt, success: entry.SuccessfulAt, used: now, session: true, profileID: entry.ProfileID}
 				break
 			}
 		}

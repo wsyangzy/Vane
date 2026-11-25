@@ -520,21 +520,28 @@ func (r *ProfileRuntime) plan(ctx context.Context, profileID int64, model string
 	turnKey, sessionKey := affinityKeys(ctx, p, turn)
 	plan.state.turnKey, plan.state.sessionKey = turnKey, sessionKey
 	plan.state.scopeHash = routingHash(CallerScope(ctx), p.Provider, fmt.Sprint(p.ID))
-	sameTurn, hasTurn := r.remembered(turnKey, now, preview)
+	var sameTurn, previous profileAffinity
+	hasTurn, hasSession := false, false
 	fromState := false
-	if !hasTurn && !turn.NewTurn {
-		for _, key := range profileStateKeysFromContext(ctx) {
-			if entry, exists := r.remembered(routingHash(plan.state.scopeHash, "state", key), now, preview); exists {
-				sameTurn, hasTurn, fromState = entry, true, true
-				break
+	if native == nil {
+		sameTurn, hasTurn = r.remembered(turnKey, now, preview)
+		if !hasTurn && !turn.NewTurn {
+			for _, key := range profileStateKeysFromContext(ctx) {
+				if entry, exists := r.remembered(routingHash(plan.state.scopeHash, "state", key), now, preview); exists {
+					sameTurn, hasTurn, fromState = entry, true, true
+					break
+				}
 			}
 		}
+		previous, hasSession = r.remembered(sessionKey, now, preview)
 	}
-	previous, hasSession := r.remembered(sessionKey, now, preview)
-	// A saved policy takes effect on the next request. Keep the successful
-	// resource hint, but do not replay a decision made by an older revision.
+	// A saved policy takes effect on the next request. Neither a retained turn
+	// nor a session resource hint may override the newly configured priority.
 	if hasTurn && sameTurn.revision != p.Revision {
 		hasTurn = false
+	}
+	if hasSession && previous.revision != p.Revision {
+		hasSession = false
 	}
 	// Turning off intent routing also disables previously remembered intent
 	// decisions; the upstream remains responsible for protocol-state validation.
@@ -972,6 +979,9 @@ func safeDispatchReason(reason, fallback string) string {
 
 func (r *ProfileRuntime) rememberSuccess(plan *DispatchPlan, candidate DispatchCandidate, cachedTokens int64, now time.Time) {
 	state := plan.state
+	if state.native != nil {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry := profileAffinity{candidate: candidate.Identity(), revision: plan.Profile.Revision, decision: plan.Decision, intent: plan.Intent.IntentID, model: plan.Model, cachedTokens: cachedTokens, expires: now.Add(time.Hour), used: now, success: now}
@@ -1008,7 +1018,7 @@ func (r *ProfileRuntime) trimAffinityLocked(now time.Time) {
 // RememberResponseStates links protocol state hashes to the completed decision
 // so a previous_response_id-only tool request can retain the original route.
 func (r *ProfileRuntime) RememberResponseStates(plan *DispatchPlan, candidate DispatchCandidate, keys []string) {
-	if plan == nil || plan.state == nil || plan.Preview || len(keys) == 0 {
+	if plan == nil || plan.state == nil || plan.state.native != nil || plan.Preview || len(keys) == 0 {
 		return
 	}
 	plan.state.mu.Lock()

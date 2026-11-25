@@ -26,11 +26,11 @@ test('model route tooltip separates model changes from the saved origin and exec
     { candidate: { ...candidate('codex', 2, 21, 201), model: 'gpt-5.6-luna' }, action: 'attempt' },
   ], { default_source: { channel_id: 1, group_id: 11, channel_name: '渠道 A', group_name: '分组 A' }, decision: { kind: 'model', rule_id: 1, mode: 'prefer', targets: [{ channel_id: 2, group_id: 21, upstream_model: '' }] } }) };
   request.dispatchTrace = readRequestDispatchTrace(request, resources);
-  assert.equal(describeRequestRoutePath(request), 'gpt-5.6-luna\n渠道 A / 分组 A → 渠道 B / 分组 B');
+  assert.equal(describeRequestRoutePath(request), 'gpt-5.6-luna\n渠道 B / 分组 B\n\n默认候选：渠道 A / 分组 A');
   const rewritten = { ...request, model: 'upstream-model', originalModelName: 'requested-model', dispatchTrace: {
     ...request.dispatchTrace, targets: [{ label: '渠道 B / 分组 B', model: 'upstream-model' }], attempts: [{ ...request.dispatchTrace.attempts[0], model: 'upstream-model' }],
   } };
-  assert.equal(describeRequestRoutePath(rewritten), 'requested-model → upstream-model\n渠道 A / 分组 A → 渠道 B / 分组 B');
+  assert.equal(describeRequestRoutePath(rewritten), 'requested-model → upstream-model\n渠道 B / 分组 B\n\n默认候选：渠道 A / 分组 A');
   assert.equal(request.dispatchTrace.attemptCount, 1);
   assert.deepEqual(getRequestResourcePath(request).map(node => node.channel), ['渠道 B']);
   assert.equal(describeRequestRoutePath({}), '');
@@ -43,7 +43,7 @@ test('route tooltip follows actual attempts instead of unused targets or the old
   request.dispatchTrace = readRequestDispatchTrace(request, resources);
   assert.equal(describeRequestRoutePath(request), 'M\n渠道 A / 分组 A');
   assert.equal(request.dispatchTrace.attempts[0].channel, '渠道 A');
-  assert.equal(describeRequestRoutePath({ model: 'M', routeSnapshot: { kind: 'model_rule', channel: 'A' }, endpointChain: ['B::plus::endpoint'] }), 'M\nA → B / plus');
+  assert.equal(describeRequestRoutePath({ model: 'M', routeSnapshot: { kind: 'model_rule', channel: 'A' }, endpointChain: ['B::plus::endpoint'] }), 'M\nB / plus\n\n默认候选：A');
   request.channel = '旧激活渠道';
   request.dispatchTrace.attempts.push({ ...request.dispatchTrace.attempts[0], channel: '渠道 B', credentialGroup: '分组 B', endpoint: '备用端点' });
   assert.equal(describeRequestRoutePath(request), 'M\n渠道 A / 分组 A → 渠道 B / 分组 B');
@@ -66,7 +66,8 @@ test('the list keeps recorded channel and model destinations even when current r
   ], { attempts: 2, requested_model: 'gpt-6-luna', decision: { kind: 'model' },
     default_source: { channel_name: 'ZeroCat', group_name: '混合池' } }) };
   const route = summarizeRequestRoute(request);
-  assert.deepEqual(route.resources, ['ZeroCat / 混合池', 'NewCodex / sale', 'ZeroCat / 稳定']);
+  assert.deepEqual(route.resources, ['NewCodex / sale', 'ZeroCat / 稳定']);
+  assert.equal(route.defaultSourceLabel, 'ZeroCat / 混合池');
   assert.deepEqual(route.models, ['gpt-6-luna', 'gpt-6.1-terra']);
   assert.equal(route.sourceModel, 'gpt-6-luna');
   const blocked = summarizeRequestRoute({ ...request, routeSnapshot: { ...request.routeSnapshot, attempts: 0,
@@ -124,7 +125,7 @@ test('unsent model rules stay hidden and channel-only retries retain only actual
   assert.equal(describeRequestRoutePath(request), 'M\nA / plus → B / plus');
 });
 
-test('Luna routes show the saved origin to pro and exclude the unexecuted second target', () => {
+test('Luna routes keep the saved default candidate separate from pro sends and exclude unused targets', () => {
   for (const model of ['gpt-5.6-luna', 'gpt-6-luna']) {
     const c = { ...candidate('codex', 32, 52, 101), model };
     const request = { provider: 'codex', model, channel: '梭子蟹 API', endpoint: 'main',
@@ -136,9 +137,9 @@ test('Luna routes show the saved origin to pro and exclude the unexecuted second
       }),
     };
     request.dispatchTrace = readRequestDispatchTrace(request);
-    assert.equal(describeRequestRoutePath(request), `${model}\n梭子蟹 API / 不降智 → 梭子蟹 API / pro`);
+    assert.equal(describeRequestRoutePath(request), `${model}\n梭子蟹 API / pro\n\n默认候选：梭子蟹 API / 不降智`);
     const withoutOriginalModel = { ...request, dispatchTrace: { ...request.dispatchTrace, requestedModel: '' } };
-    assert.equal(describeRequestRoutePath(withoutOriginalModel), `${model}\n梭子蟹 API / 不降智 → 梭子蟹 API / pro`);
+    assert.equal(describeRequestRoutePath(withoutOriginalModel), `${model}\n梭子蟹 API / pro\n\n默认候选：梭子蟹 API / 不降智`);
   }
   // Legacy snapshots without a saved origin still retain the actual destination.
   assert.equal(describeRequestRoutePath({ model: 'M', routeSnapshot: { kind: 'model_rule' }, endpointChain: ['B::plus::endpoint'] }), 'M\nB / plus');
@@ -160,7 +161,7 @@ test('model routes also show a destination channel model override without an exp
     { candidate: { ...candidate('codex', 2, 21, 201), model: 'served-model' }, action: 'attempt' },
   ], { requested_model: 'client-model', default_source: { channel_id: 1, group_id: 11 }, decision: { kind: 'model', targets: [{ channel_id: 2, group_id: 21 }] } }) };
   request.dispatchTrace = readRequestDispatchTrace(request, resources);
-  assert.equal(describeRequestRoutePath(request), 'client-model → served-model\n渠道 A / 分组 A → 渠道 B / 分组 B');
+  assert.equal(describeRequestRoutePath(request), 'client-model → served-model\n渠道 B / 分组 B\n\n默认候选：渠道 A / 分组 A');
 });
 
 test('default source names survive renamed or deleted resources without becoming actual attempts', () => {
@@ -195,7 +196,7 @@ test('default source availability never creates a path before any upstream send'
   assert.equal(describeRequestRoutePath(request), '');
 });
 
-test('saved origins precede actual retries without duplicating the first executed resource', () => {
+test('saved origins stay separate from retries without duplicating the first executed resource', () => {
   for (const provider of ['claude', 'codex']) {
     const a = candidate(provider, 1, 11, 101), b = candidate(provider, 2, 21, 201);
     const request = { provider, model: 'test-model', routeSnapshot: trace([
@@ -207,13 +208,44 @@ test('saved origins precede actual retries without duplicating the first execute
     }) };
     request.dispatchTrace = readRequestDispatchTrace(request, resources);
     const actualPath = provider === 'codex' ? '渠道 A / 分组 A → 渠道 B / 分组 B' : 'Claude 渠道 / Claude 分组 → 渠道 #2 / 分组 #21';
-    assert.equal(describeRequestRoutePath(request), `test-model\n历史来源 / 来源分组 → ${actualPath}`);
+    assert.equal(describeRequestRoutePath(request), `test-model\n${actualPath}\n\n默认候选：历史来源 / 来源分组`);
     assert.equal(request.dispatchTrace.attemptCount, 2);
     request.dispatchTrace.defaultSource = { ...request.dispatchTrace.attempts[0] };
     assert.equal(describeRequestRoutePath(request), `test-model\n${actualPath}`);
     request.dispatchTrace.defaultSource = { unavailable: true };
-    assert.equal(describeRequestRoutePath(request), `test-model\n默认渠道不可用 → ${actualPath}`);
+    assert.equal(describeRequestRoutePath(request), `test-model\n${actualPath}\n\n默认候选：不可用`);
   }
+});
+
+test('historical model-rule fallback starts at its actual target and keeps the default candidate separate', () => {
+  const actual = [
+    [38, 55, 100, 'ZeroCat', '稳定', '主站'],
+    [8, 12, 32, 'anyrouter', 'linuxdo', '主站直连'],
+    [8, 12, 34, 'anyrouter', 'linuxdo', '大陆网络优化'],
+    [8, 11, 31, 'anyrouter', 'github', '主站直连'],
+    [8, 11, 33, 'anyrouter', 'github', '大陆网络优化'],
+    [8, 11, 31, 'anyrouter', 'github', '主站直连'],
+  ];
+  const request = {
+    provider: 'codex', model: 'gpt-6-luna',
+    endpointChain: actual.map(([, , , channel, group, endpoint]) => ({ channel, credential_group: group, endpoint, attempts: 1 })),
+    routeSnapshot: trace([
+      { candidate: candidate('codex', 41, 59, 109), action: 'skipped', reason: 'cooldown' },
+      ...actual.map(([channel, group, endpoint]) => ({ candidate: { ...candidate('codex', channel, group, endpoint), model: 'gpt-6-luna' }, action: 'attempt' })),
+    ], {
+      requested_model: 'gpt-6-luna', attempts: 6,
+      default_source: { channel_id: 8, group_id: 12, channel_name: 'anyrouter', group_name: 'linuxdo' },
+      decision: { kind: 'model', mode: 'prefer', fallback_to_default: true, targets: [{ channel_id: 38, group_id: 0 }, { channel_id: 41, group_id: 0 }] },
+    }),
+  };
+  request.dispatchTrace = readRequestDispatchTrace(request);
+  const summary = summarizeRequestRoute(request);
+  assert.deepEqual(summary.resources, ['ZeroCat / 稳定', 'anyrouter / linuxdo', 'anyrouter / github']);
+  assert.equal(summary.defaultSourceLabel, 'anyrouter / linuxdo');
+  assert.equal(describeRequestRoutePath(request, summary), 'gpt-6-luna\nZeroCat / 稳定 → anyrouter / linuxdo → anyrouter / github\n\n默认候选：anyrouter / linuxdo');
+  assert.equal(request.dispatchTrace.attemptCount, 6);
+  assert.equal(request.dispatchTrace.decision.mode, 'prefer');
+  assert.equal(request.dispatchTrace.decision.fallback_to_default, true);
 });
 
 test('every rule kind lists only attempted resources and excludes skipped or unvisited targets', () => {

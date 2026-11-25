@@ -188,13 +188,13 @@ export const summarizeRequestRoute = (request = {}) => {
   const trace = request.dispatchTrace || readRequestDispatchTrace(request);
   const sourceModel = request.originalModelName || request.original_model_name || trace?.requestedModel || '';
   const targetModel = request.modelRewriteTarget || request.model_rewrite_target || request.model || '';
-  // Destinations come only from sends. The saved default source explains where
-  // the route began; it is not another upstream attempt.
+  // Call paths contain only sends. The saved default candidate is separate
+  // configuration evidence and must not look like the first upstream call.
   const nodes = trace?.attempts?.length && !isCodexSearchRequest(request)
     ? trace.attempts
     : getRequestResourcePath({ ...request, dispatchTrace: trace });
   const modelRewrite = !trace && sourceModel && targetModel && sourceModel !== targetModel ? [sourceModel, targetModel] : [];
-  if (!nodes.length) return { paths: [], resources: [], models: modelRewrite, sourceModel };
+  if (!nodes.length) return { paths: [], resources: [], models: modelRewrite, sourceModel, defaultSourceLabel: '' };
   const paths = [];
   const resources = [];
   const models = [];
@@ -212,17 +212,15 @@ export const summarizeRequestRoute = (request = {}) => {
   }
   const snapshot = trace ? null : parseSnapshot(request.routeSnapshot || request.route_snapshot);
   const source = trace?.decision?.kind !== 'default' ? trace?.defaultSource : null;
-  const origin = source?.unavailable ? '默认渠道不可用'
+  const origin = source?.unavailable ? '不可用'
     : [source?.channel, source?.credentialGroup].filter(Boolean).join(' / ')
       || (!trace && snapshot?.kind ? snapshot.channel : '');
-  if (origin && resources[0] !== origin) {
-    resources.unshift(origin);
-    paths[0].resources.unshift(origin);
-  }
-  return { paths, resources, models: models.length ? models : modelRewrite, sourceModel };
+  const defaultSourceLabel = origin && resources[0] !== origin ? origin : '';
+  return { paths, resources, models: models.length ? models : modelRewrite, sourceModel, defaultSourceLabel };
 };
 
 export const describeRequestRoutePath = (request, route = summarizeRequestRoute(request)) => {
   if (!route.paths.length) return route.models.join(' → ');
-  return route.paths.map(path => `${path.model}\n${path.resources.join(' → ')}`).join('\n\n');
+  const actualPath = route.paths.map(path => `${path.model}\n${path.resources.join(' → ')}`).join('\n\n');
+  return route.defaultSourceLabel ? `${actualPath}\n\n默认候选：${route.defaultSourceLabel}` : actualPath;
 };
