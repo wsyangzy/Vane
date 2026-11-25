@@ -122,9 +122,10 @@ export default function DispatchWorkspace({ provider, onError, onSuccess, onMana
         <ConfigurationNotice status={status} /></>}</>}
       {tab === 'resources' && <><div className="dispatch-resource-toolbar"><p>管理渠道、凭证分组与端点；参与方式在调度方案中设置。</p><div role="group" aria-label="渠道资源操作" className="dispatch-resource-actions">{resourceActions}{onManageChannels && <Button type="button" size="sm" variant="secondary" icon={ArrowLeft} onClick={onManageChannels}>管理渠道</Button>}</div></div>{children || <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">请通过渠道管理入口查看和编辑凭证分组及其端点。</p>}</>}
       {tab === 'quota' && <QuotaHealthWorkspace key={provider} provider={provider} balances={state.balances} channels={state.channels} accounts={state.accounts} candidates={state.candidates} quotas={state.quotas} endpoints={endpoints} model={quotaModel} onModelChange={setQuotaModel} busy={busy}
-        onRead={() => perform(async () => { const [quotas, balances] = await Promise.all([listQuotaSnapshots(provider), listManualBalances(provider)]); setState((previous) => ({ ...previous, quotas, balances })); })}
+        onRead={() => perform(async () => { const [quotas, balances] = await Promise.all([listQuotaSnapshots(provider), listManualBalances(provider), reload(), onRefreshResources?.()]); setState((previous) => ({ ...previous, quotas, balances })); })}
         onRefresh={(channelId, groupId, modelScope) => perform(async () => { await refreshQuota(provider, channelId, groupId, modelScope); const [quotas, balances] = await Promise.all([listQuotaSnapshots(provider), listManualBalances(provider)]); setState((previous) => ({ ...previous, quotas, balances })); })}
         onBalanceUpdate={async (input) => { await updateManualBalance(input); await reload(); onSuccess?.('手动余额已更新'); }}
+        onHealthChange={async () => { await reload(); onSuccess?.('端点已允许重新尝试，后续请求会验证上游状态'); }}
         onPreview={() => setTab('profiles')} />}
       {tab === 'runtime' && provider === 'claude' && <RuntimeSettings provider={provider} refreshToken={runtimeRefreshToken} onBusyChange={setBusy} />}
     </div>}

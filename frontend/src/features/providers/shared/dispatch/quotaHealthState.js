@@ -84,3 +84,17 @@ export function filterQuotaHealthChannels(channels, kind, query, { issuesOnly = 
     return candidates.length ? [{ ...group, candidates }] : [];
   }) })).filter((channel) => channel.groups.length);
 }
+
+export function paginateQuotaHealthChannels(channels, requestedPage, pageSize = 8) {
+  const groups = channels.flatMap(channel => channel.groups.map(group => ({ channel, group })));
+  const size = Number.isSafeInteger(pageSize) && pageSize > 0 ? pageSize : 8;
+  const pages = Math.max(1, Math.ceil(groups.length / size));
+  const page = Math.min(pages, Math.max(1, Number.isSafeInteger(requestedPage) ? requestedPage : 1));
+  const start = (page - 1) * size;
+  const visible = new Map();
+  for (const { channel, group } of groups.slice(start, start + size)) {
+    if (!visible.has(channel.id)) visible.set(channel.id, { ...channel, totalGroups: channel.groups.length, groups: [] });
+    visible.get(channel.id).groups.push(group);
+  }
+  return { channels: [...visible.values()], page, pages, total: groups.length, start: groups.length ? start + 1 : 0, end: Math.min(start + size, groups.length) };
+}

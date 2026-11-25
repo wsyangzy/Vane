@@ -28,26 +28,21 @@ export default function LocalRequestFailure({ details, provider }) {
     </div>
     <div className="min-w-0 space-y-3 p-4 text-sm text-amber-950">
       {!repeatsHop && <p className="font-medium leading-6 [overflow-wrap:anywhere]">{details.localSummary}</p>}
-      {details.stopContext?.length > 0 && <div className="space-y-1 text-xs leading-5 text-slate-700">{details.stopContext.map(line => <p key={line} className="[overflow-wrap:anywhere]">{line}</p>)}</div>}
+      {details.stopContext?.length > 0 && <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs leading-5 text-slate-700">{details.stopContext.map(line => <span key={line} className="[overflow-wrap:anywhere]">{line}</span>)}</div>}
       {details.blockingCandidates?.length > 0 && <div className="space-y-1.5">
-        <p className="text-xs font-semibold text-slate-700">本次请求的阻塞记录</p>
+        <p className="text-xs font-semibold text-slate-700">本次请求的阻塞摘要</p>
         <ul className="divide-y divide-amber-200/70 rounded-lg border border-amber-200/80 bg-white/60">
           {details.blockingCandidates.map((item, index) => <li key={`${item.reason}/${item.channel}/${item.credentialGroup}/${index}`} className="min-w-0 space-y-1 px-3 py-2">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600">
               <span className="min-w-0 [overflow-wrap:anywhere]">{[item.channel, item.credentialGroup].filter(Boolean).join(' / ') || '候选未记录'}</span>
               <span className="rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-amber-800">{item.label}</span>
+              {item.endpoints.length > 0 && <span className="min-w-0 text-slate-400 [overflow-wrap:anywhere]" title={item.endpoints.join('、')}>{item.endpoints.length === 1 ? item.endpoints[0] : `${item.endpoints.length} 个端点`}</span>}
             </div>
-            {item.endpoints.length > 0 && <p className="text-xs leading-5 text-slate-500 [overflow-wrap:anywhere]">端点：{item.endpoints.join('、')}</p>}
-            {item.recovery?.costs && <p className="text-xs font-medium leading-5 text-slate-700 [overflow-wrap:anywhere]">{item.recovery.costs}</p>}
-            {item.blockage?.cause && <p className="text-xs leading-5 text-slate-600 [overflow-wrap:anywhere]">触发原因：{describeFailureReason(item.blockage.cause) || item.blockage.cause}</p>}
-            {item.recovery?.recovery && <p className="text-xs leading-5 text-slate-600 [overflow-wrap:anywhere]">{item.recovery.recovery}</p>}
-            {item.recovery?.action && !isHealthCooldown(item.reason) && <p className="text-xs leading-5 text-slate-700 [overflow-wrap:anywhere]">处理：{item.recovery.action}</p>}
-            {item.blockage?.observedAt && <p className="text-xs leading-5 text-slate-400">记录时间：{new Date(item.blockage.observedAt).toLocaleString('zh-CN', { hour12: false })}</p>}
-            <RequestCandidateRecovery target={{ ...item.blockage, provider: item.blockage?.provider || provider }} />
+            <RequestCandidateRecovery key={JSON.stringify([item.blockage?.provider || provider, item.blockage?.channelId, item.blockage?.groupId, item.blockage?.model])} target={{ ...item.blockage, provider: item.blockage?.provider || provider }} />
           </li>)}
         </ul>
         {details.blockingCandidates.some(item => isHealthCooldown(item.reason)) && <p className="text-xs leading-5 text-slate-700">
-          可等待冷却结束，或在请求追踪的「恢复端点」中批量解除冷却。此操作只影响后续请求，不会重放当前失败请求。
+          完整原因与恢复条件在“额度与健康 → 健康与冷却”中查看。解除操作只影响后续请求。
         </p>}
       </div>}
       {details.localHops.length > 0 && <ul className="divide-y divide-amber-200/70 rounded-lg border border-amber-200/80 bg-white/60">
