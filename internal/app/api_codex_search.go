@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/search"
 	codexstore "github.com/wsyangzy/Vane/internal/providers/codex/store"
@@ -158,6 +159,15 @@ func (a *App) populateSearchPolicies(ctx context.Context, profiles []routing.Rou
 		}
 		p.Search.ConfiguredVendors = vendors
 		p.Search.HasAPIKey = slices.Contains(vendors, p.Search.Vendor)
+		p.Search.APIKeyLengths = make(map[string]int, len(vendors))
+		for _, vendor := range vendors {
+			key, err := codexstore.SearchCredential(ctx, a.searchStoreDB(), p.ID, vendor)
+			if err != nil {
+				// Keep the profile editable when a stored credential cannot be opened.
+				continue
+			}
+			p.Search.APIKeyLengths[vendor] = utf8.RuneCountInString(key)
+		}
 	}
 	return nil
 }

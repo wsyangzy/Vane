@@ -36,8 +36,10 @@ test('routing profile contract preserves nullable fallbacks, strings and duratio
   assert.equal(JSON.stringify(payload).includes('never-forward-this'), false);
   assert.equal(JSON.stringify(payload).includes('search-secret-never-in-profile'), false);
 
-  const configured = mapRoutingProfile({ ...dto, search: { ...dto.search, has_api_key: true, configured_vendors: ['brave', 'exa'], service_endpoints: { exa: 'https://example.com/exa/search' } } });
+  const configured = mapRoutingProfile({ ...dto, search: { ...dto.search, has_api_key: true, configured_vendors: ['brave', 'exa'], api_key_lengths: { brave: 32, exa: 48 }, service_endpoints: { exa: 'https://example.com/exa/search' } } });
   assert.deepEqual(configured.search.configuredVendors, ['brave', 'exa']);
+  assert.deepEqual(configured.search.apiKeyLengths, { brave: 32, exa: 48 });
+  assert.deepEqual(model.search.apiKeyLengths, {});
   assert.deepEqual(buildRoutingProfilePayload(configured).search, {
     ...dto.search, service_endpoints: { exa: 'https://example.com/exa/search' }
   });

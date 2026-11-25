@@ -31,6 +31,8 @@ export default function ProfileSearchEditor({ profileId = 0, savedSearch, value,
     return { ...option, badge };
   });
   const hasSavedKey = storedKeyExists(search.vendor);
+  const savedKeyLength = search.apiKeyLengths?.[search.vendor] ?? savedSearch?.apiKeyLengths?.[search.vendor];
+  const savedKeyPlaceholder = savedKeyLength > 0 ? '•'.repeat(savedKeyLength) : '已保存，点击查看';
   const apiKey = draftKeyFor(search.vendor);
   const pendingDeletion = apiKey === '';
   const [showKey, setShowKey] = useState(false);
@@ -95,7 +97,7 @@ export default function ProfileSearchEditor({ profileId = 0, savedSearch, value,
               <input aria-label="搜索服务 API Key" type={showKey ? 'text' : 'password'}
                 className={`${control} pr-16 font-mono placeholder:text-slate-500`} autoComplete="new-password"
                 value={apiKey ?? (showKey ? revealedKey : null) ?? ''}
-                placeholder={pendingDeletion ? '保存后删除凭证' : hasSavedKey ? '••••••••' : '填写搜索服务凭证'}
+                placeholder={pendingDeletion ? '保存后删除凭证' : hasSavedKey ? savedKeyPlaceholder : '填写搜索服务凭证'}
                 disabled={disabled}
                 onChange={event => { keyRequest.current++; setRevealedKey(null); setLoadingKey(false); setKeyError(''); updateKey(event.target.value || undefined); }} />
               <button type="button" aria-label={loadingKey ? '读取搜索密钥' : showKey ? '隐藏搜索密钥' : '显示搜索密钥'}

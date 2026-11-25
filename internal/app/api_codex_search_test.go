@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 	"github.com/wsyangzy/Vane/internal/routing"
@@ -38,6 +39,7 @@ func TestCodexProfileSearchSecretsStaySeparateAndRuntimeUsesCurrentProfile(t *te
 	saved, err := a.SaveCodexRoutingProfile(CodexRoutingProfileInput{Profile: p, SearchAPIKey: &key})
 	require.NoError(t, err)
 	require.True(t, saved.Search.HasAPIKey)
+	require.Equal(t, utf8.RuneCountInString(key), saved.Search.APIKeyLengths["tavily"])
 	encoded, err := json.Marshal(saved)
 	require.NoError(t, err)
 	require.NotContains(t, string(encoded), key)
@@ -131,6 +133,11 @@ func TestCodexSearchAPIKeyRevealIsScopedAndDoesNotChangePublicProfiles(t *testin
 	require.Equal(t, first.Revision, read.Revision)
 	require.Equal(t, "brave", read.Search.Vendor)
 	require.ElementsMatch(t, []string{"brave", "exa", "tavily"}, read.Search.ConfiguredVendors)
+	require.Equal(t, map[string]int{
+		"tavily": utf8.RuneCountInString(firstKey),
+		"brave":  utf8.RuneCountInString(braveKey),
+		"exa":    utf8.RuneCountInString("test-first-profile-exa"),
+	}, read.Search.APIKeyLengths)
 	cfg, err := a.codexSearchConfig(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, "brave", cfg.Vendor)
@@ -145,8 +152,9 @@ func TestCodexSearchAPIKeyRevealIsScopedAndDoesNotChangePublicProfiles(t *testin
 	require.NoError(t, err)
 	first.Search.Vendor = "tavily"
 	first.Search.Endpoint = routing.DefaultSearchEndpoint("tavily")
-	_, err = a.SaveCodexRoutingProfile(CodexRoutingProfileInput{Profile: first, SearchAPIKeys: map[string]string{"tavily": "", "brave": ""}})
+	first, err = a.SaveCodexRoutingProfile(CodexRoutingProfileInput{Profile: first, SearchAPIKeys: map[string]string{"tavily": "", "brave": ""}})
 	require.NoError(t, err)
+	require.Equal(t, map[string]int{"exa": utf8.RuneCountInString("test-first-profile-exa")}, first.Search.APIKeyLengths)
 	cfg, err = a.codexSearchConfig(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, cfg.APIKey, "the other profile's Tavily key must not be used")
@@ -159,6 +167,15 @@ func TestCodexSearchAPIKeyRevealIsScopedAndDoesNotChangePublicProfiles(t *testin
 	_, err = a.storeDB.ExecContext(context.Background(), `UPDATE routing_profiles SET provider='claude' WHERE id=?`, second.ID)
 	require.NoError(t, err)
 	got, err = a.GetCodexSearchAPIKey(second.ID, "tavily")
+	require.Error(t, err)
+	require.Empty(t, got)
+	_, err = a.storeDB.ExecContext(context.Background(), `UPDATE codex_profile_search_credentials SET secret=X'0102' WHERE profile_id=? AND vendor='exa'`, first.ID)
+	require.NoError(t, err)
+	read, err = a.GetRoutingProfile("codex", first.ID)
+	require.NoError(t, err, "an unreadable credential must not block editing the profile")
+	require.Contains(t, read.Search.ConfiguredVendors, "exa")
+	require.NotContains(t, read.Search.APIKeyLengths, "exa")
+	got, err = a.GetCodexSearchAPIKey(first.ID, "exa")
 	require.Error(t, err)
 	require.Empty(t, got)
 }

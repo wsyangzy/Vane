@@ -20,6 +20,7 @@ export function mapRoutingProfile(value) {
       endpoint: value.search?.endpoint ?? 'https://api.tavily.com/search',
       timeoutMs: number(value.search?.timeout, 30e9) / 1e6, maxResults: number(value.search?.max_results, 5),
       hasAPIKey: Boolean(value.search?.has_api_key), configuredVendors: value.search?.configured_vendors || [],
+      apiKeyLengths: value.search?.api_key_lengths || {},
       serviceEndpoints: value.search?.service_endpoints || {},
     } : null,
     classifier: value.classifier ? { enabled: Boolean(value.classifier.enabled), model: value.classifier.model || '', provider: value.classifier.provider || value.provider, channelId: number(value.classifier.channel_id), groupId: number(value.classifier.group_id), timeoutMs: number(value.classifier.timeout, 8e9) / 1e6, confidence: number(value.classifier.confidence), failureMode: value.classifier.failure_mode || 'default' } : null

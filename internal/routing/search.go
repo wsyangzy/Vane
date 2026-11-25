@@ -17,6 +17,7 @@ type SearchPolicy struct {
 	HasAPIKey         bool              `json:"has_api_key"`
 	ServiceEndpoints  map[string]string `json:"service_endpoints,omitempty"`
 	ConfiguredVendors []string          `json:"configured_vendors,omitempty"`
+	APIKeyLengths     map[string]int    `json:"api_key_lengths,omitempty"`
 }
 
 func DefaultSearchPolicy() SearchPolicy {
