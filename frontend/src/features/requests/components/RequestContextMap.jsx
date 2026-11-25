@@ -1,5 +1,6 @@
 import { memo, useMemo, useState } from 'react';
 import { ChevronDown, PanelsTopLeft } from 'lucide-react';
+import Tooltip from '@/shared/ui/Tooltip.jsx';
 import { buildContextMap, contextTileRows, layoutContextTiles } from '../utils/requestInsights.js';
 import { getRequestCacheHitRate } from '../utils/tokenDisplay.js';
 import { isRequestInProgress } from '../utils/requestOutcome.js';
@@ -49,13 +50,15 @@ function ContextTiles({ data, selected, onSelect, capacity, animate, waiting }) 
       {tiles.length ? <div className="request-context-map" role="group" aria-label="输入上下文组成" style={{ width: `${mapWidth}%` }}>
         {tiles.map((tile, index) => {
           const label = `${tile.label} · ${tile.tokens.toLocaleString()} token`;
-          return <button
+          return <Tooltip key={tile.id} asChild content={<div className="space-y-1 text-left">
+            <div className="text-slate-300">{tile.label}</div>
+            <div className="tabular-nums"><strong className="text-sm font-semibold">{tile.tokens.toLocaleString()}</strong><span className="ml-1 text-slate-300">token</span></div>
+          </div>}>
+          <button
             type="button"
-            key={tile.id}
             data-tone={tile.tone}
             aria-label={label}
             aria-pressed={selected === (tile.group || tile.id)}
-            title={label}
             style={{ left: `${tile.x}%`, top: `${tile.y}%`, width: `${tile.width}%`, height: `${tile.height}%`, '--insight-step': index }}
             onClick={() => onSelect(tile.group || tile.id)}
           >
@@ -63,15 +66,21 @@ function ContextTiles({ data, selected, onSelect, capacity, animate, waiting }) 
               <strong>{tile.label}</strong>
               <span><AnimatedMetric value={tile.tokens} live={animate} format="compact" /></span>
             </span>
-          </button>;
+          </button>
+          </Tooltip>;
         })}
       </div> : waiting && <div className="request-context-waiting">正在等待输入上下文</div>}
-      {free > 0 && <div className="request-context-free" title={`剩余 ${free.toLocaleString()} token`}>
+      {free > 0 && <Tooltip asChild content={<div className="space-y-1 text-left">
+        <div className="text-slate-300">剩余空间</div>
+        <div className="tabular-nums"><strong className="text-sm font-semibold">{free.toLocaleString()}</strong><span className="ml-1 text-slate-300">token · {(100 - usedPercent).toFixed(1)}% 可用</span></div>
+      </div>}>
+      <div className="request-context-free" tabIndex={0} aria-label={`剩余 ${free.toLocaleString()} token`}>
         <span className="request-context-tile-label">
           <strong>剩余空间</strong>
           <span>{compactTokens.format(free)} · {(100 - usedPercent).toFixed(1)}%</span>
         </span>
-      </div>}
+      </div>
+      </Tooltip>}
     </div>
     {tiles.length > 0 && <ul className="request-context-legend" aria-label="上下文分类">
       {data.rows.map(row => <li key={row.id}>

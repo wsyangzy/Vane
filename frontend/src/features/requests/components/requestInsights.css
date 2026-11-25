@@ -154,6 +154,7 @@
   .request-context-tile-label > span { display: block; }
 }
 .request-context-map > button[aria-pressed="true"], .request-context-map > button:hover { box-shadow: inset 0 0 0 2px var(--context-color); }
+.request-context-map > button:focus-visible, .request-context-free:focus-visible { outline: 2px solid #818cf8; outline-offset: 1px; }
 .request-context-free { position: relative; min-width: 0; flex: 1; overflow: hidden; border: 1px dashed #cbd5e1; border-radius: 7px; color: #64748b; background: repeating-linear-gradient(135deg, #f1f5f9 0 1px, #fafafa 1px 6px); }
 .request-context-legend { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 8px 0; padding: 0; list-style: none; }
 .request-context-legend button, .request-context-legend > li > span { display: inline-flex; align-items: center; gap: 5px; padding: 4px 5px; border-radius: 4px; color: #475569; font-size: 11px; }
