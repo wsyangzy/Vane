@@ -53,7 +53,7 @@ export default function SubscriptionSettings({ provider = 'claude', value, onCha
     </div>}
     <div className="space-y-2 text-xs leading-5 text-slate-500">
       {!binding.accountId && <p>使用客户端凭证透传时，先在本机 {provider === 'codex' ? 'Codex' : 'Claude Code'} 完成官方登录。</p>}
-      <p>保存分组并加入默认调度方案后，打开右上方「客户端配置」，生成预览并应用专用模板。{binding.accountId ? '使用 Vane 托管账号，无需客户端官方登录。' : '模板会自动补充代理认证，无需手动填写请求头。'}</p>
+      <p>保存分组并加入默认调度方案后，打开「调度方案 → 客户端配置」，生成预览并应用专用模板。{binding.accountId ? '使用 Vane 托管账号，无需客户端官方登录。' : '模板会自动补充代理认证，无需手动填写请求头。'}</p>
     </div>
 
   </div>;

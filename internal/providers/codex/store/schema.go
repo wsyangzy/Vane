@@ -58,6 +58,7 @@ func (m *schemaMigrator) ensureCodexChannelsSchema(ctx context.Context, db *sql.
 			model_mapping TEXT NOT NULL DEFAULT '{}',
 			model_reasoning_effort TEXT NOT NULL DEFAULT 'xhigh',
 			enable_1m_context INTEGER NOT NULL DEFAULT 0,
+			compaction_mode TEXT NOT NULL DEFAULT 'preserve',
 			website TEXT,
 			is_active INTEGER NOT NULL DEFAULT 0,
 			priority INTEGER NOT NULL DEFAULT 0,
@@ -151,6 +152,7 @@ id INTEGER PRIMARY KEY AUTOINCREMENT,
 		{"failover_enabled", `ALTER TABLE codex_channels ADD COLUMN failover_enabled INTEGER NOT NULL DEFAULT 1`},
 		{"non_stream_route", `ALTER TABLE codex_channels ADD COLUMN non_stream_route TEXT`},
 		{"privacy_level", `ALTER TABLE codex_channels ADD COLUMN privacy_level TEXT`},
+		{"compaction_mode", `ALTER TABLE codex_channels ADD COLUMN compaction_mode TEXT NOT NULL DEFAULT 'preserve'`},
 	} {
 		exists, err := sqliteColumnExists(ctx, db, "codex_channels", column.name)
 		if err != nil {

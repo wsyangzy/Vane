@@ -373,6 +373,7 @@ CREATE TABLE IF NOT EXISTS codex_channels (
     failover_enabled INTEGER NOT NULL DEFAULT 1,
     non_stream_route TEXT,                                      -- 非流改道 JSON {"mode","targets"}；NULL 表示关闭
     privacy_level TEXT,                                         -- 隐私级别：NULL=跟随全局 / third_party / trusted
+    compaction_mode TEXT NOT NULL DEFAULT 'preserve',
 
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')

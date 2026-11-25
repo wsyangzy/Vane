@@ -62,7 +62,7 @@ export default function SubscriptionConnectionPreview({ provider, preview, confi
       </div>
       <div className="flex shrink-0 items-center justify-between gap-2 bg-slate-50 px-4 py-2">
         <span className="text-xs font-medium text-slate-600">{provider === 'codex' ? 'config.toml 接入与模型配置' : 'settings.json 接入字段'}</span>
-        <Button type="button" size="sm" variant="ghost" className="gap-1.5" onClick={() => onCopy(preview.snippet)}><Copy size={13} />复制配置</Button>
+        <Button type="button" size="sm" variant="ghost" className="gap-1.5" onClick={() => onCopy(preview.snippet)}><Copy size={13} />复制接入片段</Button>
       </div>
       <div tabIndex={0} aria-label="配置内容" className="scrollbar-visible min-h-0 flex-1 overflow-y-auto overscroll-contain border-y border-slate-100 px-4 py-3 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-200">
         <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-5 text-slate-800">{preview.snippet}</pre>
@@ -72,7 +72,8 @@ export default function SubscriptionConnectionPreview({ provider, preview, confi
         </div>}
       </div>
       <div className="shrink-0 space-y-2 px-4 py-3">
-        <p className="text-xs leading-5 text-slate-500">应用前加密备份原配置，重启 {title} 后生效。{provider === 'codex' && (preview.modelCatalogMode === 'local' ? '模型目录使用所选本地 JSON。' : '模型目录通过 Vane 获取。')}</p>
+        <p className="text-xs leading-5 text-slate-500">点击「备份并应用配置」会加密备份并自动写入目标文件，无需手动粘贴；重启 {title} 后生效。{provider === 'codex' && (preview.modelCatalogMode === 'local' ? '模型目录使用所选本地 JSON。' : '模型目录通过 Vane 获取。')}</p>
+        {provider === 'codex' && <p className="text-xs leading-5 text-slate-500">会话压缩：{preview.compactionMode === 'summary' ? '普通摘要' : preview.compactionMode === 'native' ? '原生压缩' : '保留客户端配置'}。渠道切换与参与方式在 Vane 调度方案中管理，新请求直接生效。</p>}
         <label className="flex items-start gap-2 text-xs leading-5 text-slate-700"><input type="checkbox" checked={confirmed} onChange={(event) => onConfirmedChange(event.target.checked)} disabled={Boolean(busy)} className="mt-0.5 accent-indigo-600" />我已核对目标文件和接入字段，允许将配置写入本机 {title}。</label>
         {stale && <p role="alert" className="text-xs leading-5 text-amber-700">接入设置或配置文件已变化，请重新生成预览。</p>}
         {error && <p role="alert" className="break-words text-xs text-rose-600 [overflow-wrap:anywhere]">{error}</p>}

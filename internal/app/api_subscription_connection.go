@@ -31,6 +31,7 @@ type SubscriptionConnectionCommand struct {
 	ContentRevision  string `json:"content_revision"`
 	ModelCatalogMode string `json:"model_catalog_mode"`
 	ModelCatalogPath string `json:"model_catalog_path"`
+	CompactionMode   string `json:"compaction_mode"`
 }
 
 type SubscriptionConnectionResult struct {
@@ -52,6 +53,8 @@ type SubscriptionConnectionResult struct {
 	ContentRevision  string `json:"content_revision"`
 	ModelCatalogMode string `json:"model_catalog_mode"`
 	ModelCatalogPath string `json:"model_catalog_path"`
+	CompactionMode   string `json:"compaction_mode"`
+	RemoteCompaction string `json:"remote_compaction"`
 }
 
 var subscriptionConnectionMu sync.Mutex
@@ -147,6 +150,10 @@ func (a *App) ManageSubscriptionConnection(input SubscriptionConnectionCommand) 
 		return result, err
 	}
 	if input.Provider == "codex" {
+		compaction, compactionErr := codexservice.ClientCompactionFromConfig(current.Data)
+		if compactionErr == nil {
+			result.CompactionMode, result.RemoteCompaction = compaction.Mode, compaction.RemoteCompaction
+		}
 		catalog, err := codexservice.ClientModelCatalogFromConfig(current.Data)
 		if err != nil && input.Action != "status" {
 			return result, err
@@ -159,6 +166,7 @@ func (a *App) ManageSubscriptionConnection(input SubscriptionConnectionCommand) 
 		result.ModelCatalogMode, result.ModelCatalogPath = catalog.Mode, catalog.Path
 		if !current.Exists {
 			result.ModelCatalogMode = "local"
+			result.CompactionMode = "summary"
 		}
 		if result.ModelCatalogPath == "" {
 			result.ModelCatalogPath = filepath.Join(filepath.Dir(path), "codex-models.json")
@@ -233,9 +241,15 @@ func (a *App) ManageSubscriptionConnection(input SubscriptionConnectionCommand) 
 	if input.Provider == "claude" {
 		updated, snippet, result.Command, err = claudeservice.RenderSubscriptionClient(current.Data, result.BaseURL, key, result.Managed)
 	} else {
-		updated, snippet, result.Command, err = codexservice.RenderClientConfig(current.Data, result.BaseURL, key, result.Managed,
-			codexservice.ClientModelCatalog{Mode: input.ModelCatalogMode, Path: input.ModelCatalogPath})
+		options, optionsErr := a.codexClientConfigOptions(&codexservice.ClientModelCatalog{Mode: input.ModelCatalogMode, Path: input.ModelCatalogPath}, input.CompactionMode)
+		if optionsErr != nil {
+			return result, optionsErr
+		}
+		updated, snippet, result.Command, err = codexservice.RenderClientConfigWithOptions(current.Data, result.BaseURL, key, result.Managed, options)
 		if err == nil {
+			result.CompactionMode = options.CompactionMode
+			compaction, _ := codexservice.ClientCompactionFromConfig(updated)
+			result.RemoteCompaction = compaction.RemoteCompaction
 			catalog, _ := codexservice.ClientModelCatalogFromConfig(updated)
 			result.ModelCatalogMode, result.ModelCatalogPath = catalog.Mode, catalog.Path
 		}

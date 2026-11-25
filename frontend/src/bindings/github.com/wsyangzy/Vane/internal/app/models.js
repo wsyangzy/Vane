@@ -995,6 +995,13 @@ export class CodexChannelInfo {
              */
             this["enable_1m_context"] = false;
         }
+        if (!("compaction_mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["compaction_mode"] = "";
+        }
         if (!("website" in $$source)) {
             /**
              * @member
@@ -2465,6 +2472,13 @@ export class CreateCodexChannelInput {
              * @type {boolean}
              */
             this["enable_1m_context"] = false;
+        }
+        if (!("compaction_mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["compaction_mode"] = "";
         }
         if (!("website" in $$source)) {
             /**
@@ -7238,6 +7252,20 @@ export class SubscriptionConnectionCommand {
              */
             this["model_catalog_path"] = "";
         }
+        if (!("compaction_mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["compaction_mode"] = "";
+        }
+        if (!("remote_compaction" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["remote_compaction"] = "";
+        }
 
         Object.assign(this, $$source);
     }
@@ -7384,6 +7412,13 @@ export class SubscriptionConnectionResult {
              * @type {string}
              */
             this["model_catalog_path"] = "";
+        }
+        if (!("compaction_mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["compaction_mode"] = "";
         }
 
         Object.assign(this, $$source);
@@ -7923,6 +7958,13 @@ export class UpdateCodexChannelInput {
              * @type {boolean}
              */
             this["enable_1m_context"] = false;
+        }
+        if (!("compaction_mode" in $$source)) {
+            /**
+             * @member
+             * @type {string | null}
+             */
+            this["compaction_mode"] = null;
         }
         if (!("website" in $$source)) {
             /**

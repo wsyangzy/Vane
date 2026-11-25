@@ -139,6 +139,7 @@ func (a *App) buildCodexChannelInfo(record *codexstore.CodexChannelRecord, endpo
 		ModelMapping:    copyCodexModelMapping(record.ModelMapping),
 		ReasoningEffort: record.ReasoningEffort,
 		Enable1MContext: record.Enable1MContext,
+		CompactionMode:  record.CompactionMode,
 		Website:         record.Website,
 		IsActive:        record.IsActive,
 		Priority:        record.Priority,

@@ -543,6 +543,15 @@ func normalizeAndValidateCodexChannel(record *store.CodexChannelRecord) error {
 	record.ReasoningEffort = strings.TrimSpace(record.ReasoningEffort)
 	record.Website = strings.TrimSpace(record.Website)
 	record.ModelMapping = normalizeCodexModelMapping(record.ModelMapping)
+	record.CompactionMode = strings.TrimSpace(record.CompactionMode)
+	if record.CompactionMode == "" {
+		record.CompactionMode = "preserve"
+	}
+	switch record.CompactionMode {
+	case "preserve", "native", "summary":
+	default:
+		return fmt.Errorf("渠道会话压缩方式必须为 preserve、native 或 summary")
+	}
 
 	if record.Name == "" {
 		return fmt.Errorf("渠道名不能为空")

@@ -48,3 +48,15 @@ test('catalog validation errors reach the connection panel', async () => {
   const api = await bridge({ ManageSubscriptionConnection: async () => { throw new Error('model_catalog_json 无效'); } });
   await assert.rejects(api.manageSubscriptionConnection('codex', 'preview', { modelCatalogMode: 'local', modelCatalogPath: 'invalid.json' }), /model_catalog_json 无效/);
 });
+
+test('client compaction choice crosses the client configuration boundary', async () => {
+  const calls = [];
+  const api = await bridge({ ManageSubscriptionConnection: async input => {
+    calls.push(input);
+    return { compaction_mode: input.compaction_mode, remote_compaction: 'unsupported' };
+  } });
+  const result = await api.manageSubscriptionConnection('codex', 'preview', { compactionMode: 'summary' });
+  assert.equal(calls[0].compaction_mode, 'summary');
+  assert.equal(result.compactionMode, 'summary');
+  assert.equal(result.remoteCompaction, 'unsupported');
+});

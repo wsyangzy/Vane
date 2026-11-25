@@ -185,7 +185,11 @@ func (a *App) UpdateCodexGlobalConfig(input CodexGlobalConfigInput) error {
 	if !validRoutingAuthToken(localKey) {
 		return fmt.Errorf("应用级代理令牌无效，请先在设置中保存有效令牌")
 	}
-	rendered, _, _, err := codexservice.RenderClientConfig([]byte(updated), baseURL, localKey, a.clientConnectionManaged("codex"))
+	options, err := a.codexClientConfigOptions(nil, "preserve")
+	if err != nil {
+		return fmt.Errorf("读取 Codex 会话压缩方式失败: %w", err)
+	}
+	rendered, _, _, err := codexservice.RenderClientConfigWithOptions([]byte(updated), baseURL, localKey, a.clientConnectionManaged("codex"), options)
 	if err != nil {
 		return fmt.Errorf("生成 Codex 接入配置失败: %w", err)
 	}

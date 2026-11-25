@@ -290,6 +290,7 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 		{"failover_enabled", "ALTER TABLE codex_channels ADD COLUMN failover_enabled INTEGER NOT NULL DEFAULT 1", "Codex 渠道故障转移参与字段"},
 		{"non_stream_route", "ALTER TABLE codex_channels ADD COLUMN non_stream_route TEXT", "Codex 渠道非流改道字段"},
 		{"privacy_level", "ALTER TABLE codex_channels ADD COLUMN privacy_level TEXT", "Codex 渠道隐私级别字段"},
+		{"compaction_mode", "ALTER TABLE codex_channels ADD COLUMN compaction_mode TEXT NOT NULL DEFAULT 'preserve'", "Codex 渠道会话压缩方式"},
 	}
 	modelRouteMigrations := []struct {
 		checkColumn string

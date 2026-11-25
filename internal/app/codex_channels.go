@@ -94,6 +94,7 @@ func (a *App) CreateCodexChannel(input CreateCodexChannelInput) error {
 		input.ReasoningEffort, input.Website, input.Enable1MContext)
 	record.Priority = input.Priority
 	record.FailoverEnabled = input.FailoverEnabled == nil || *input.FailoverEnabled
+	record.CompactionMode = input.CompactionMode
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -182,6 +183,10 @@ func (a *App) UpdateCodexChannelByID(id int64, input UpdateCodexChannelInput) er
 		record.FailoverEnabled = previous.FailoverEnabled
 	} else {
 		record.FailoverEnabled = *input.FailoverEnabled
+	}
+	record.CompactionMode = previous.CompactionMode
+	if input.CompactionMode != nil {
+		record.CompactionMode = *input.CompactionMode
 	}
 	var previousDefaultGroup *codexstore.CodexCredentialGroupRecord
 	var previousPriorityConflict *codexstore.CodexChannelRecord

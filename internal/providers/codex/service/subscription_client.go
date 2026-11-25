@@ -20,6 +20,80 @@ type ClientModelCatalog struct {
 	Path string
 }
 
+type ClientConfigOptions struct {
+	ModelCatalog   *ClientModelCatalog
+	CompactionMode string
+}
+
+// ClientCompactionConfig reports only the configured client capability. A
+// missing or unknown capability does not prove native compaction is supported.
+type ClientCompactionConfig struct {
+	Mode             string
+	RemoteCompaction string
+}
+
+// NormalizeClientCompactionMode defaults new client connections to summary so
+// routing can mix upstreams without depending on opaque compaction state.
+func NormalizeClientCompactionMode(mode string) (string, error) {
+	switch mode {
+	case "":
+		return "summary", nil
+	case "preserve", "native", "summary":
+		return mode, nil
+	default:
+		return "", errors.New("Codex 会话压缩方式不是有效选项")
+	}
+}
+
+func ClientCompactionFromConfig(original []byte) (ClientCompactionConfig, error) {
+	choice := ClientCompactionConfig{Mode: "preserve"}
+	config := map[string]any{}
+	if err := toml.Unmarshal(bytes.TrimPrefix(original, []byte{0xef, 0xbb, 0xbf}), &config); err != nil {
+		return choice, errors.New("Codex config.toml 无效，未修改")
+	}
+	providers, ok := config["model_providers"].(map[string]any)
+	if config["model_providers"] != nil && !ok {
+		return choice, errors.New("Codex model_providers 必须是表")
+	}
+	selected, _ := config["model_provider"].(string)
+	if selected == "" {
+		selected = ClientProviderID
+	}
+	provider, _ := providers[selected].(map[string]any)
+	capabilities, err := clientProviderCapabilities(provider)
+	if err != nil {
+		return choice, err
+	}
+	if value, exists := capabilities["remote_compaction"]; exists {
+		configured, ok := value.(string)
+		if !ok {
+			return choice, errors.New("Codex remote_compaction 必须是字符串，未修改")
+		}
+		choice.RemoteCompaction = configured
+	}
+	switch choice.RemoteCompaction {
+	case "v2":
+		choice.Mode = "native"
+	case "unsupported":
+		choice.Mode = "summary"
+	}
+	return choice, nil
+}
+
+func clientProviderCapabilities(provider map[string]any) (map[string]any, error) {
+	capabilities := map[string]any{}
+	if value, exists := provider["capabilities"]; exists {
+		configured, ok := value.(map[string]any)
+		if !ok {
+			return nil, errors.New("Codex provider capabilities 必须是表，未修改")
+		}
+		for name, value := range configured {
+			capabilities[name] = value
+		}
+	}
+	return capabilities, nil
+}
+
 // ClientModelCatalogFromConfig reports the effective choice without opening the
 // catalog, so a missing file can still be repaired from the connection panel.
 func ClientModelCatalogFromConfig(original []byte) (ClientModelCatalog, error) {
@@ -54,6 +128,18 @@ func clientModelCatalog(config map[string]any) ClientModelCatalog {
 // RenderClientConfig is shared by ordinary Codex settings and client takeover.
 // Omitting catalog keeps the effective choice when ordinary settings are saved.
 func RenderClientConfig(original []byte, baseURL, key string, managed bool, catalogs ...ClientModelCatalog) (content, snippet []byte, command string, err error) {
+	options := ClientConfigOptions{CompactionMode: "preserve"}
+	if len(catalogs) > 0 {
+		options.ModelCatalog = &catalogs[0]
+	}
+	return RenderClientConfigWithOptions(original, baseURL, key, managed, options)
+}
+
+func RenderClientConfigWithOptions(original []byte, baseURL, key string, managed bool, options ClientConfigOptions) (content, snippet []byte, command string, err error) {
+	compactionMode, err := NormalizeClientCompactionMode(options.CompactionMode)
+	if err != nil {
+		return nil, nil, "", err
+	}
 	bom := bytes.HasPrefix(original, []byte{0xef, 0xbb, 0xbf})
 	crlf := bytes.Contains(original, []byte("\r\n"))
 	original = bytes.TrimPrefix(original, []byte{0xef, 0xbb, 0xbf})
@@ -78,6 +164,12 @@ func RenderClientConfig(original []byte, baseURL, key string, managed bool, cata
 		providers = map[string]any{}
 	}
 	selected, _ := config["model_provider"].(string)
+	// The current CLI loads named configs as separate files. Preserve the
+	// client's provider capabilities without consulting legacy profile entries.
+	compactionPrevious, _ := providers[selected].(map[string]any)
+	if existing, ok := providers[ClientProviderID].(map[string]any); ok {
+		compactionPrevious = existing
+	}
 	if profile, ok := config["profile"].(string); ok {
 		if profiles, ok := config["profiles"].(map[string]any); ok {
 			if active, ok := profiles[profile].(map[string]any); ok {
@@ -112,8 +204,8 @@ func RenderClientConfig(original []byte, baseURL, key string, managed bool, cata
 	}
 	config["features"] = features
 	selection := clientModelCatalog(config)
-	if len(catalogs) > 0 && catalogs[0].Mode != "" {
-		selection = catalogs[0]
+	if options.ModelCatalog != nil && options.ModelCatalog.Mode != "" {
+		selection = *options.ModelCatalog
 		switch selection.Mode {
 		case "local":
 			config["model_catalog_json"] = selection.Path
@@ -169,6 +261,33 @@ func RenderClientConfig(original []byte, baseURL, key string, managed bool, cata
 		if value, ok := previous[field]; ok {
 			provider[field] = value
 		}
+	}
+	// Ordinary saves must not silently remove a user's compaction fallback.
+	// Native compaction items are opaque; compatibility is selected in the
+	// client configuration rather than deleting state from proxy requests.
+	capabilities, err := clientProviderCapabilities(previous)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	// Retain unrelated legacy provider capabilities, but the old inline
+	// profile cannot choose compaction for this client entry.
+	delete(capabilities, "remote_compaction")
+	configuredCapabilities, err := clientProviderCapabilities(compactionPrevious)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	for name, value := range configuredCapabilities {
+		capabilities[name] = value
+	}
+	switch compactionMode {
+	case "preserve":
+	case "native":
+		capabilities["remote_compaction"] = "v2"
+	case "summary":
+		capabilities["remote_compaction"] = "unsupported"
+	}
+	if len(capabilities) > 0 {
+		provider["capabilities"] = capabilities
 	}
 	providers[ClientProviderID] = provider
 	config["model_providers"] = providers

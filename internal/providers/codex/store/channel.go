@@ -24,6 +24,7 @@ type CodexChannelRecord struct {
 	ModelMapping    map[string]string `json:"model_mapping"`
 	ReasoningEffort string            `json:"model_reasoning_effort"`
 	Enable1MContext bool              `json:"enable_1m_context"`
+	CompactionMode  string            `json:"compaction_mode"`
 	Website         string            `json:"website,omitempty"`
 	IsActive        bool              `json:"is_active"`
 	Priority        int               `json:"priority"`
@@ -90,7 +91,7 @@ func (s *SQLiteCodexChannelStore) getQuerier() interface {
 
 const codexChannelColumns = `id, name, provider_type, api_key, model, model_reasoning_effort,
 		COALESCE(model_mapping, '{}'), COALESCE(enable_1m_context, 0), COALESCE(website, ''), COALESCE(is_active, 0), COALESCE(priority, 0), COALESCE(failover_enabled, 1),
-		COALESCE(non_stream_route, ''), COALESCE(privacy_level, ''), created_at, updated_at`
+		COALESCE(non_stream_route, ''), COALESCE(privacy_level, ''), COALESCE(NULLIF(compaction_mode, ''), 'preserve'), created_at, updated_at`
 
 func (s *SQLiteCodexChannelStore) Create(ctx context.Context, record *CodexChannelRecord) (*CodexChannelRecord, error) {
 	s.mu.Lock()
@@ -110,8 +111,8 @@ func (s *SQLiteCodexChannelStore) Create(ctx context.Context, record *CodexChann
 	query := `
 		INSERT INTO codex_channels (
 			name, provider_type, api_key, model, model_mapping, model_reasoning_effort,
-			enable_1m_context, website, is_active, priority, failover_enabled
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			enable_1m_context, website, is_active, priority, failover_enabled, compaction_mode
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	result, err := s.getQuerier().ExecContext(
 		ctx,
@@ -127,6 +128,7 @@ func (s *SQLiteCodexChannelStore) Create(ctx context.Context, record *CodexChann
 		boolToInt(record.IsActive),
 		record.Priority,
 		boolToInt(record.FailoverEnabled),
+		record.CompactionMode,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("创建 Codex 渠道失败: %w", err)
@@ -210,7 +212,7 @@ func (s *SQLiteCodexChannelStore) UpdateByID(ctx context.Context, id int64, reco
 	query := `
 		UPDATE codex_channels
 		SET name = ?, provider_type = ?, api_key = ?, model = ?, model_mapping = ?, model_reasoning_effort = ?,
-		    enable_1m_context = ?, website = ?, priority = ?, failover_enabled = ?
+		    enable_1m_context = ?, website = ?, priority = ?, failover_enabled = ?, compaction_mode = ?
 		WHERE id = ?
 	`
 	result, err := s.getQuerier().ExecContext(
@@ -226,6 +228,7 @@ func (s *SQLiteCodexChannelStore) UpdateByID(ctx context.Context, id int64, reco
 		nullIfEmpty(record.Website),
 		record.Priority,
 		boolToInt(record.FailoverEnabled),
+		record.CompactionMode,
 		id,
 	)
 	if err != nil {
@@ -386,6 +389,7 @@ func scanCodexChannelRow(scanner interface {
 		&failoverEnabled,
 		&nonStreamRouteJSON,
 		&record.PrivacyLevel,
+		&record.CompactionMode,
 		&createdAt,
 		&updatedAt,
 	)
