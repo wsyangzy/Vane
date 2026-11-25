@@ -583,7 +583,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			}
 			return
 		}
-		next, recoverable := runtime.NextRecovery(plan, func(candidate routing.DispatchCandidate) (time.Time, bool) {
+		recovered, err := runtime.WaitForRecovery(r.Context(), plan, func(candidate routing.DispatchCandidate) (time.Time, bool) {
 			availability := h.manager.PoolRuntime()
 			ready, valid := availability.HealthReadyAt(candidate.ChannelID, candidate.GroupID, candidate.EndpointID, candidate.Identity().Model)
 			if !valid {
@@ -607,10 +607,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			}
 			return ready, true
 		})
-		if !recoverable {
-			break
-		}
-		if err := plan.Budget.WaitRecovery(r.Context(), time.Until(next)); err != nil {
+		if err != nil {
 			if errors.Is(err, routing.ErrBudgetExhausted) {
 				lastFailure = routing.BudgetStopReason(err)
 			} else {
@@ -618,7 +615,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			}
 			break
 		}
-		if !runtime.Recover(r.Context(), plan) {
+		if !recovered {
 			break
 		}
 	}
