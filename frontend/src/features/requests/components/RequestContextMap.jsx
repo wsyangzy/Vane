@@ -4,7 +4,7 @@ import Tooltip from '@/shared/ui/Tooltip.jsx';
 import { buildContextMap, contextTileRows, layoutContextTiles } from '../utils/requestInsights.js';
 import { getRequestCacheHitRate } from '../utils/tokenDisplay.js';
 import { isRequestInProgress } from '../utils/requestOutcome.js';
-import { revealInsight, useInsightPlayback } from './revealInsight.js';
+import { useInsightPlayback } from './revealInsight.js';
 import AnimatedMetric from './AnimatedMetric.jsx';
 import './requestInsights.css';
 
@@ -39,14 +39,15 @@ function ContextDetails({ rows, selected, onSelect, live }) {
   </>;
 }
 
-function ContextTiles({ data, selected, onSelect, capacity, animate, waiting }) {
+function ContextTiles({ data, selected, onSelect, capacity, animate: animateOnOpen, waiting }) {
+  const [playbackRef, animate] = useInsightPlayback(animateOnOpen);
   const tiles = useMemo(() => layoutContextTiles(contextTileRows(data.rows), data.total), [data.rows, data.total]);
   const used = data.input || data.total;
   const free = Math.max(0, capacity - used);
   const usedPercent = free > 0 ? used / capacity * 100 : 100;
   const mapWidth = free > 0 ? Math.max(30, usedPercent) : 100;
-  return <div className="request-context-contents">
-    <div className="request-context-canvas" data-live={Boolean(animate)} ref={revealInsight}>
+  return <div className="request-context-contents" data-playback={animate === 'waiting' ? 'waiting' : animate ? 'running' : 'idle'}>
+    <div className="request-context-canvas" data-live={Boolean(animate)} data-enter={animate === true} ref={playbackRef}>
       {tiles.length ? <div className="request-context-map" role="group" aria-label="输入上下文组成" style={{ width: `${mapWidth}%` }}>
         {tiles.map((tile, index) => {
           const label = `${tile.label} · ${tile.tokens.toLocaleString()} token`;
@@ -94,7 +95,7 @@ function ContextTiles({ data, selected, onSelect, capacity, animate, waiting }) 
   </div>;
 }
 
-export default memo(function RequestContextMap({ request, animate: animateOnOpen }) {
+export default memo(function RequestContextMap({ request, animate: animateOnOpen = true }) {
   const [playbackRef, animate] = useInsightPlayback(animateOnOpen);
   const [open, setOpen] = useState(true);
   const [selected, setSelected] = useState(null);
@@ -112,10 +113,10 @@ export default memo(function RequestContextMap({ request, animate: animateOnOpen
     <button type="button" className="request-insight-heading request-context-toggle" aria-expanded={open} onClick={() => setOpen(value => !value)}>
       <ChevronDown size={14} /><PanelsTopLeft size={15} /><span className="request-context-title">上下文窗口</span>
       <span className="request-context-source">{source}</span>
-      {(live || displayTotal > 0) && <strong><AnimatedMetric value={displayTotal} live={animate} format="compact" /> token</strong>}
+      {(live || displayTotal > 0) && <strong><AnimatedMetric value={displayTotal} live={open ? animate : false} format="compact" /> token</strong>}
     </button>
     {open && (live || data.rows.length ? <>
-      <div className="request-context-summary" data-cache={cacheHitRate != null} ref={playbackRef}>
+      <div className="request-context-summary" data-cache={cacheHitRate != null} data-playback={animate === 'waiting' ? 'waiting' : animate ? 'running' : 'idle'} ref={playbackRef}>
         <div>
           <span>输入上下文</span>
           <p><strong><AnimatedMetric value={displayTotal} live={animate} /></strong>{windowSize > 0 ? ` / ${windowSize.toLocaleString()}` : ''} token</p>
@@ -129,7 +130,7 @@ export default memo(function RequestContextMap({ request, animate: animateOnOpen
         </div>}
         {(!data.partial || data.input > 0) && <label>参考窗口容量<input inputMode="numeric" maxLength={12} value={capacityInput} placeholder="未设置" onChange={event => setCapacityInput(event.target.value.replace(/[^0-9]/g, ''))} /></label>}
       </div>
-      <ContextTiles data={data} selected={selected} onSelect={onSelect} capacity={windowSize} animate={animate} waiting={live} />
+      <ContextTiles data={data} selected={selected} onSelect={onSelect} capacity={windowSize} animate={animateOnOpen} waiting={live} />
       <p className="request-insight-note">
         {data.calibrated ? '条目占比按请求体估算，总量与上游报告一致。' : data.rows.length > 0 && (data.estimated ? '条目用量按请求体估算。' : '此记录仅包含输入与缓存用量。')}
         {data.partial && '图中只包含此次发送的会话内容。'}

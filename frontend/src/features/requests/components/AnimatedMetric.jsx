@@ -16,15 +16,22 @@ function formatValue(value, format) {
 
 export default memo(function AnimatedMetric({ value, live = false, format = 'number', className }) {
   const target = value == null || !Number.isFinite(Number(value)) ? null : Number(value);
-  const [display, setDisplay] = useState(() => live && target != null ? 0 : target || 0);
-  const current = useRef(display);
   const reducedMotion = typeof window !== 'undefined'
     && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
   const animate = Boolean(live) && !reducedMotion;
   const waiting = live === 'waiting' && !reducedMotion;
+  const [playback, setPlayback] = useState(() => ({ waiting, display: animate ? 0 : target || 0 }));
+  const current = useRef(playback.display);
+  if (playback.waiting !== waiting) {
+    setPlayback({ waiting, display: waiting ? 0 : playback.display });
+  }
 
   useEffect(() => {
-    if (target == null || waiting) return undefined;
+    if (waiting) {
+      current.current = 0;
+      return undefined;
+    }
+    if (target == null) return undefined;
     if (!animate) {
       current.current = target;
       return undefined;
@@ -32,14 +39,15 @@ export default memo(function AnimatedMetric({ value, live = false, format = 'num
 
     const from = current.current;
     if (from === target) return undefined;
-    const startedAt = performance.now();
+    let startedAt;
     let frame = 0;
     const tick = now => {
-      const progress = Math.min(1, (now - startedAt) / 360);
+      startedAt ??= now;
+      const progress = Math.max(0, Math.min(1, (now - startedAt) / 360));
       const eased = progress * (2 - progress);
       const next = from + (target - from) * eased;
       current.current = next;
-      setDisplay(next);
+      setPlayback({ waiting: false, display: next });
       if (progress < 1) frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
@@ -47,6 +55,6 @@ export default memo(function AnimatedMetric({ value, live = false, format = 'num
   }, [target, animate, waiting]);
 
   return <span className={className} aria-live="off">
-    {target == null ? '—' : formatValue(animate ? display : target, format)}
+    {target == null ? '—' : formatValue(waiting ? 0 : animate ? playback.display : target, format)}
   </span>;
 });

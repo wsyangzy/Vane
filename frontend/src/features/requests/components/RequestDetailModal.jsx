@@ -75,7 +75,7 @@ import {
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
 import { describeFailureReason, getRequestFailureDetails, getRequestProtocolDiagnostics } from '../utils/failureSummary.js';
-import { getRequestOutcome, isRequestInProgress } from '../utils/requestOutcome.js';
+import { getRequestOutcome } from '../utils/requestOutcome.js';
 import { describeRouteSnapshot, describeRouteExecution } from '@/features/providers/shared/routing/routeTargets.js';
 
 // Provider responses, local processing and cancellation each have their own presentation.
@@ -249,7 +249,6 @@ const FirstByteDetailBadge = ({ ms, status }) => {
  * 请求详情模态框主组件
  */
 const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialTab = 'overview' }) => {
-  const [animateInsights] = useState(() => isRequestInProgress(request));
   const [tabView, setTabView] = useState(() => ({ active: initialTab, visited: [] }));
   const activeTab = tabView.active;
   const firstChainView = !tabView.visited.includes('chain');
@@ -1320,8 +1319,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
               {auxiliaryRequestMeta
                 ? <RequestAuxiliaryUsage request={request} meta={auxiliaryRequestMeta} />
                 : <>
-                  <RequestContextMap request={request} animate={animateInsights} />
-                  <RequestCostWaterfall request={request} animate={animateInsights} />
+                  <RequestContextMap request={request} />
+                  <RequestCostWaterfall request={request} />
                 </>}
             </div>
           )}

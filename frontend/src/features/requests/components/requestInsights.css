@@ -233,11 +233,14 @@
   .request-fallback-canvas[data-enter="true"] .request-fallback-attempts li:nth-child(-n+6) { animation: request-insight-reveal 300ms var(--insight-ease) calc(110ms + var(--insight-step) * 105ms) backwards; }
   .request-fallback-canvas[data-enter="true"] .request-fallback-end[data-state="answered"] { animation: request-insight-reveal 280ms var(--insight-ease) calc(420ms + var(--insight-last-step) * 105ms) backwards; }
   .request-context-canvas[data-enter="true"] .request-context-map > button { animation: request-context-tile var(--insight-duration) var(--insight-ease) min(160ms, calc(var(--insight-step) * var(--insight-delay))) backwards; }
+  .request-context-contents[data-playback="waiting"] :is(.request-context-map > button, .request-context-free) { opacity: 0; transform: scale(0); }
   .request-context-canvas[data-live="true"] .request-context-map { transition: width 260ms var(--insight-ease); }
   .request-context-canvas[data-live="true"] .request-context-map > button { transform-origin: center; transition: left 260ms var(--insight-ease), top 260ms var(--insight-ease), width 260ms var(--insight-ease), height 260ms var(--insight-ease); }
-  .request-context-meter > i { transition: width 260ms var(--insight-ease); }
+  .request-context-meter > i { transform-origin: left center; transition: width 260ms var(--insight-ease), transform var(--insight-duration) var(--insight-ease); }
+  :is(.request-context-summary, .request-context-contents)[data-playback="waiting"] .request-context-meter > i { transform: scaleX(0); }
   .request-context-canvas[data-enter="true"] .request-context-free { animation: request-context-tile var(--insight-duration) var(--insight-ease) 130ms backwards; }
-  .request-waterfall thead[data-enter="true"] ~ :is(tbody, tfoot) .request-waterfall-track > i { animation: request-waterfall-grow var(--insight-duration) var(--insight-ease) min(160ms, calc(var(--insight-step, 0) * var(--insight-delay))) backwards; }
+  .request-waterfall[data-playback="waiting"] .request-waterfall-track > i { transform: scaleX(0); }
+  .request-waterfall[data-playback="running"] :is(tbody, tfoot) .request-waterfall-track > i { animation: request-waterfall-grow var(--insight-duration) var(--insight-ease) min(160ms, calc(var(--insight-step, 0) * var(--insight-delay))) backwards; }
   .request-waterfall-track > i { transform-origin: left center; }
   .request-waterfall-track > i[data-negative="true"] { transform-origin: right center; }
   .request-waterfall[data-live="true"] .request-waterfall-track > i { transition: left 220ms var(--insight-ease), width 220ms var(--insight-ease); }
@@ -245,5 +248,5 @@
 
 @keyframes request-branch-signal { 0% { opacity: 0; stroke-dashoffset: .22; } 17%, 83% { opacity: 1; } 100% { opacity: 0; stroke-dashoffset: -1; } }
 @keyframes request-insight-reveal { from { opacity: .35; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes request-context-tile { from { opacity: 0; transform: scale(.04); } to { opacity: 1; transform: scale(1); } }
+@keyframes request-context-tile { from { opacity: 0; transform: scale(0); } to { opacity: 1; transform: scale(1); } }
 @keyframes request-waterfall-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }

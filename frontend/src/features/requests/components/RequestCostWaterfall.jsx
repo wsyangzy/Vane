@@ -4,7 +4,7 @@ import { getEndpointChainItems } from '../utils/endpointChain.js';
 import { isRequestInProgress } from '../utils/requestOutcome.js';
 import { accumulateWaterfall, buildContextCostEstimate, buildCostSteps, buildFallbackAttempts, formatRequestInsightCost } from '../utils/requestInsights.js';
 import { getServiceTierMeta } from '../utils/requestMetadata.js';
-import { revealInsight, useInsightPlayback } from './revealInsight.js';
+import { useInsightPlayback } from './revealInsight.js';
 import AnimatedMetric from './AnimatedMetric.jsx';
 import './requestInsights.css';
 
@@ -23,9 +23,9 @@ function WaterfallMetrics({ input, output, cost, time, animate, estimated }) {
   </>;
 }
 
-function WaterfallTrack({ row, scale }) {
+function WaterfallTrack({ row, scale, playbackRef }) {
   return <td className="request-waterfall-plot">
-    <div className="request-waterfall-track" aria-hidden="true">
+    <div className="request-waterfall-track" aria-hidden="true" ref={playbackRef}>
       {row && row.value !== 0 && <i data-negative={row.value < 0} style={{
         left: `${Math.min(row.start, row.end) / scale * 100}%`,
         width: `${Math.abs(row.value) / scale * 100}%`,
@@ -34,7 +34,7 @@ function WaterfallTrack({ row, scale }) {
   </td>;
 }
 
-function WaterfallGroup({ label, detail, Icon, open, toggle, metrics, row, scale, animate }) {
+function WaterfallGroup({ label, detail, Icon, open, toggle, metrics, row, scale, animate, playbackRef }) {
   return <tr className="request-waterfall-group">
     <th scope="row">
       <button type="button" aria-expanded={open} onClick={toggle}>
@@ -43,12 +43,12 @@ function WaterfallGroup({ label, detail, Icon, open, toggle, metrics, row, scale
         <span className="request-waterfall-name"><strong>{label}</strong>{detail && <small>{detail}</small>}</span>
       </button>
     </th>
-    <WaterfallTrack row={row} scale={scale} />
+    <WaterfallTrack row={row} scale={scale} playbackRef={playbackRef} />
     <WaterfallMetrics {...metrics} animate={animate} />
   </tr>;
 }
 
-function WaterfallStep({ row, index, scale, animate, unpriced, nested, open, onToggle }) {
+function WaterfallStep({ row, index, scale, animate, unpriced, nested, open, onToggle, playbackRef }) {
   const Icon = row.residual ? TriangleAlert : row.output != null ? ArrowUpRight : row.id === 'input' ? ArrowDownLeft : Database;
   const label = <>
     {row.estimated ? <i className="request-waterfall-dot" aria-hidden="true" /> : <Icon size={13} aria-hidden="true" />}
@@ -69,13 +69,14 @@ function WaterfallStep({ row, index, scale, animate, unpriced, nested, open, onT
         <ChevronDown size={12} className="request-waterfall-chevron" aria-hidden="true" />{label}
       </button> : <span className="request-waterfall-label">{label}</span>}
     </th>
-    <WaterfallTrack row={row} scale={scale} />
+    <WaterfallTrack row={row} scale={scale} playbackRef={playbackRef} />
     <WaterfallMetrics input={row.input} output={row.output} cost={unpriced ? null : row.cost} animate={animate}
       estimated={row.estimated || row.provisional} />
   </tr>;
 }
 
-export default memo(function RequestCostWaterfall({ request, animate: animateOnOpen }) {
+export default memo(function RequestCostWaterfall({ request, animate: animateOnOpen = true }) {
+  const [summaryRef, summaryAnimate] = useInsightPlayback(animateOnOpen);
   const [playbackRef, animate] = useInsightPlayback(animateOnOpen);
   const data = useMemo(() => buildCostSteps(request), [request]);
   const estimate = useMemo(() => buildContextCostEstimate(request, data), [request, data]);
@@ -128,10 +129,10 @@ export default memo(function RequestCostWaterfall({ request, animate: animateOnO
         <button type="button" aria-pressed={mode === 'tokens'} onClick={() => setMode('tokens')}>Token</button>
       </div>
     </header>
-    <dl className="request-cost-summary" ref={playbackRef}>
-      <div><dt>{live ? '当前成本' : '请求总成本'}</dt><dd>{unpriced ? '未定价' : <>{estimatedUsage && '≈ '}<AnimatedMetric value={data.total} live={animate} format="cost" /></>}</dd></div>
-      <div><dt>{estimatedUsage ? '预计计费 Token' : '计费 Token'}</dt><dd><AnimatedMetric value={data.tokens} live={animate} /><small><AnimatedMetric value={data.input} live={animate} /> 输入 · <AnimatedMetric value={data.output} live={animate} /> 输出</small></dd></div>
-      <div><dt>最高成本分项</dt><dd>{highest?.label || '—'}{highest && <small>{(highest.estimated || highest.provisional) && '≈ '}<AnimatedMetric value={highest.cost} live={animate} format="cost" /></small>}</dd></div>
+    <dl className="request-cost-summary" ref={summaryRef}>
+      <div><dt>{live ? '当前成本' : '请求总成本'}</dt><dd>{unpriced ? '未定价' : <>{estimatedUsage && '≈ '}<AnimatedMetric value={data.total} live={summaryAnimate} format="cost" /></>}</dd></div>
+      <div><dt>{estimatedUsage ? '预计计费 Token' : '计费 Token'}</dt><dd><AnimatedMetric value={data.tokens} live={summaryAnimate} /><small><AnimatedMetric value={data.input} live={summaryAnimate} /> 输入 · <AnimatedMetric value={data.output} live={summaryAnimate} /> 输出</small></dd></div>
+      <div><dt>最高成本分项</dt><dd>{highest?.label || '—'}{highest && <small>{(highest.estimated || highest.provisional) && '≈ '}<AnimatedMetric value={highest.cost} live={summaryAnimate} format="cost" /></small>}</dd></div>
     </dl>
     {estimate && <div className="request-waterfall-input-view">
       <span>输入拆分</span>
@@ -143,9 +144,9 @@ export default memo(function RequestCostWaterfall({ request, animate: animateOnO
     {!live && !steps.length && !attempts.length
       ? <p className="request-insight-empty">此请求暂无计费或执行记录。</p>
       : <div className="request-waterfall-scroll" role="region" aria-label="成本瀑布明细" tabIndex={0}>
-        <table data-live={animateOnOpen} className="request-waterfall" aria-label={mode === 'cost' ? '累计成本分解' : '累计计费 Token 分解'}>
+        <table data-live={Boolean(animate)} data-playback={animate === 'waiting' ? 'waiting' : animate ? 'running' : 'idle'} className="request-waterfall" aria-label={mode === 'cost' ? '累计成本分解' : '累计计费 Token 分解'}>
           <colgroup><col className="request-waterfall-step-col" /><col /><col className="request-waterfall-number-col" span={2} /><col className="request-waterfall-cost-col" /><col className="request-waterfall-number-col" /></colgroup>
-          <thead ref={revealInsight}><tr>
+          <thead><tr>
             <th scope="col">步骤</th>
             <th scope="col" className="request-waterfall-plot"><span className="sr-only">{mode === 'cost' ? '累计成本' : '累计计费 Token'}</span>
               <span className="request-waterfall-axis" aria-hidden="true">
@@ -157,19 +158,19 @@ export default memo(function RequestCostWaterfall({ request, animate: animateOnO
           </tr></thead>
           {steps.length > 0 && <tbody>
             <WaterfallGroup label={showContext ? '上下文与输出' : '计费分项'} detail={pricingDetail} Icon={Layers} open={showBilling}
-              toggle={() => setShowBilling(value => !value)} metrics={metrics} row={showBilling ? null : totalBar} scale={scale} animate={animate} />
+              toggle={() => setShowBilling(value => !value)} metrics={metrics} row={showBilling ? null : totalBar} scale={scale} animate={animate} playbackRef={!showBilling ? playbackRef : undefined} />
             {showBilling && steps.map((row, index) => <Fragment key={row.id}>
-              <WaterfallStep row={row} index={index} scale={scale} animate={animate} unpriced={unpriced}
+              <WaterfallStep row={row} index={index} scale={scale} animate={animate} unpriced={unpriced} playbackRef={index === 0 ? playbackRef : undefined}
                 open={Boolean(expandedContext[row.id])}
                 onToggle={row.entries?.length ? () => setExpandedContext(value => ({ ...value, [row.id]: !value[row.id] })) : undefined} />
               {expandedContext[row.id] && accumulateWaterfall(row.entries || [], mode, row.start).steps.map((entry, entryIndex) =>
-                <WaterfallStep key={entry.id} row={entry} index={entryIndex} scale={scale} animate={false} unpriced={unpriced} nested />)}
+                <WaterfallStep key={entry.id} row={entry} index={entryIndex} scale={scale} animate={animate} unpriced={unpriced} nested />)}
             </Fragment>)}
           </tbody>}
           {waitingForUsage && <tbody><tr><td colSpan={6} className="request-waterfall-waiting">请求用量会随上游响应更新</td></tr></tbody>}
           {attempts.length > 0 && <tbody>
             <WaterfallGroup label="上游尝试" detail={attemptCount ? `${attemptCount} 次` : `${attempts.length} 个链路节点`} Icon={Server} open={showAttempts}
-              toggle={() => setShowAttempts(value => !value)} animate={animate} />
+              toggle={() => setShowAttempts(value => !value)} animate={animate} playbackRef={!steps.length ? playbackRef : undefined} />
             {showAttempts && attempts.map((row, index) => <tr className="request-waterfall-child" key={row.id} data-outcome={row.state}>
               <th scope="row"><span className="request-waterfall-label">
                 <Server size={13} aria-hidden="true" />
@@ -184,7 +185,7 @@ export default memo(function RequestCostWaterfall({ request, animate: animateOnO
           </tbody>}
           <tfoot><tr className="request-waterfall-total">
             <th scope="row">{live ? '当前累计' : '请求合计'}</th>
-            <WaterfallTrack row={totalBar} scale={scale} />
+            <WaterfallTrack row={totalBar} scale={scale} playbackRef={!steps.length && !attempts.length ? playbackRef : undefined} />
             <WaterfallMetrics {...metrics} time={live ? null : request.duration} animate={animate} />
           </tr></tfoot>
         </table>
