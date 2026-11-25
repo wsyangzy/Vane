@@ -76,6 +76,20 @@ export class Activity {
              */
             this["rule_hits"] = [];
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {ActivityFieldHit[] | undefined}
+             */
+            this["field_hits"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["field_hits_limited"] = undefined;
+        }
         if (!("scan_duration_ms" in $$source)) {
             /**
              * @member
@@ -122,11 +136,89 @@ export class Activity {
      */
     static createFrom($$source = {}) {
         const $$createField7_0 = $$createType1;
+        const $$createField8_0 = $$createType3;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("rule_hits" in $$parsedSource) {
             $$parsedSource["rule_hits"] = $$createField7_0($$parsedSource["rule_hits"]);
         }
+        if ("field_hits" in $$parsedSource) {
+            $$parsedSource["field_hits"] = $$createField8_0($$parsedSource["field_hits"]);
+        }
         return new Activity(/** @type {Partial<Activity>} */($$parsedSource));
+    }
+}
+
+/**
+ * ActivityFieldHit describes one rule in one sanitized field path.
+ * ReplacementMode is a strategy identifier, never the replacement text.
+ */
+export class ActivityFieldHit {
+    /**
+     * Creates a new ActivityFieldHit instance.
+     * @param {Partial<ActivityFieldHit>} [$$source = {}] - The source object to create the ActivityFieldHit.
+     */
+    constructor($$source = {}) {
+        if (!("path" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["path"] = "";
+        }
+        if (!("rule_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["rule_id"] = 0;
+        }
+        if (!("rule_name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["rule_name"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["kind"] = undefined;
+        }
+        if (!("action" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["action"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["replacement_mode"] = undefined;
+        }
+        if (!("count" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["count"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ActivityFieldHit instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ActivityFieldHit}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ActivityFieldHit(/** @type {Partial<ActivityFieldHit>} */($$parsedSource));
     }
 }
 
@@ -357,14 +449,14 @@ export class Overview {
      * @returns {Overview}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType3;
-        const $$createField1_0 = $$createType4;
-        const $$createField2_0 = $$createType6;
-        const $$createField3_0 = $$createType8;
-        const $$createField4_0 = $$createType10;
-        const $$createField5_0 = $$createType12;
-        const $$createField6_0 = $$createType13;
-        const $$createField7_0 = $$createType15;
+        const $$createField0_0 = $$createType5;
+        const $$createField1_0 = $$createType6;
+        const $$createField2_0 = $$createType8;
+        const $$createField3_0 = $$createType10;
+        const $$createField4_0 = $$createType12;
+        const $$createField5_0 = $$createType14;
+        const $$createField6_0 = $$createType15;
+        const $$createField7_0 = $$createType17;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("activity" in $$parsedSource) {
             $$parsedSource["activity"] = $$createField0_0($$parsedSource["activity"]);
@@ -441,7 +533,7 @@ export class Preset {
      * @returns {Preset}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType17;
+        const $$createField3_0 = $$createType19;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("rules" in $$parsedSource) {
             $$parsedSource["rules"] = $$createField3_0($$parsedSource["rules"]);
@@ -637,7 +729,7 @@ export class RequestPreviewResult {
      */
     static createFrom($$source = {}) {
         const $$createField6_0 = $$createType1;
-        const $$createField7_0 = $$createType19;
+        const $$createField7_0 = $$createType21;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("rule_hits" in $$parsedSource) {
             $$parsedSource["rule_hits"] = $$createField6_0($$parsedSource["rule_hits"]);
@@ -929,10 +1021,10 @@ export class Settings {
      * @returns {Settings}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType20;
-        const $$createField6_0 = $$createType13;
-        const $$createField8_0 = $$createType13;
-        const $$createField9_0 = $$createType21;
+        const $$createField5_0 = $$createType22;
+        const $$createField6_0 = $$createType15;
+        const $$createField8_0 = $$createType15;
+        const $$createField9_0 = $$createType23;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("categories" in $$parsedSource) {
             $$parsedSource["categories"] = $$createField5_0($$parsedSource["categories"]);
@@ -1130,23 +1222,25 @@ export class UnscannedPathStat {
 // Private type creation functions
 const $$createType0 = RuleHit.createFrom;
 const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = Activity.createFrom;
+const $$createType2 = ActivityFieldHit.createFrom;
 const $$createType3 = $Create.Array($$createType2);
-const $$createType4 = Settings.createFrom;
-const $$createType5 = StoredRule.createFrom;
-const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = LegacyRule.createFrom;
+const $$createType4 = Activity.createFrom;
+const $$createType5 = $Create.Array($$createType4);
+const $$createType6 = Settings.createFrom;
+const $$createType7 = StoredRule.createFrom;
 const $$createType8 = $Create.Array($$createType7);
-const $$createType9 = UnscannedPathStat.createFrom;
+const $$createType9 = LegacyRule.createFrom;
 const $$createType10 = $Create.Array($$createType9);
-const $$createType11 = Preset.createFrom;
+const $$createType11 = UnscannedPathStat.createFrom;
 const $$createType12 = $Create.Array($$createType11);
-const $$createType13 = $Create.Array($Create.Any);
-const $$createType14 = BuiltinMatcherInfo.createFrom;
-const $$createType15 = $Create.Array($$createType14);
-const $$createType16 = Rule.createFrom;
+const $$createType13 = Preset.createFrom;
+const $$createType14 = $Create.Array($$createType13);
+const $$createType15 = $Create.Array($Create.Any);
+const $$createType16 = BuiltinMatcherInfo.createFrom;
 const $$createType17 = $Create.Array($$createType16);
-const $$createType18 = PreviewField.createFrom;
+const $$createType18 = Rule.createFrom;
 const $$createType19 = $Create.Array($$createType18);
-const $$createType20 = $Create.Map($Create.Any, $Create.Any);
-const $$createType21 = $Create.Map($Create.Any, $Create.Any);
+const $$createType20 = PreviewField.createFrom;
+const $$createType21 = $Create.Array($$createType20);
+const $$createType22 = $Create.Map($Create.Any, $Create.Any);
+const $$createType23 = $Create.Map($Create.Any, $Create.Any);

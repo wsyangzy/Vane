@@ -108,6 +108,7 @@ const getRequests = async (params = {}) => {
   // 构建 Wails 绑定参数对象
   // 注意：前端 buildQueryParams() 返回 start_date/end_date（带下划线）
   const queryParams = {
+    request_id: params.request_id || '',
     page: parseInt(params.page || 1),
     page_size: parseInt(params.limit || params.pageSize || 50),
     start_date: params.start_date || params.start_time || params.startDate || '',
@@ -123,7 +124,7 @@ const getRequests = async (params = {}) => {
     provider: params.provider || ''
   };
 
-  const incremental = Boolean(queryParams.completed_since || queryParams.completed_before);
+  const incremental = Boolean(queryParams.request_id || queryParams.completed_since || queryParams.completed_before);
   if (!incremental) console.log('🔍 [Wails] GetRequests 参数:', queryParams);
   const result = await WailsApp.GetRequests(queryParams);
   if (!incremental) console.log('🔍 [Wails] GetRequests 返回:', result);
@@ -158,8 +159,10 @@ const getRequests = async (params = {}) => {
     privacy_redaction_summary: r.privacy_redaction_summary || '',
     privacyRedacted: Boolean(r.privacy_redacted),
     privacyRedactionSummary: r.privacy_redaction_summary || '',
+    context_summary: r.context_summary || '',
     provider: r.provider || '',
     status: r.status,
+    in_progress: r.in_progress,
     // 终态枚举；历史行与进行中的请求为空
     stream_outcome: r.stream_outcome || '',
     streamOutcome: r.stream_outcome || '',

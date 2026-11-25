@@ -17,12 +17,13 @@ type codexSSEDecoder struct {
 }
 
 type codexSSEEvent struct {
-	raw       []byte
-	data      []byte
-	frame     map[string]any
-	output    bool
-	completed bool
-	err       *UpstreamStreamError
+	raw                         []byte
+	data                        []byte
+	frame                       map[string]any
+	output                      bool
+	completed                   bool
+	err                         *UpstreamStreamError
+	outputBytes, reasoningBytes int
 }
 
 func (d *codexSSEDecoder) line(line []byte) *codexSSEEvent {
@@ -121,16 +122,38 @@ func parseCodexSSEEvent(event string, data []byte) *codexSSEEvent {
 		_, item := e.frame["item"].(map[string]any)
 		_, part := e.frame["part"].(map[string]any)
 		e.output = strings.HasSuffix(typ, ".delta") && delta || strings.HasPrefix(typ, "response.output_item.") && item || strings.HasPrefix(typ, "response.content_part.") && part
+		text, _ := e.frame["delta"].(string)
+		switch typ {
+		case "response.output_text.delta", "response.refusal.delta", "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
+			e.outputBytes = len(text)
+		case "response.reasoning_text.delta":
+			e.reasoningBytes = len(text)
+		}
 	}
 	// Keep the existing OpenAI-compatible Chat Completions SSE support. Both
 	// consumers share [DONE] handling, including usage-only final chunks.
 	if choices, ok := e.frame["choices"].([]any); ok {
 		for _, choice := range choices {
 			if c, ok := choice.(map[string]any); ok {
-				_, delta := c["delta"].(map[string]any)
+				fragment, delta := c["delta"].(map[string]any)
 				_, message := c["message"].(map[string]any)
-				_, text := c["text"].(string)
-				e.output = e.output || delta || message || text
+				text, textPresent := c["text"].(string)
+				e.output = e.output || delta || message || textPresent
+				e.outputBytes += len(text)
+				if delta {
+					content, _ := fragment["content"].(string)
+					reasoning, _ := fragment["reasoning_content"].(string)
+					e.outputBytes += len(content)
+					e.reasoningBytes += len(reasoning)
+					if calls, ok := fragment["tool_calls"].([]any); ok {
+						for _, item := range calls {
+							call, _ := item.(map[string]any)
+							function, _ := call["function"].(map[string]any)
+							arguments, _ := function["arguments"].(string)
+							e.outputBytes += len(arguments)
+						}
+					}
+				}
 			}
 		}
 	}

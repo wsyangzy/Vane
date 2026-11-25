@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { getModelBrand } from '../utils/modelBrand.js';
+import { getModernGptColor } from '../utils/gptModelColors.js';
 
 const source = fs.readFileSync(new URL('./ModelTag.jsx', import.meta.url), 'utf8');
 
@@ -61,12 +62,18 @@ test('gpt-5.6 codename variants get distinct colors', () => {
   assert.equal(new Set(styleLines).size, 3, 'sol / terra / luna must not share a color');
 });
 
-test('gpt-6-astra uses an OpenAI icon and a dedicated model style', () => {
-  assert.match(source, /GPT6_CODENAME_COLOR_MAP/);
-  assert.match(source, /astra:\s*createModelStyle\([^\n]*'openai'\)/);
+test('known GPT-6 models retain distinct colors across codenames and versions', () => {
+  const known = ['gpt-6-astra', 'gpt-6.2-astra', 'gpt-6.1-sol', 'gpt-6.2-sol', 'gpt-6.1-terra', 'gpt-6-luna'];
+  assert.equal(new Set(known.map(getModernGptColor)).size, known.length);
+  assert.equal(getModernGptColor('openai/gpt-6.2-sol-preview'), getModernGptColor('gpt-6.2-sol'));
+});
 
-  const gpt6Index = source.indexOf('const gpt6ColorClasses = getGpt6ColorClasses(lowerName)');
-  const gpt5Index = source.indexOf('const gpt5ColorClasses = getGpt5ColorClasses(lowerName)');
-  assert.ok(gpt6Index > 0, 'gpt-6 lookup must exist');
-  assert.ok(gpt5Index > gpt6Index, 'gpt-6 lookup must precede the gpt-5 fallback');
+test('future GPT models use stable colors without presets', () => {
+  const future = ['gpt-6.3-nova', 'gpt-6.4-sol', 'gpt-7', 'gpt-7.1-nova-lite'];
+  const colors = future.map(getModernGptColor);
+  assert.ok(colors.every(color => color?.startsWith('bg-')));
+  assert.ok(new Set(colors).size > 1);
+  assert.equal(getModernGptColor('openai/gpt-6-3-nova'), colors[0]);
+  assert.equal(getModernGptColor('gpt-5.6-sol'), null);
+  assert.equal(getModernGptColor('claude-opus-4-8'), null);
 });

@@ -9,17 +9,23 @@ import { Waves, RefreshCw, Route, Layers, Calculator, Search, ChevronRight } fro
 import { LoadingSpinner, Tooltip } from '@/shared/ui/index.js';
 import { formatCost, formatDuration, formatNumber, formatTimestamp } from '@/services/http/api.js';
 import DurationBadge from './DurationBadge.jsx';
+import AnimatedMetric from './AnimatedMetric.jsx';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
 import Pagination from './Pagination.jsx';
 import RequestRouteCell from './RequestRouteCell.jsx';
 import RequestChannelTooltip from './RequestChannelTooltip.jsx';
-import { describeRequestRoutePath } from '../utils/dispatchTrace.js';
+import { summarizeRequestRoute } from '../utils/dispatchTrace.js';
+import { isHealthCooldown } from '../utils/blockage.js';
 import { getDisplayInputTokens } from '../utils/tokenDisplay.js';
+import { isRequestInProgress } from '../utils/requestOutcome.js';
+import { getRequestLatency } from '../utils/requestLatency.js';
+import { useRequestClock } from '../hooks/useRequestClock.js';
 import { auxiliaryColumnLayout, requestColumnLayout, requestRowHeight } from '../utils/tableLayout.js';
 import {
   getEndpointChainItems,
   getRequestChannelLabel,
+  getRequestCredentialGroupLabel,
   getRequestResourcePath,
   parseChainNode,
 } from '../utils/endpointChain.js';
@@ -58,61 +64,80 @@ const getReasoningDisplay = (raw, compact) => {
   );
 };
 
-const ChannelCell = ({ request, compact }) => {
+const ChannelCell = ({ request, route, compact }) => {
   const chain = getEndpointChainItems(request);
   const channelLabel = getRequestChannelLabel(request, chain.map(parseChainNode));
   const nodes = getRequestResourcePath(request);
   const transferCount = Math.max(0, nodes.length - 1);
-  const tooltip = <RequestChannelTooltip nodes={nodes} channelLabel={channelLabel} />;
-  const tooltipClasses = 'border-slate-200! bg-white! text-slate-700! max-w-[min(640px,calc(100vw-16px))]!';
+  const trace = request.dispatchTrace;
+  const sent = !['-', '未发送', '待调度'].includes(channelLabel);
+  const group = sent ? getRequestCredentialGroupLabel(request, nodes) : '-';
+  const cooldown = channelLabel === '未发送' && trace?.attemptCount === 0 && trace.skipped?.some(item => isHealthCooldown(item.reason));
+  const tooltip = <RequestChannelTooltip nodes={nodes} channelLabel={channelLabel} resources={route.resources} cooldown={cooldown} />;
 
   return (
-    <span className="inline-flex w-full max-w-full items-center justify-center gap-1 min-w-0">
-      <Tooltip asChild content={tooltip} contentClassName={tooltipClasses}><span className="min-w-0 truncate text-purple-600 text-xs font-medium">{channelLabel}</span></Tooltip>
-      {transferCount > 0 && (
-        <Tooltip asChild content={tooltip} contentClassName={tooltipClasses}><span
-          className={`inline-flex shrink-0 items-center gap-0.5 py-0.5 text-indigo-600 text-[10px] font-medium rounded whitespace-nowrap ${compact ? '' : 'border border-indigo-100 bg-indigo-50 px-1'}`}
-          aria-label={`调用资源切换 ${transferCount} 次`}
-        >
-          <Route className="w-2.5 h-2.5" />
-          {!compact && <span>{transferCount}</span>}
-        </span></Tooltip>
-      )}
-    </span>
+    <Tooltip asChild content={tooltip}>
+      <span tabIndex={0} className="inline-flex max-w-full min-w-0 items-center gap-0.5 align-middle text-xs leading-4">
+        <span className="min-w-0 truncate">
+          <span className="font-medium text-purple-600">{channelLabel}</span>
+          {group !== '-' && <>
+            <span className="text-slate-400"> / </span>
+            <span className="text-slate-600">{group}</span>
+          </>}
+        </span>
+        {transferCount > 0 && (
+          <span
+            className={`inline-flex shrink-0 items-center gap-0.5 rounded text-[10px] font-medium text-indigo-600 ${compact ? '' : 'border border-indigo-100 bg-indigo-50 px-1'}`}
+            aria-label={`调用资源切换 ${transferCount} 次`}
+          >
+            <Route className="w-2.5 h-2.5" />
+            {!compact && <span>{transferCount}</span>}
+          </span>
+        )}
+      </span>
+    </Tooltip>
   );
 };
 
-const FirstByteBadge = ({ ms, status }) => {
+const FirstByteBadge = ({ ms, status, live, compact }) => {
   if (ms === null || ms === undefined) {
     return (
-      <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[11px] text-slate-400 whitespace-nowrap">
-        -
+      <span className={`inline-flex items-center font-mono tabular-nums text-slate-400 whitespace-nowrap ${compact ? 'min-w-0 text-[10px]' : 'rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px]'}`}>
+        {compact ? '—' : '-'}
       </span>
     );
   }
 
-  return <DurationBadge ms={ms} status={status} size="xs" />;
+  return <DurationBadge ms={ms} status={status} live={live} size="xs"
+    className={compact ? `border-transparent! bg-transparent! px-0! py-0! text-[10px]! ${live ? 'text-blue-600!' : 'text-emerald-600!'}` : ''}>
+    <AnimatedMetric value={ms} live={live} format="duration" className="block min-w-0 max-w-full truncate tabular-nums" />
+  </DurationBadge>;
 };
 
-const LatencyCell = ({ request, compact }) => compact ? (
-  <Tooltip asChild content={`用时 ${request.duration ?? '—'}ms / 首字 ${request.firstByteMs ?? '—'}ms`}><span className="inline-flex max-w-full items-center gap-0.5 font-mono text-[10px] tabular-nums">
-    <span className="min-w-0 truncate text-slate-600">{request.duration == null ? '—' : formatDuration(request.duration)}</span>
-    <span className="text-slate-300">/</span>
-    <span className="min-w-0 truncate text-emerald-600">{request.firstByteMs == null ? '—' : formatDuration(request.firstByteMs)}</span>
-  </span></Tooltip>
-) : (
-  <Tooltip asChild content={`用时 ${request.duration ?? '—'}ms / 首字 ${request.firstByteMs ?? '—'}ms`}><div className="inline-flex max-w-full items-center justify-center gap-1 whitespace-nowrap">
-    <DurationBadge ms={request.duration} status={request.status} size="xs" />
-    <FirstByteBadge ms={request.firstByteMs} status={request.status} />
-  </div></Tooltip>
-);
+const LatencyCell = ({ request, compact }) => {
+  const now = useRequestClock(isRequestInProgress(request));
+  const [observedAt] = useState(() => Date.now());
+  const latency = getRequestLatency(request, now, observedAt);
+  const tooltip = `用时 ${formatDuration(latency.durationMs)}${latency.durationLive ? '（计时中）' : ''} / ${latency.firstByteLive ? '首字等待' : '首字'} ${latency.firstByteMs == null ? '—' : formatDuration(latency.firstByteMs)}`;
+
+  return <Tooltip asChild content={tooltip}>
+    <span className="inline-flex min-w-0 max-w-full items-center justify-center gap-1 whitespace-nowrap" aria-live="off">
+      <DurationBadge ms={latency.durationMs} status={request.status} live={latency.durationLive} size="xs"
+        className={compact ? 'border-transparent! bg-transparent! px-0! py-0! text-[10px]! text-slate-600!' : ''}>
+        <AnimatedMetric value={latency.durationMs} live={latency.durationLive} format="duration" className="block min-w-0 max-w-full truncate tabular-nums" />
+      </DurationBadge>
+      <span className={`shrink-0 text-slate-300 ${compact ? '' : 'hidden'}`} aria-hidden="true">/</span>
+      <FirstByteBadge ms={latency.firstByteMs} status={request.status} live={latency.firstByteLive} compact={compact} />
+    </span>
+  </Tooltip>;
+};
 
 /**
  * 渲染单元格内容
  * @param {Object} column - 列配置及当前分配宽度
  * @param {Object} request - 请求数据
  */
-const renderCell = (column, request, onViewDispatch, showDate, auxiliary) => {
+const renderCell = (column, request, onViewDispatch, showDate, auxiliary, route) => {
   const columnId = column.id;
   const compact = column.layoutWidth < 100;
   const tokenText = (value) => value == null ? '—' : column.layoutWidth < 62 ? formatNumber(Number(value)) : value;
@@ -158,7 +183,18 @@ const renderCell = (column, request, onViewDispatch, showDate, auxiliary) => {
       );
     case 'status':
       return <span className={`inline-flex max-w-full [&>div]:max-w-full [&>div]:gap-1 [&>div]:px-1 [&>div]:text-[11px] ${column.layoutWidth < 58 ? '[&_svg]:hidden' : ''}`}><RequestStatusBadge request={request} /></span>;
-    case 'model':
+    case 'model': {
+      const routePath = route.resources.length > 1 || route.defaultSourceLabel ? (
+        <div className="space-y-1.5 text-left">
+          {route.paths.map(({ model, resources }, index) => (
+            <div key={index}>
+              <div>{model}</div>
+              <div className="font-normal text-slate-300">实际发送：{resources.join(' → ')}</div>
+            </div>
+          ))}
+          {route.defaultSourceLabel && <div className="border-t border-slate-700 pt-1.5 font-normal text-slate-400">默认候选：{route.defaultSourceLabel}</div>}
+        </div>
+      ) : route.paths.map(({ model }) => model).join('\n') || route.models.join(' → ');
       return (
         <ModelTag
           compact
@@ -171,12 +207,13 @@ const renderCell = (column, request, onViewDispatch, showDate, auxiliary) => {
           originalModel={request.originalModelName || request.original_model_name || ''}
           rewriteTarget={request.modelRewriteTarget || request.model_rewrite_target || request.model || ''}
           routeSnapshot={request.routeSnapshot || request.route_snapshot}
-          routePath={describeRequestRoutePath(request)}
+          routePath={routePath}
           routeExecuted={request.dispatchTrace?.ruleExecuted ?? null}
         />
       );
+    }
     case 'channel':
-      return <ChannelCell request={request} compact={column.layoutWidth < 88} />;
+      return <ChannelCell request={request} route={route} compact={column.layoutWidth < 112} />;
     case 'serviceTier': {
       const tier = getRequestServiceTierMeta(request);
       if (!tier) return <span className="text-xs text-slate-400">—</span>;
@@ -187,7 +224,7 @@ const renderCell = (column, request, onViewDispatch, showDate, auxiliary) => {
       </Tooltip>;
     }
     case 'endpoint':
-      return <RequestRouteCell request={request} compact={column.layoutWidth < 112} onViewDetails={onViewDispatch ? () => onViewDispatch(request) : undefined} />;
+      return <RequestRouteCell request={request} compact={column.layoutWidth < 90} onViewDetails={onViewDispatch ? () => onViewDispatch(request) : undefined} />;
     case 'duration':
       return <LatencyCell request={request} compact={column.layoutWidth < 126} />;
     case 'inputTokens':
@@ -226,6 +263,7 @@ const AuxiliaryRequestContent = ({ request, meta, onViewDetails }) => {
 const RequestRow = ({ request, columns, rowHeight, onCopyId, onDoubleClick, onViewDispatch, showDate }) => {
   const clickTimer = useRef(null);
   const auxiliary = getAuxiliaryRequestMeta(request);
+  const route = summarizeRequestRoute(request);
 
   useEffect(() => () => clearTimeout(clickTimer.current), []);
 
@@ -253,7 +291,7 @@ const RequestRow = ({ request, columns, rowHeight, onCopyId, onDoubleClick, onVi
           <td key={column.id} data-column-id={column.id} colSpan={column.colSpan || 1} className={`min-w-0 px-0.5 ${column.id === 'endpoint' ? 'py-0.5' : 'py-1.5'} text-center align-middle whitespace-nowrap`}>
             <div className="min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap [&>span]:max-w-full [&>span]:min-w-0">{auxiliary && column.id === 'model'
               ? <AuxiliaryRequestContent request={request} meta={auxiliary} onViewDetails={onDoubleClick} />
-              : renderCell(column, request, onViewDispatch, showDate, auxiliary)}</div>
+              : renderCell(column, request, onViewDispatch, showDate, auxiliary, route)}</div>
           </td>
         ))}
       </tr>

@@ -23,6 +23,7 @@ const (
 	CategoryCache         = "cache"
 	CategoryServer        = "server"
 	CategorySearch        = "search"
+	CategoryBackup        = "backup"
 
 	// 运行配置分类
 	CategoryLogging  = "logging"  // 日志级别/格式
@@ -101,6 +102,7 @@ func NewSettingsService(store settingsstore.SettingsStore) *SettingsService {
 	svc := &SettingsService{
 		store: store,
 		categoryLabels: map[string]CategoryInfo{
+			CategoryBackup: {Name: CategoryBackup, Label: "配置备份", Description: "Claude / Codex 客户端配置的备份与恢复", Order: 11},
 			CategoryAuth: {
 				Name:        CategoryAuth,
 				Label:       "访问鉴权",

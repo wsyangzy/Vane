@@ -205,7 +205,7 @@ test('intent master switch preserves definitions, rules and classifier settings 
 test('model mapping is limited to selected groups and requires an explicit actual model', () => {
   const profile = { ...newRoutingProfile('codex'), name: '默认', members: [{ channelId: 1, groupId: 11, enabled: true }, { channelId: 1, groupId: 12, enabled: false }] };
   assert.equal(mappingTargetAllowed(profile, { channelId: 1, groupId: 11 }), true);
-  for (const target of [{ channelId: 2, groupId: 11 }, { channelId: 1, groupId: 12 }, { channelId: 1, groupId: 0 }, { profileId: 2, channelId: 1, groupId: 11 }]) {
+  for (const target of [{ channelId: 2, groupId: 11 }, { channelId: 1, groupId: 12 }, { profileId: 2, channelId: 1, groupId: 11 }]) {
     assert.equal(mappingTargetAllowed(profile, target), false);
   }
   profile.rules = [{ kind: 'mapping', enabled: true, matchModel: 'client-model', targets: [{ channelId: 1, groupId: 11, upstreamModel: '' }] }];
@@ -216,6 +216,29 @@ test('model mapping is limited to selected groups and requires an explicit actua
   assert.match(validateProfileDraft(profile), /已参与/);
   profile.rules[0].enabled = false;
   assert.equal(validateProfileDraft(profile), '');
+});
+
+test('channel-wide model mapping follows participating groups for both providers', async () => {
+  const { ruleDraftIssue } = await import('./dispatchState.js');
+  for (const provider of ['claude', 'codex']) {
+    const profile = { ...newRoutingProfile(provider), name: '全部已参与分组', members: [
+      { channelId: 1, groupId: 11, enabled: true },
+      { channelId: 1, groupId: 12, enabled: false },
+    ] };
+    const target = { channelId: 1, groupId: 0, upstreamModel: 'actual-model' };
+    const rule = { kind: 'mapping', enabled: true, matchModel: 'client-model', targets: [target] };
+    profile.rules = [rule];
+    assert.equal(mappingTargetAllowed(profile, target), true);
+    assert.equal(ruleDraftIssue(profile, rule), '');
+    assert.equal(validateProfileDraft(profile), '');
+    profile.members[0].enabled = false;
+    assert.equal(mappingTargetAllowed(profile, target), false);
+    assert.match(ruleDraftIssue(profile, rule), /已参与/);
+    assert.match(validateProfileDraft(profile), /已参与/);
+    profile.members = [{ channelId: 1, groupId: 0, enabled: true }];
+    assert.equal(mappingTargetAllowed(profile, target), true);
+    assert.equal(mappingTargetAllowed(profile, { ...target, groupId: 12 }), true);
+  }
 });
 
 test('classification input notices count Unicode code points and show truncation limits', () => {

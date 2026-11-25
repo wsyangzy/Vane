@@ -1,11 +1,15 @@
 import { readRequestDispatchTrace } from './dispatchTrace.js';
+import { isCodexSearchRequest } from './endpointChain.js';
+
+const activeStatuses = new Set(['pending', 'received', 'forwarding', 'processing', 'streaming', 'retry', 'suspended', 'awaiting_endpoint']);
+export const isRequestInProgress = request => request?.in_progress ?? activeStatuses.has(request?.status);
 
 // Older Codex rows could archive a clean EOF as success without a completion
 // event. Their finished dispatch snapshot still records the actual outcome.
 export const getRequestOutcome = (request = {}) => {
   const status = String(request.status || '').toLowerCase();
   const stored = request.streamOutcome || request.stream_outcome || '';
-  if (status !== 'completed') return stored;
+  if (status !== 'completed' || isCodexSearchRequest(request)) return stored;
   const trace = request.dispatchTrace || readRequestDispatchTrace(request);
   if (trace?.finished && !trace.successful) {
     const reason = trace.attempts?.at(-1)?.reason || trace.stopReason;

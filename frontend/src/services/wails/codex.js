@@ -293,6 +293,7 @@ const mapCodexChannel = (channel) => {
     modelMapping: normalizeCodexModelMapping(channel.model_mapping || channel.modelMapping),
     reasoningEffort: channel.model_reasoning_effort || '',
     enable1MContext: Boolean(channel.enable_1m_context),
+    compactionMode: channel.compaction_mode || 'preserve',
     website: channel.website || '',
     priority: channel.priority ?? 0,
     failoverEnabled: channel.failover_enabled !== false,
@@ -359,6 +360,8 @@ const buildCodexChannelPayload = (input) => ({
   api_key: (input?.apiKey || '').trim(),
   model: (input?.model || '').trim(),
   model_mapping: normalizeCodexModelMapping(input?.modelMapping || input?.model_mapping),
+  ...(input?.compactionMode !== undefined || input?.compaction_mode !== undefined
+    ? { compaction_mode: input.compactionMode ?? input.compaction_mode } : {}),
   model_reasoning_effort: (input?.reasoningEffort || input?.modelReasoningEffort || '').trim(),
   enable_1m_context: Boolean(input?.enable1MContext || input?.enable_1m_context),
   website: (input?.website || '').trim(),
@@ -507,6 +510,8 @@ const updateCodexEndpointByID = async (id, { name, baseURL, credentialGroupId, f
   return { success: true };
 };
 
+export const updateCodexEndpointPath = (id, pathStrategy) => updateCodexEndpointByID(id, { pathStrategy });
+
 /**
  * 删除端点
  */
@@ -589,3 +594,4 @@ const probeCodexEndpoint = async ({channelId, credentialGroupId, endpointId, bas
     base_url: (baseURL || '').trim(), api_key: apiKey || '', model: model || '', path_strategy: pathStrategy || '', verify_response: verifyResponse});
 };
 export { probeCodexEndpoint };
+export { mapCodexChannel, buildCodexChannelPayload };

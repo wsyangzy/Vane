@@ -10,6 +10,7 @@ import ProfileOverview from './ProfileOverview.jsx';
 import QuotaHealthWorkspace from './QuotaHealthWorkspace.jsx';
 import DispatchTabs from './DispatchTabs.jsx';
 import RuntimeSettings from './RuntimeSettings.jsx';
+import { ClientConnectionButton } from '../subscriptions/SubscriptionManagement.jsx';
 import { dispatchReason, newRoutingProfile, profileChannelIds, profileSwitchBlockReason, summarizeIntentTraces } from './dispatchState.js';
 import { getSettingsByCategory } from '@/services/wails/settings.js';
 import { readDispatchPolicy } from '@/shared/lib/dispatchPolicy.js';
@@ -20,9 +21,9 @@ const emptyState = { profiles: [], channels: [], accounts: [], candidates: [], q
 
 function ConfigurationNotice({ status }) {
   const failures = status?.checks.filter((check) => !check.passed) || [];
-  return <section aria-label="当前方案配置状态" className={`dispatch-configuration rounded-xl border p-3 ${status && !status.ready ? 'border-amber-200 bg-amber-50/60' : 'border-slate-200 bg-white'}`}>
+  return <section aria-label="当前默认方案配置状态" className={`dispatch-configuration rounded-xl border p-3 ${status && !status.ready ? 'border-amber-200 bg-amber-50/60' : 'border-slate-200 bg-white'}`}>
     <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-      <div className="flex min-w-0 items-center gap-2 text-xs"><ShieldCheck size={14} className={status?.ready ? 'text-emerald-500' : 'text-amber-500'} /><span className="font-medium text-slate-700">{status ? status.ready ? '当前方案配置就绪' : '当前方案需要完善' : '当前方案配置尚未检查'}</span></div>
+      <div className="flex min-w-0 items-center gap-2 text-xs"><ShieldCheck size={14} className={status?.ready ? 'text-emerald-500' : 'text-amber-500'} /><span className="font-medium text-slate-700">{status ? status.ready ? '当前默认方案配置就绪' : '当前默认方案需要检查' : '当前默认方案配置尚未检查'}</span></div>
     </div>
     {failures.length > 0 && <ul className="mt-2 space-y-1 text-xs leading-5 text-amber-800">{failures.map((check) => <li key={check.code} className="wrap-anywhere">{check.message || check.code}</li>)}</ul>}
   </section>;
@@ -104,7 +105,8 @@ export default function DispatchWorkspace({ provider, onError, onSuccess, onMana
       finally { setRefreshing(false); }
     });
   };
-  return <div className="dispatch-workspace"><div className="flex min-w-0 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-200"><DispatchTabs tabs={tabs} value={tab} onChange={selectTab} label={`${provider} 调度工作区`} id={tabsId} /><div className="flex shrink-0 items-center gap-2">{onViewRequests && <Button type="button" size="sm" variant="secondary" icon={ListTree} onClick={() => onViewRequests(provider)}>查看调度请求<ArrowUpRight size={12} className="text-slate-400" /></Button>}<Tooltip asChild content="刷新方案与渠道资源"><button type="button" className={iconButton} aria-label="刷新调度工作区" aria-busy={refreshing} disabled={busy || resourcesBusy} onClick={refreshWorkspace}><RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /></button></Tooltip></div></div>
+  return <div className="dispatch-workspace"><div className="flex min-w-0 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-200"><DispatchTabs tabs={tabs} value={tab} onChange={selectTab} label={`${provider} 调度工作区`} id={tabsId} /><div className="flex shrink-0 flex-wrap items-center gap-2">{tab === 'profiles' && <ClientConnectionButton provider={provider} onUpdated={reload} disabled={busy || resourcesBusy} />}{onViewRequests && <Button type="button" size="sm" variant="secondary" icon={ListTree} onClick={() => onViewRequests(provider)}>查看调度请求<ArrowUpRight size={12} className="text-slate-400" /></Button>}<Tooltip asChild content="刷新方案与渠道资源"><button type="button" className={iconButton} aria-label="刷新调度工作区" aria-busy={refreshing} disabled={busy || resourcesBusy} onClick={refreshWorkspace}><RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /></button></Tooltip></div></div>
+    {tab === 'profiles' && <p className="text-xs leading-5 text-slate-500">更新调度规则或切换默认方案后，新请求直接生效。客户端接入选项需应用配置并重启客户端。</p>}
     {inlineError && <div role="alert" className="flex min-w-0 items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700"><AlertCircle size={14} className="shrink-0" /><span className="min-w-0 flex-1 wrap-anywhere">{inlineError}</span>{loadError && <Button type="button" size="sm" variant="ghost" icon={RefreshCw} disabled={busy || loading} onClick={() => reload()}>重试</Button>}</div>}
     {loading ? <p className="py-8 text-center text-xs text-slate-400">加载调度配置…</p> : <div key={tab} id={`${tabsId}-${tab}-panel`} role="tabpanel" aria-labelledby={`${tabsId}-${tab}-tab`} className={`dispatch-tab-panel ${tab === 'profiles' ? editing ? 'dispatch-profile-editor-panel' : 'dispatch-profiles-panel' : 'space-y-3'} animate-in fade-in slide-in-from-bottom-2`}>
       {tab === 'profiles' && <>{editing ? <ProfileEditor key={editing.rowKey} profile={editing} profiles={state.profiles} channels={state.channels} accounts={state.accounts} policy={policy} busy={busy} statistics={intentStatistics(editing.id)} statisticsLoaded={statisticsLoaded} statisticsError={statisticsError} onRefreshStatistics={reloadStatistics} onCancel={() => setEditing(null)} onSave={(profile) => perform(async () => { const saved = await saveRoutingProfile(profile); setSelectedId(saved.id); setEditing(null); await reload(); }, '调度方案已保存')} /> : <><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex min-w-0 items-center gap-2"><Layers size={15} className="shrink-0 text-indigo-500" /><h2 className="text-sm font-semibold text-slate-800">调度方案</h2><span className="text-xs tabular-nums text-slate-400">{state.profiles.length}</span></div><Button type="button" size="sm" variant="secondary" icon={Plus} disabled={busy || !policy} onClick={() => setEditing({ ...newRoutingProfile(provider, !state.profiles.length, policy), rowKey: crypto.randomUUID() })}>新建方案</Button></div>
@@ -122,9 +124,10 @@ export default function DispatchWorkspace({ provider, onError, onSuccess, onMana
         <ConfigurationNotice status={status} /></>}</>}
       {tab === 'resources' && <><div className="dispatch-resource-toolbar"><p>管理渠道、凭证分组与端点；参与方式在调度方案中设置。</p><div role="group" aria-label="渠道资源操作" className="dispatch-resource-actions">{resourceActions}{onManageChannels && <Button type="button" size="sm" variant="secondary" icon={ArrowLeft} onClick={onManageChannels}>管理渠道</Button>}</div></div>{children || <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">请通过渠道管理入口查看和编辑凭证分组及其端点。</p>}</>}
       {tab === 'quota' && <QuotaHealthWorkspace key={provider} provider={provider} balances={state.balances} channels={state.channels} accounts={state.accounts} candidates={state.candidates} quotas={state.quotas} endpoints={endpoints} model={quotaModel} onModelChange={setQuotaModel} busy={busy}
-        onRead={() => perform(async () => { const [quotas, balances] = await Promise.all([listQuotaSnapshots(provider), listManualBalances(provider)]); setState((previous) => ({ ...previous, quotas, balances })); })}
+        onRead={() => perform(async () => { const [quotas, balances] = await Promise.all([listQuotaSnapshots(provider), listManualBalances(provider), reload(), onRefreshResources?.()]); setState((previous) => ({ ...previous, quotas, balances })); })}
         onRefresh={(channelId, groupId, modelScope) => perform(async () => { await refreshQuota(provider, channelId, groupId, modelScope); const [quotas, balances] = await Promise.all([listQuotaSnapshots(provider), listManualBalances(provider)]); setState((previous) => ({ ...previous, quotas, balances })); })}
         onBalanceUpdate={async (input) => { await updateManualBalance(input); await reload(); onSuccess?.('手动余额已更新'); }}
+        onHealthChange={async () => { await reload(); onSuccess?.('端点已允许重新尝试，后续请求会验证上游状态'); }}
         onPreview={() => setTab('profiles')} />}
       {tab === 'runtime' && provider === 'claude' && <RuntimeSettings provider={provider} refreshToken={runtimeRefreshToken} onBusyChange={setBusy} />}
     </div>}

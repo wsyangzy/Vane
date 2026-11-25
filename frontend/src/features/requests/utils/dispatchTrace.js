@@ -1,4 +1,4 @@
-import { getEndpointChainItems, getRequestResourcePath, parseChainNode } from './endpointChain.js';
+import { getEndpointChainItems, getRequestResourcePath, isCodexSearchRequest, parseChainNode } from './endpointChain.js';
 import { mapBlockage } from './blockage.js';
 
 const parseSnapshot = (value) => {
@@ -18,7 +18,12 @@ export function readRequestDispatchTrace(request, resources = []) {
   const profileId = snapshot?.profile_id ?? snapshot?.profileId;
   if (!profileId || !snapshot.decision?.kind) return null;
   const provider = snapshot.provider || request.provider;
-  const history = getEndpointChainItems(request).map((item, index) => parseChainNode(item, index + 1));
+  const events = Array.isArray(snapshot.candidates) ? snapshot.candidates : [];
+  const history = getEndpointChainItems(request).map((item, index) => parseChainNode(item, index + 1)).filter(node => !node.skipReason);
+  // Both records follow send order. Only use that order to recover historical
+  // names without a resource match when all sends are accounted for.
+  const alignedHistory = history.length > 0 && history.every(node => node.attempts > 0)
+    && history.reduce((count, node) => count + node.attempts, 0) === events.filter(event => event?.action === 'attempt' && event.candidate).length;
   const resolve = (candidate, index) => {
     const channel = resources.find(item => item.provider === provider && String(item.id) === String(candidate.channel));
     const endpointId = String(candidate.endpoint || '');
@@ -41,7 +46,7 @@ export function readRequestDispatchTrace(request, resources = []) {
     // The old chain carries names captured during execution. Match it to the
     // resolved identity before using it; repeated attempts keep separate rows.
     const endpointName = endpoint?.name || (endpointId.includes('::') ? key.endpoint : /^\d+$/.test(endpointId) ? '' : endpointId);
-    const matchesHistory = old && (
+    const matchesHistory = old && (alignedHistory ||
       (old.endpoint === endpointName || old.endpoint === endpointId) && (!channel || !old.channel || old.channel === channel.name) && (!group || !old.credentialGroup || old.credentialGroup === group.name)
       || history.length === 1 && old.channel === request.channel && old.endpoint === request.endpoint
     );
@@ -64,7 +69,7 @@ export function readRequestDispatchTrace(request, resources = []) {
   const latestAttempts = new Map();
   const skipped = [];
   const diagnostics = new Map();
-  for (const event of Array.isArray(snapshot.candidates) ? snapshot.candidates : []) {
+  for (const event of events) {
     const candidate = event?.candidate;
     if (!candidate || typeof candidate !== 'object') continue;
     const key = identity(candidate);
@@ -179,31 +184,43 @@ export function readRequestDispatchTrace(request, resources = []) {
   };
 }
 
-export const describeRequestRoutePath = (request = {}) => {
+export const summarizeRequestRoute = (request = {}) => {
   const trace = request.dispatchTrace || readRequestDispatchTrace(request);
   const sourceModel = request.originalModelName || request.original_model_name || trace?.requestedModel || '';
   const targetModel = request.modelRewriteTarget || request.model_rewrite_target || request.model || '';
-  // Destinations come only from sends. The saved default source explains where
-  // the route began; it is not another upstream attempt.
-  const nodes = trace?.attempts?.length ? trace.attempts : getRequestResourcePath({ ...request, dispatchTrace: trace });
-  if (!nodes.length) {
-    return !trace && sourceModel && targetModel && sourceModel !== targetModel ? `${sourceModel} → ${targetModel}` : '';
-  }
+  // Call paths contain only sends. The saved default candidate is separate
+  // configuration evidence and must not look like the first upstream call.
+  const nodes = trace?.attempts?.length && !isCodexSearchRequest(request)
+    ? trace.attempts
+    : getRequestResourcePath({ ...request, dispatchTrace: trace });
+  const modelRewrite = !trace && sourceModel && targetModel && sourceModel !== targetModel ? [sourceModel, targetModel] : [];
+  if (!nodes.length) return { paths: [], resources: [], models: modelRewrite, sourceModel, defaultSourceLabel: '' };
   const paths = [];
+  const resources = [];
+  const models = [];
   for (const node of nodes) {
     const actualModel = node.model || targetModel || sourceModel || '模型未记录';
     const modelLabel = sourceModel && sourceModel !== actualModel ? `${sourceModel} → ${actualModel}` : actualModel;
-    const resource = [node.channel, node.credentialGroup].filter(Boolean).join(' / ') || '渠道未记录';
+    const resource = (node.channel === '搜索服务' ? [node.channel, node.endpoint] : [node.channel, node.credentialGroup])
+      .filter(Boolean).join(' / ') || '渠道未记录';
+    if (resources.at(-1) !== resource) resources.push(resource);
+    if (actualModel !== '模型未记录' && models.at(-1) !== actualModel) models.push(actualModel);
     const previous = paths.at(-1);
     if (previous?.model === modelLabel) {
       if (previous.resources.at(-1) !== resource) previous.resources.push(resource);
     } else paths.push({ model: modelLabel, resources: [resource] });
   }
-  const snapshot = parseSnapshot(request.routeSnapshot || request.route_snapshot);
+  const snapshot = trace ? null : parseSnapshot(request.routeSnapshot || request.route_snapshot);
   const source = trace?.decision?.kind !== 'default' ? trace?.defaultSource : null;
-  const origin = source?.unavailable ? '默认渠道不可用'
+  const origin = source?.unavailable ? '不可用'
     : [source?.channel, source?.credentialGroup].filter(Boolean).join(' / ')
       || (!trace && snapshot?.kind ? snapshot.channel : '');
-  if (origin && paths[0].resources[0] !== origin) paths[0].resources.unshift(origin);
-  return paths.map(path => `${path.model}\n${path.resources.join(' → ')}`).join('\n\n');
+  const defaultSourceLabel = origin && resources[0] !== origin ? origin : '';
+  return { paths, resources, models: models.length ? models : modelRewrite, sourceModel, defaultSourceLabel };
+};
+
+export const describeRequestRoutePath = (request, route = summarizeRequestRoute(request)) => {
+  if (!route.paths.length) return route.models.join(' → ');
+  const actualPath = route.paths.map(path => `${path.model}\n${path.resources.join(' → ')}`).join('\n\n');
+  return route.defaultSourceLabel ? `${actualPath}\n\n默认候选：${route.defaultSourceLabel}` : actualPath;
 };

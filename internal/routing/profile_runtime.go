@@ -127,7 +127,6 @@ type dispatchRequestState struct {
 	stopped         string
 	created         time.Time
 	finished        *time.Time
-	recoveryWaited  bool
 	events          []DispatchTraceEvent
 	stateRejected   map[Candidate]string
 	turnKey         string
@@ -521,21 +520,28 @@ func (r *ProfileRuntime) plan(ctx context.Context, profileID int64, model string
 	turnKey, sessionKey := affinityKeys(ctx, p, turn)
 	plan.state.turnKey, plan.state.sessionKey = turnKey, sessionKey
 	plan.state.scopeHash = routingHash(CallerScope(ctx), p.Provider, fmt.Sprint(p.ID))
-	sameTurn, hasTurn := r.remembered(turnKey, now, preview)
+	var sameTurn, previous profileAffinity
+	hasTurn, hasSession := false, false
 	fromState := false
-	if !hasTurn && !turn.NewTurn {
-		for _, key := range profileStateKeysFromContext(ctx) {
-			if entry, exists := r.remembered(routingHash(plan.state.scopeHash, "state", key), now, preview); exists {
-				sameTurn, hasTurn, fromState = entry, true, true
-				break
+	if native == nil {
+		sameTurn, hasTurn = r.remembered(turnKey, now, preview)
+		if !hasTurn && !turn.NewTurn {
+			for _, key := range profileStateKeysFromContext(ctx) {
+				if entry, exists := r.remembered(routingHash(plan.state.scopeHash, "state", key), now, preview); exists {
+					sameTurn, hasTurn, fromState = entry, true, true
+					break
+				}
 			}
 		}
+		previous, hasSession = r.remembered(sessionKey, now, preview)
 	}
-	previous, hasSession := r.remembered(sessionKey, now, preview)
-	// A saved policy takes effect on the next request. Keep the successful
-	// resource hint, but do not replay a decision made by an older revision.
+	// A saved policy takes effect on the next request. Neither a retained turn
+	// nor a session resource hint may override the newly configured priority.
 	if hasTurn && sameTurn.revision != p.Revision {
 		hasTurn = false
+	}
+	if hasSession && previous.revision != p.Revision {
+		hasSession = false
 	}
 	// Turning off intent routing also disables previously remembered intent
 	// decisions; the upstream remains responsible for protocol-state validation.
@@ -594,6 +600,32 @@ func (r *ProfileRuntime) plan(ctx context.Context, profileID int64, model string
 	return plan
 }
 
+func profileStageTargets(p RoutingProfile, stage profileTargetStage) []RouteTarget {
+	if stage.kind != "mapping" {
+		return stage.targets
+	}
+	targets := []RouteTarget{}
+	for _, target := range stage.targets {
+		if !mappingTargetAllowed(p, target) {
+			continue
+		}
+		if target.GroupID != 0 {
+			targets = append(targets, target)
+			continue
+		}
+		// A channel-wide mapping follows enabled profile members, rather
+		// than admitting every credential group in the channel catalog.
+		for _, member := range p.Members {
+			if member.Enabled && member.ChannelID == target.ChannelID {
+				scoped := target
+				scoped.GroupID = member.GroupID
+				targets = append(targets, scoped)
+			}
+		}
+	}
+	return targets
+}
+
 func (r *ProfileRuntime) populateDispatchPlan(ctx context.Context, config RuntimeConfig, plan *DispatchPlan, preferred *Candidate, now time.Time) {
 	p := plan.Profile
 	plan.Stages = []DispatchPlanStage{}
@@ -602,15 +634,7 @@ func (r *ProfileRuntime) populateDispatchPlan(ctx context.Context, config Runtim
 	plan.Error = ""
 	seen := map[Candidate]bool{}
 	for index, stage := range decisionTargetStages(p, plan.Decision) {
-		targets := stage.targets
-		if stage.kind == "mapping" {
-			targets = nil
-			for _, target := range stage.targets {
-				if mappingTargetAllowed(p, target) {
-					targets = append(targets, target)
-				}
-			}
-		}
+		targets := profileStageTargets(p, stage)
 		cs := expandProfileTargets(config, p, targets, plan.Model)
 		admitted, rejected := []DispatchCandidate{}, []CandidateEvaluation{}
 		compatibility := map[Candidate]string{}
@@ -822,6 +846,57 @@ func (a *DispatchReservation) Commit(ctx context.Context) error {
 	return a.commitLocked(ctx)
 }
 
+// Retry starts another send on the same reservation before any output. The
+// provider owns the reason and retry limit; recovery does not reject the
+// selected candidate or advance rotation. Each send still has its own usage
+// settlement and consumes the shared request budget.
+func (a *DispatchReservation) Retry(ctx context.Context, reason string) error {
+	a.mu.Lock()
+	if a.finished || !a.committed {
+		a.mu.Unlock()
+		return errors.New("dispatch_attempt_not_inflight")
+	}
+	state := a.plan.state
+	state.mu.Lock()
+	if state.responseStarted || state.successful || state.stopped != "" {
+		state.mu.Unlock()
+		a.mu.Unlock()
+		return errors.New("response_already_started")
+	}
+	if check := state.runtime.snapshot().CheckAdmission; check != nil {
+		if reason := check(a.candidate); reason != "" {
+			state.mu.Unlock()
+			a.mu.Unlock()
+			return errors.New(reason)
+		}
+	}
+	if err := a.plan.Budget.Begin(ctx); err != nil {
+		state.mu.Unlock()
+		a.mu.Unlock()
+		return err
+	}
+	settlement := AttemptSettlement{Candidate: a.candidate, ID: a.settlementID, StartedAt: a.startedAt, Usage: a.usage}
+	reason = safeDispatchReason(reason, "upstream_failure")
+	state.appendEvent(DispatchTraceEvent{Candidate: a.candidate.Identity(), Action: "failed", Reason: reason, Scope: ScopeRequest})
+	state.ledger.event(ExecutionEvent{Candidate: a.candidate.Identity(), Action: "failed", Reason: reason, Scope: ScopeRequest})
+	state.runtime.scheduler.CommitSelection(a.plan.Profile, a.plan.EligibleCandidates, a.candidate, false, state.runtime.now())
+	state.ledger.Begin(a.candidate.Identity())
+	state.appendEvent(DispatchTraceEvent{Candidate: a.candidate.Identity(), Action: "attempt"})
+	a.startedAt = state.runtime.now()
+	a.settlementID = fmt.Sprintf("%s/%d/%d", a.plan.RequestID, a.startedAt.UnixNano(), len(state.events))
+	a.usage, a.cachedTokens = AttemptUsage{}, 0
+	publish := state.publish
+	state.mu.Unlock()
+	a.mu.Unlock()
+	if settle := state.runtime.snapshot().OnSettlement; settle != nil {
+		settle(settlement)
+	}
+	if publish != nil {
+		publish(a.plan.Trace())
+	}
+	return nil
+}
+
 func (a *DispatchReservation) commitLocked(ctx context.Context) error {
 	if a.finished || a.committed {
 		return errors.New("dispatch_attempt_already_committed")
@@ -955,6 +1030,9 @@ func safeDispatchReason(reason, fallback string) string {
 
 func (r *ProfileRuntime) rememberSuccess(plan *DispatchPlan, candidate DispatchCandidate, cachedTokens int64, now time.Time) {
 	state := plan.state
+	if state.native != nil {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry := profileAffinity{candidate: candidate.Identity(), revision: plan.Profile.Revision, decision: plan.Decision, intent: plan.Intent.IntentID, model: plan.Model, cachedTokens: cachedTokens, expires: now.Add(time.Hour), used: now, success: now}
@@ -991,7 +1069,7 @@ func (r *ProfileRuntime) trimAffinityLocked(now time.Time) {
 // RememberResponseStates links protocol state hashes to the completed decision
 // so a previous_response_id-only tool request can retain the original route.
 func (r *ProfileRuntime) RememberResponseStates(plan *DispatchPlan, candidate DispatchCandidate, keys []string) {
-	if plan == nil || plan.state == nil || plan.Preview || len(keys) == 0 {
+	if plan == nil || plan.state == nil || plan.state.native != nil || plan.Preview || len(keys) == 0 {
 		return
 	}
 	plan.state.mu.Lock()

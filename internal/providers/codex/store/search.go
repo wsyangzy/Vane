@@ -63,6 +63,26 @@ func HasSearchCredential(ctx context.Context, db *sql.DB, profileID int64, vendo
 	return count > 0, err
 }
 
+func SearchCredentialVendors(ctx context.Context, db *sql.DB, profileID int64) ([]string, error) {
+	if db == nil {
+		return nil, errors.New("搜索凭证存储未就绪")
+	}
+	rows, err := db.QueryContext(ctx, `SELECT vendor FROM codex_profile_search_credentials WHERE profile_id=? ORDER BY vendor`, profileID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var vendors []string
+	for rows.Next() {
+		var vendor string
+		if err := rows.Scan(&vendor); err != nil {
+			return nil, err
+		}
+		vendors = append(vendors, vendor)
+	}
+	return vendors, rows.Err()
+}
+
 // MigrateLegacySearch preserves an existing global choice once, on the Codex
 // profiles that existed at migration time. New profiles use automatic selection.
 // Metadata, encrypted credentials and removal of plaintext commit together.

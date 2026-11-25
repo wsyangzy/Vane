@@ -17,7 +17,7 @@ export function setIntentRoutingEnabled(profile, enabled) {
 }
 
 export function mappingTargetAllowed(profile, target) {
-  return !target.profileId && profile.members.some((member) => member.enabled && member.channelId === target.channelId && (member.groupId === 0 || member.groupId === target.groupId));
+  return !target.profileId && profile.members.some((member) => member.enabled && member.channelId === target.channelId && (target.groupId === 0 || member.groupId === 0 || member.groupId === target.groupId));
 }
 
 export function ruleDraftIssue(profile, rule) {
@@ -112,13 +112,15 @@ export function validateProfileDraft(profile) {
     if (!['auto', 'native', 'service'].includes(search.mode)) return '请选择有效的搜索线路';
     if (!Number.isInteger(Number(search.maxResults)) || Number(search.maxResults) < 1 || Number(search.maxResults) > 20) return '搜索结果数需为 1–20 的整数';
     if (!Number.isFinite(Number(search.timeoutMs)) || Number(search.timeoutMs) < 1000 || Number(search.timeoutMs) > 120000) return '搜索超时需为 1–120 秒';
-    if (search.endpoint || search.mode === 'service') {
+    const endpoints = Object.values(search.serviceEndpoints || {}).filter(Boolean);
+    if (search.endpoint || search.mode === 'service') endpoints.push(search.endpoint);
+    for (const address of endpoints) {
       try {
-        const endpoint = new URL(search.endpoint);
+        const endpoint = new URL(address);
         if (!['http:', 'https:'].includes(endpoint.protocol) || !endpoint.hostname || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) return '搜索服务地址需为完整的 HTTP(S) 接口地址';
       } catch { return '请输入完整的搜索服务接口地址'; }
     }
-    if (search.apiKey && /\s/.test(search.apiKey)) return '搜索服务 API Key 不能包含空白';
+    if ([search.apiKey, ...Object.values(search.apiKeys || {})].some(key => key && /[\s\u0000]/.test(key))) return '搜索服务 API Key 不能包含空白或控制字符';
   }
   if (!Number.isInteger(Number(profile.maxAttempts)) || Number(profile.maxAttempts) < 1 || Number(profile.maxAttempts) > 100) return '尝试次数需为 1–100 的整数';
   if (!Number.isFinite(Number(profile.maxDurationMs)) || Number(profile.maxDurationMs) < 1000 || Number(profile.maxDurationMs) > 600000) return '调度预算需为 1–600 秒';
@@ -186,10 +188,11 @@ export function credentialGroupRoutingImpact(workspaces, provider, groupId) {
   return workspaces.flatMap((workspace) => workspace.profiles.flatMap((profile) => {
     const ownsGroup = workspace.provider === provider;
     const memberReference = ownsGroup && profile.members.some((member) => member.enabled && matchesGroup(member));
-    const targetReference = ownsGroup && [...profile.rules, ...profile.intents].some((rule) => rule.targets.some(matchesTarget));
+    const ruleReference = ownsGroup && profile.rules.some((rule) => rule.targets.some(matchesTarget));
+    const intentReference = ownsGroup && profile.intents.some((intent) => intent.targets.some(matchesTarget));
     const classifierReference = (profile.classifier?.provider || workspace.provider) === provider && profile.classifier?.groupId === id;
-    if (!memberReference && !targetReference && !classifierReference) return [];
+    if (!memberReference && !ruleReference && !intentReference && !classifierReference) return [];
     const losesLastMember = ownsGroup && profile.members.some((member) => member.enabled && member.groupId === id) && !profile.members.some((member) => member.enabled && member.groupId !== id);
-    return [{ id: profile.id, provider: workspace.provider, name: profile.name, losesLastMember, classifierReference }];
+    return [{ id: profile.id, provider: workspace.provider, name: profile.name, losesLastMember, memberReference, ruleReference, intentReference, classifierReference }];
   }));
 }

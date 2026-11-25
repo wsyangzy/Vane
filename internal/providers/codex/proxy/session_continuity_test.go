@@ -82,7 +82,7 @@ func TestCodexSessionContinuesAfterProfileAndResourceChanges(t *testing.T) {
 	}
 }
 
-func TestCodexUnknownStateUsesUpstreamVerdictWithoutRetry(t *testing.T) {
+func TestCodexUnknownStatePreservesUpstreamVerdictAfterOneRetry(t *testing.T) {
 	sends := 0
 	h, _, _ := newProfileCodexFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		sends++
@@ -92,7 +92,7 @@ func TestCodexUnknownStateUsesUpstreamVerdictWithoutRetry(t *testing.T) {
 	})
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"original","previous_response_id":"unknown","input":[{"type":"reasoning","encrypted_content":"external"}]}`)))
-	if sends != 1 || w.Code != 400 || !strings.Contains(w.Body.String(), "upstream-state-verdict") {
-		t.Fatalf("upstream verdict replaced or retried: sends=%d status=%d body=%s", sends, w.Code, w.Body.String())
+	if sends != 2 || w.Code != 400 || !strings.Contains(w.Body.String(), "upstream-state-verdict") {
+		t.Fatalf("upstream verdict replaced or recovery was not bounded: sends=%d status=%d body=%s", sends, w.Code, w.Body.String())
 	}
 }

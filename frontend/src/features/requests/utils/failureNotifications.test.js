@@ -58,6 +58,28 @@ test('different candidate blocker causes do not share one notification', () => {
   assert.ok(limited.message.some(line => line.includes('每日成本限额')));
 });
 
+test('unsent health cooldowns share a compact notice across rules until the recorded retry window', () => {
+  const groups = createFailureNotificationAggregator();
+  const makeFailure = (id, reason, channel, rule, attempts = 0) => failure(id, {
+    failure_reason: reason,
+    route_snapshot: { profile_id: 7, decision: { kind: 'model', rule_id: rule }, attempts, next_recovery_at: new Date(120000).toISOString(),
+      candidates: [
+        { action: 'skipped', reason: 'cooldown', candidate: { channel } },
+        { action: 'skipped', reason: 'candidate_duplicate', candidate: { channel }, blockage: { reason: 'cooldown' } },
+      ] },
+  });
+  const [first] = groups.consume([makeFailure(1, 'recovery_outside_budget', '1', 2)], 1000);
+  const [next] = groups.consume([makeFailure(2, 'route_unavailable', '2', 3)], 65000);
+  assert.equal(next.id, first.id);
+  assert.equal(next.update, true);
+  assert.equal(next.title, 'Codex 请求未发送');
+  assert.equal(next.message.length, 3);
+  assert.match(next.message[1], /最早可重试时间/);
+  assert.equal(next.message[2], '已合并 2 个请求');
+  const [sent] = groups.consume([makeFailure(3, 'recovery_outside_budget', '1', 2, 1)], 70000);
+  assert.notEqual(sent.id, first.id);
+});
+
 test('poller seeds old records then reads all pages, deduplicating IDs and including long-running requests', async () => {
   let clock = 10000;
   const calls = [];

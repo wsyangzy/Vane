@@ -6,6 +6,7 @@ import (
 
 // QueryOptions represents options for querying usage data
 type QueryOptions struct {
+	RequestID       string
 	StartDate       *time.Time
 	EndDate         *time.Time
 	CompletedSince  *time.Time // Inclusive completion-time bound, independent of request start time.
@@ -71,6 +72,7 @@ type RequestDetail struct {
 	ServiceTier             string `json:"service_tier"`
 	PrivacyRedacted         bool   `json:"privacy_redacted"`
 	PrivacyRedactionSummary string `json:"privacy_redaction_summary"`
+	ContextSummary          string `json:"context_summary,omitempty"`
 	IsStreaming             bool   `json:"is_streaming"` // 是否为流式请求
 	Provider                string `json:"provider"`     // 提供商标识: claude/codex
 

@@ -37,7 +37,7 @@ const DeleteCredentialGroupConfirmDialog = ({ channelName, group, onConfirm, onC
           {isDefault && <p className="mt-2 text-xs">该分组是渠道默认分组，请先将其他分组设为默认后再删除。</p>}
         </div>
 
-        <div className="mb-4"><CredentialGroupRoutingImpact impact={impact} /></div>
+        <div className="mb-4"><CredentialGroupRoutingImpact impact={impact} disabled={loading} /></div>
         <div className="flex justify-end gap-3">
           <Button variant="ghost" onClick={onCancel} disabled={loading}>
             取消

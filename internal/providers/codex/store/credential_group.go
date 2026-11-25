@@ -395,6 +395,17 @@ func (s *SQLiteCodexCredentialGroupStore) CountEndpoints(ctx context.Context, id
 func (s *SQLiteCodexCredentialGroupStore) SetDefault(ctx context.Context, id int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.tx == nil {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err := s.WithTx(tx).SetDefault(ctx, id); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
 
 	var channelID int64
 	if err := s.getQuerier().QueryRowContext(ctx, `SELECT channel_id FROM codex_credential_groups WHERE id = ?`, id).Scan(&channelID); err != nil {
@@ -403,7 +414,7 @@ func (s *SQLiteCodexCredentialGroupStore) SetDefault(ctx context.Context, id int
 		}
 		return fmt.Errorf("查询 Codex 凭证分组 channel_id 失败: %w", err)
 	}
-	if _, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_credential_groups SET is_default = 0 WHERE channel_id = ?`, channelID); err != nil {
+	if _, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_credential_groups SET is_default = 0 WHERE channel_id = ? AND is_default = 1 AND id <> ?`, channelID, id); err != nil {
 		return fmt.Errorf("清空默认凭证分组失败: %w", err)
 	}
 	if _, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_credential_groups SET is_default = 1 WHERE id = ?`, id); err != nil {

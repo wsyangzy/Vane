@@ -189,6 +189,33 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 		return fmt.Errorf("Codex 端点不存在: %d", id)
 	}
 
+	pathOnly := input.PathStrategy != nil && input.Name == "" && input.BaseURL == "" &&
+		input.CredentialGroupID == nil && input.ApiKey == nil && input.FailoverEnabled == nil &&
+		input.SkipHealthCheck == nil && input.Priority == nil && input.TimeoutSeconds == nil &&
+		input.CostMultiplier == nil && input.InputCostMultiplier == nil && input.OutputCostMultiplier == nil &&
+		input.CacheReadCostMultiplier == nil && input.BillingOutputTokenSource == nil && input.ModelMultipliers == nil
+	if pathOnly {
+		if *input.PathStrategy == previous.PathStrategy {
+			return nil
+		}
+		if err := endpointService.SetPathStrategy(ctx, id, *input.PathStrategy); err != nil {
+			return fmt.Errorf("保存 Codex 端点路径失败: %w", err)
+		}
+		if err := a.reloadCodexEndpointManager(); err != nil {
+			rollbackCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if restoreErr := endpointService.SetPathStrategy(rollbackCtx, id, previous.PathStrategy); restoreErr != nil {
+				return fmt.Errorf("加载 Codex 端点路径失败: %w；恢复原路径失败: %v", err, restoreErr)
+			}
+			if reloadErr := a.reloadCodexEndpointManager(); reloadErr != nil {
+				return fmt.Errorf("加载 Codex 端点路径失败: %w；重新加载原路径失败: %v", err, reloadErr)
+			}
+			return fmt.Errorf("加载 Codex 端点路径失败: %w", err)
+		}
+		a.emitCodexProviderStateUpdate()
+		return nil
+	}
+
 	failoverEnabled := previous.FailoverEnabled
 	if input.FailoverEnabled != nil {
 		failoverEnabled = *input.FailoverEnabled
@@ -287,7 +314,6 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 	if err := a.reloadCodexEndpointManager(); err != nil {
 		return restoreUpdated(fmt.Errorf("更新 Codex 端点失败: 运行时未生效: %w", err))
 	}
-
 	// 配置同步策略（2026-05-14 扩大同步范围）：
 	// 只要被编辑的端点所属渠道是「当前激活渠道」，就重新同步 config.toml。
 	// - 编辑激活端点的 base_url → toml 中的 base_url 行被改写

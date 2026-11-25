@@ -5,7 +5,7 @@ import Tooltip from '@/shared/ui/Tooltip.jsx';
 // ============================================
 
 import { useEffect, useRef } from 'react';
-import { Filter, FilterX, Settings2, ChevronDown } from 'lucide-react';
+import { Filter, FilterX, Settings2, ChevronDown, RotateCcw } from 'lucide-react';
 import { SegmentedTabs } from '@/shared/ui/index.js';
 import { TIME_RANGE_OPTIONS } from '../utils/constants.js';
 import ViewConfigPanel from './ViewConfigPanel.jsx';
@@ -47,6 +47,7 @@ const Toolbar = ({
   isViewConfigOpen = false,
   onViewConfigToggle,
   onRefresh,
+  onOpenRecovery,
   columns = [],
   visibleColumns = [],
   onToggleColumn,
@@ -116,6 +117,16 @@ const Toolbar = ({
       </div>
 
       <div className="requests-command-group" role="group" aria-label="视图操作">
+        {onOpenRecovery && <Tooltip asChild content="恢复当前页失败请求涉及的端点"><button
+          type="button"
+          onClick={onOpenRecovery}
+          className="requests-tool-button motion-control"
+          aria-label="恢复端点"
+          aria-haspopup="dialog"
+        >
+          <RotateCcw className="h-4 w-4 text-amber-700" />
+          <span className="requests-tool-label">恢复端点</span>
+        </button></Tooltip>}
         {/* 列配置按钮 */}
         <div ref={viewConfigRef} className="relative shrink-0">
           <Tooltip asChild content="显示列配置"><button

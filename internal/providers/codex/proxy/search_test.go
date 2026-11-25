@@ -121,12 +121,18 @@ func TestSearchServiceUsesOwnCredentialsAndTracksActualFailure(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				body, _ := io.ReadAll(r.Body)
+				var requestPayload struct {
+					IncludeUsage bool `json:"include_usage"`
+				}
+				if err := json.Unmarshal(body, &requestPayload); err != nil || !requestPayload.IncludeUsage {
+					t.Errorf("Tavily usage reporting was not enabled: body=%s err=%v", body, err)
+				}
 				if r.Header.Get("Authorization") != "Bearer search-only-key" || r.Header.Get("Cookie") != "" || r.Header.Get("ChatGPT-Account-ID") != "" || r.Header.Get("X-Relay-Key") != "" || strings.Contains(string(body), "opaque-context") || strings.Contains(string(body), "search-original") {
 					t.Errorf("client state leaked into search adapter: headers=%v body=%s", r.Header, body)
 				}
 				w.WriteHeader(status)
 				if status == 200 {
-					io.WriteString(w, `{"results":[{"title":"Result","url":"https://example.org/","content":"snippet"}]}`)
+					io.WriteString(w, `{"results":[{"title":"Result","url":"https://example.org/","content":"snippet"}],"usage":{"credits":2}}`)
 				} else {
 					io.WriteString(w, `{"detail":"search quota exhausted"}`)
 				}
@@ -160,6 +166,15 @@ func TestSearchServiceUsesOwnCredentialsAndTracksActualFailure(t *testing.T) {
 			}
 			if got.Status != wantStatus || got.HTTPStatusCode == nil || *got.HTTPStatusCode != status || got.Provider != "codex" || got.ModelName != "search-original" {
 				t.Fatalf("actual service result was not tracked: %+v", got)
+			}
+			if status == 200 {
+				var chain []chainNode
+				if err := json.Unmarshal([]byte(got.EndpointChain), &chain); err != nil || len(chain) != 1 {
+					t.Fatalf("Tavily call chain not tracked: chain=%q err=%v", got.EndpointChain, err)
+				}
+				if chain[0].UsageCredits == nil || *chain[0].UsageCredits != 2 || chain[0].DurationMs == nil {
+					t.Fatalf("Tavily per-call usage was not tracked: %+v", chain[0])
+				}
 			}
 		})
 	}

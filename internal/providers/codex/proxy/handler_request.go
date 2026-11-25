@@ -63,6 +63,7 @@ func credentialGroupRefFromEndpoint(endpoint *CodexEndpoint) credentialGroupRef 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	requestID := generateRequestID()
+	r = h.withResponseRecoveryConfig(r)
 	if _, ok := routing.PoolCallerFromContext(r.Context()); ok {
 		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 			h.writeError(w, http.StatusUpgradeRequired, "使用 HTTP Responses 连接重试")
@@ -186,6 +187,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 5. 记录请求开始（追踪：Provider=codex + 渠道 + 请求体模型）
 	h.recordStart(requestID, r, isStreaming, channelName, requestModel, modelRewriteResult{}, reasoningJSON, serviceTier)
+	if r.Method == http.MethodPost && isCodexGenerationPath(strings.TrimRight(r.URL.Path, "/")) {
+		h.usageTracker.RecordContextSummary(requestID, "responses", body)
+	}
 	if isCodexSearchRequest(r) {
 		if h.serveSearchAdapter(w, r, originalBody, requestID, startTime) {
 			return
@@ -213,6 +217,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if subscription.FromContext(r.Context()) != nil {
 		h.writeError(w, 400, "subscription_route_unavailable")
 		return
+	}
+	// Profile and model-rule routes already carry a shared budget. Legacy
+	// active-channel requests need the same ceiling for sends and recovery waits.
+	cfg := h.retryConfig()
+	if budget := routing.BudgetFromContext(r.Context()); budget == nil {
+		r = r.WithContext(routing.WithBudget(r.Context(), routing.NewBudget(cfg.MaxTotalAttempts, cfg.MaxTotalDuration)))
+	} else {
+		budget.Limit(cfg.MaxTotalAttempts, cfg.MaxTotalDuration)
 	}
 	// 6. 决定外层循环轮数（loop_retry）
 	maxLoops := 1

@@ -11,20 +11,60 @@ import (
 // Activity contains metadata only. Neither request bodies, matched strings nor
 // reversible mappings are persisted. Keep at most 5,000 entries for 30 days.
 type Activity struct {
-	ID             int64     `json:"id"`
-	RequestID      string    `json:"request_id"`
-	Provider       string    `json:"provider"`
-	Path           string    `json:"path"`
-	CreatedAt      time.Time `json:"created_at"`
-	State          string    `json:"state"`
-	HitCount       int       `json:"hit_count"`
-	RuleHits       []RuleHit `json:"rule_hits"`
-	ScanDurationMS float64   `json:"scan_duration_ms"`
-	SkippedReason  string    `json:"skipped_reason"`
-	Truncated      bool      `json:"truncated"`
-	RestoredCount  int       `json:"restored_count"`
-	RestoreSkipped string    `json:"restore_skipped"`
+	ID               int64              `json:"id"`
+	RequestID        string             `json:"request_id"`
+	Provider         string             `json:"provider"`
+	Path             string             `json:"path"`
+	CreatedAt        time.Time          `json:"created_at"`
+	State            string             `json:"state"`
+	HitCount         int                `json:"hit_count"`
+	RuleHits         []RuleHit          `json:"rule_hits"`
+	FieldHits        []ActivityFieldHit `json:"field_hits,omitempty"`
+	FieldHitsLimited bool               `json:"field_hits_limited,omitempty"`
+	ScanDurationMS   float64            `json:"scan_duration_ms"`
+	SkippedReason    string             `json:"skipped_reason"`
+	Truncated        bool               `json:"truncated"`
+	RestoredCount    int                `json:"restored_count"`
+	RestoreSkipped   string             `json:"restore_skipped"`
 }
+
+// ActivityFieldHit describes one rule in one sanitized field path.
+// ReplacementMode is a strategy identifier, never the replacement text.
+type ActivityFieldHit struct {
+	Path            string `json:"path"`
+	RuleID          int64  `json:"rule_id"`
+	RuleName        string `json:"rule_name"`
+	Kind            string `json:"kind,omitempty"`
+	Action          string `json:"action"`
+	ReplacementMode string `json:"replacement_mode,omitempty"`
+	Count           int    `json:"count"`
+}
+
+const maxActivityFieldHits = 64
+
+type activityFieldKey struct {
+	path   string
+	ruleID int64
+}
+
+func (r *ApplyResult) countFieldHit(index map[activityFieldKey]int, path string, hit *RuleHit, rule *CompiledRule) {
+	key := activityFieldKey{path: path, ruleID: hit.RuleID}
+	if i, ok := index[key]; ok {
+		r.fieldHits[i].Count++
+		return
+	}
+	if len(r.fieldHits) == maxActivityFieldHits {
+		r.fieldHitsLimited = true
+		return
+	}
+	field := ActivityFieldHit{Path: path, RuleID: hit.RuleID, RuleName: activityText(hit.RuleName, 96), Kind: hit.Kind, Action: hit.Action, Count: 1}
+	if hit.Action == ActionRedact {
+		field.ReplacementMode = rule.ReplacementMode
+	}
+	index[key] = len(r.fieldHits)
+	r.fieldHits = append(r.fieldHits, field)
+}
+
 type activityHandle struct {
 	mu    sync.Mutex
 	store *Store
@@ -73,6 +113,8 @@ func (s *Service) recordActivity(ctx context.Context, req Request, result ApplyR
 		reason = "scan_error"
 	}
 	h := &activityHandle{store: s.store, entry: Activity{RequestID: activityText(req.RequestID, 128), Provider: activityText(req.ProviderType, 16), Path: path, CreatedAt: s.now(), State: state, HitCount: result.HitCount, ScanDurationMS: float64(result.ScanDuration) / float64(time.Millisecond), SkippedReason: reason, Truncated: result.Truncated}}
+	h.entry.FieldHits = result.fieldHits
+	h.entry.FieldHitsLimited = result.fieldHitsLimited
 	for _, hit := range result.RuleHits {
 		if len(h.entry.RuleHits) >= 32 {
 			break

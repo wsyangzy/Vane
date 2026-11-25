@@ -80,26 +80,16 @@ func (run *routeRun) advance() bool {
 	}
 	run.index++
 	if run.index >= len(run.stages) && run.profile != nil {
-		for {
-			next, ok := run.profileRuntime.NextRecovery(run.profile, run.profileRecovery)
-			if !ok {
-				return false
-			}
-			run.ledger.Wait("waiting_for_account_recovery")
-			run.publishSnapshot()
-			if run.budget.WaitRecovery(run.poolCtx, time.Until(next)) != nil {
-				return false
-			}
-			run.profileRuntime.Recover(run.poolCtx, run.profile)
-			run.stages = claudeProfileStages(run.profile, run.profileChannels)
-			run.index = 0
-			// The profile ledger retains deterministic failures across recovery.
-			// This local adapter ledger is only a projection used by old handlers.
-			run.ledger.RetryRecovered()
-			if len(run.stages) > 0 {
-				return true
-			}
+		recovered, err := run.profileRuntime.WaitForRecovery(run.poolCtx, run.profile, run.profileRecovery)
+		if err != nil || !recovered {
+			return false
 		}
+		run.stages = claudeProfileStages(run.profile, run.profileChannels)
+		run.index = 0
+		// The profile ledger retains deterministic failures across recovery.
+		// This local adapter ledger is only a projection used by old handlers.
+		run.ledger.RetryRecovered()
+		return len(run.stages) > 0
 	}
 	if run.index >= len(run.stages) && run.pool != nil {
 		if next, ok := run.pool.NextRecoveryWith(run.waitStages, run.poolModel, run.recovery); ok {

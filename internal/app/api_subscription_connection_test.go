@@ -24,6 +24,7 @@ import (
 func connectionTestApp(t *testing.T, provider string) (*App, routing.RoutingProfile, string) {
 	t.Helper()
 	dir := t.TempDir()
+	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("CODEX_HOME", dir)
 	t.Setenv("CLAUDE_CONFIG_DIR", dir)
 	path, err := subscriptionConfigPath(provider)
@@ -41,6 +42,92 @@ func connectionTestApp(t *testing.T, provider string) (*App, routing.RoutingProf
 	a.config.Server.Host, a.config.Server.Port = "127.0.0.1", listener.Addr().(*net.TCPAddr).Port
 	a.config.Auth = config.AuthConfig{Enabled: true, Token: "application-client-entry-token"}
 	return a, profile, path
+}
+
+func TestVaneRoutingChangesApplyToContinuingClientWithoutConfigRewrite(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		for _, affinity := range []routing.AffinityMode{routing.AffinityTurn, routing.AffinitySession, routing.AffinityAdaptive, routing.AffinityNone} {
+			t.Run(provider+"/"+string(affinity), func(t *testing.T) {
+				a, profile, path := connectionTestApp(t, provider)
+				ctx := routing.WithCallerScope(context.Background(), "profile:"+provider)
+				state, err := a.ListRoutingProfiles(provider)
+				require.NoError(t, err)
+				first := profile.Members[0]
+				var second routing.RoutingMember
+				for _, candidate := range state.Candidates {
+					if candidate.Enabled && candidate.ChannelID != first.ChannelID {
+						second = routing.RoutingMember{ChannelID: candidate.ChannelID, GroupID: candidate.GroupID, Enabled: true, Position: 1}
+						break
+					}
+				}
+				require.NotZero(t, second.ChannelID)
+				profile.Strategy, profile.AffinityMode = routing.StrategyOrder, affinity
+				profile.Members = []routing.RoutingMember{first, second}
+				profile, err = a.SaveRoutingProfile(profile)
+				require.NoError(t, err)
+				preview, err := a.ManageSubscriptionConnection(SubscriptionConnectionCommand{Provider: provider, Action: "preview"})
+				require.NoError(t, err)
+				_, err = a.ManageSubscriptionConnection(SubscriptionConnectionCommand{Provider: provider, Action: "apply", ProfileID: preview.ProfileID,
+					Revision: preview.Revision, BindingVersion: preview.BindingVersion, ContentRevision: preview.ContentRevision})
+				require.NoError(t, err)
+				original, err := os.ReadFile(path)
+				require.NoError(t, err)
+				clientStatus, err := a.ManageSubscriptionConnection(SubscriptionConnectionCommand{Provider: provider, Action: "status"})
+				require.NoError(t, err)
+				runtime := a.poolRuntimes[provider].ProfileRuntime()
+				turn := routing.TurnInput{ConversationID: "existing-conversation", TurnID: "existing-turn", NewTurn: true}
+				send := func(want int64) {
+					t.Helper()
+					plan := runtime.Plan(ctx, 0, "test", true, turn, false)
+					require.Empty(t, plan.Error)
+					require.NotEmpty(t, plan.EligibleCandidates)
+					candidate := plan.EligibleCandidates[0]
+					require.Equal(t, want, candidate.ChannelID)
+					reservation, err := runtime.Reserve(ctx, &plan, candidate)
+					require.NoError(t, err)
+					require.NoError(t, reservation.Begin(ctx))
+					reservation.SetCachedTokens(100)
+					reservation.Finish(10, true, routing.Failure{})
+					turn.NewTurn = false
+				}
+				send(first.ChannelID)
+				pendingPlan := runtime.Plan(ctx, 0, "test", true, turn, false)
+				pending, err := runtime.Reserve(ctx, &pendingPlan, pendingPlan.EligibleCandidates[0])
+				require.NoError(t, err)
+				require.NoError(t, pending.Begin(ctx))
+				// Vane's channel order is the configured preference. Old session
+				// affinity must not outrank a newly saved order in the same turn.
+				first.Position, second.Position = 1, 0
+				profile.Members = []routing.RoutingMember{second, first}
+				profile, err = a.SaveRoutingProfile(profile)
+				require.NoError(t, err)
+				require.Same(t, runtime, a.poolRuntimes[provider].ProfileRuntime())
+				send(second.ChannelID)
+				pending.Finish(10, true, routing.Failure{})
+				send(second.ChannelID) // A late completion must not restore the old preference.
+				profile.Members[0].Enabled = false
+				profile, err = a.SaveRoutingProfile(profile)
+				require.NoError(t, err)
+				send(first.ChannelID)
+				other := routing.DefaultProfile(provider)
+				other.Name, other.Strategy, other.AffinityMode = "other profile", routing.StrategyOrder, affinity
+				other.Members = []routing.RoutingMember{second}
+				other, err = a.SaveRoutingProfile(other)
+				require.NoError(t, err)
+				require.NoError(t, a.SetDefaultRoutingProfile(provider, other.ID))
+				require.Same(t, runtime, a.poolRuntimes[provider].ProfileRuntime())
+				send(second.ChannelID)
+				current, err := os.ReadFile(path)
+				require.NoError(t, err)
+				require.Equal(t, original, current, "Vane routing changes must not rewrite the client config")
+				status, err := a.ManageSubscriptionConnection(SubscriptionConnectionCommand{Provider: provider, Action: "status"})
+				require.NoError(t, err)
+				require.Equal(t, other.ID, status.ProfileID)
+				require.Equal(t, clientStatus.BaseURL, status.BaseURL)
+				require.True(t, status.Running)
+			})
+		}
+	}
 }
 
 func TestUnifiedClientConnectionPreviewUsesApplicationAuthAndDefaultProfile(t *testing.T) {
@@ -220,6 +307,8 @@ func TestUnifiedClientConnectionRejectsStaleDefaultAndKeepsRestoreAvailable(t *t
 }
 
 func TestCodexGlobalConfigMigratesSubscriptionRouteToUnifiedModeTwoAndIPv6(t *testing.T) {
+	backupHome := t.TempDir()
+	t.Setenv("APPDATA", backupHome)
 	t.Setenv("CODEX_HOME", t.TempDir())
 	path, _ := subscriptionConfigPath("codex")
 	os.WriteFile(path, []byte("model_provider = \"relay_subscription\"\n[model_providers.relay_subscription]\nbase_url = \"http://[::1]:9000/backend-api/codex\"\nrequires_openai_auth = true\n[model_providers.relay_subscription.http_headers]\nX-Relay-Key = 'keep-local-key'\n"), 0600)
@@ -227,6 +316,12 @@ func TestCodexGlobalConfigMigratesSubscriptionRouteToUnifiedModeTwoAndIPv6(t *te
 	if err := a.UpdateCodexGlobalConfig(CodexGlobalConfigInput{Model: "keep-model"}); err != nil {
 		t.Fatal(err)
 	}
+	history, err := a.clientConfigHistory()
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(backupHome, "Vane", "backup"), history.Directory)
+	backups, err := history.List("codex", path)
+	require.NoError(t, err)
+	require.Len(t, backups, 1)
 	got, _ := os.ReadFile(path)
 	var parsed map[string]any
 	require.NoError(t, toml.Unmarshal(got, &parsed))

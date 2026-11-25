@@ -7,12 +7,15 @@ import (
 // ParseResult 解析结果结构体
 // 用于将Token解析与状态记录分离，支持职责纯化
 type ParseResult struct {
-	TokenUsage  *tracking.TokenUsage
-	ModelName   string
-	ErrorInfo   *ErrorInfo
-	RawError    string // error SSE data exactly as received from the provider
-	IsCompleted bool
-	Status      string
+	TokenUsage     *tracking.TokenUsage
+	OutputBytes    int
+	ReasoningBytes int
+	OutputPending  bool
+	ModelName      string
+	ErrorInfo      *ErrorInfo
+	RawError       string // error SSE data exactly as received from the provider
+	IsCompleted    bool
+	Status         string
 }
 
 // ErrorInfo 错误信息结构体

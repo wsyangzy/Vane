@@ -1,0 +1,5 @@
+.privacy-activity-expanded { margin-top: 5px; border-top: 1px solid #edf1f7; color: #475569; font-size: 11px; }
+.privacy-activity-expanded li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto) max-content; align-items: center; gap: 8px; padding: 7px 4px; border-bottom: 1px solid #f1f5f9; overflow-wrap: anywhere; }
+.privacy-activity-expanded li > span:last-child { color: #334155; font-variant-numeric: tabular-nums; }
+.privacy-activity-expanded code { display: block; margin-top: 2px; color: #64748b; }
+.privacy-activity-expanded p { padding: 8px 4px 2px; color: #64748b; }

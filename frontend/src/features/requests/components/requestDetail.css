@@ -2,7 +2,7 @@
    including shared badges and the billing details that use fixed pixel sizes. */
 .request-detail-modal { max-width: 960px; height: min(80dvh, 760px); container-type: inline-size; zoom: 0.9; }
 .request-detail-body { scrollbar-gutter: stable; }
-.request-detail-overview-grid, .request-detail-network-grid { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 16px; }
+.request-detail-overview-grid, .request-detail-network-grid { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
 .request-detail-overview-grid > *, .request-detail-network-grid > * { min-width: 0; }
 .request-detail-network-grid > :last-child { grid-column: 1 / -1; }
 .request-detail-info-row > :last-child { line-height: 1.6; }
@@ -106,4 +106,9 @@
   .request-dispatch-summary > div:nth-child(-n+2) { border-bottom: 1px solid #e2e8f0; }
   .request-dispatch-summary > div:nth-child(2) { border-right: 0; }
   .request-dispatch-identities { grid-template-columns: minmax(0, 1fr); }
+}
+@container (max-width: 540px) {
+  .request-detail-tabs > button { padding-inline: 4px; }
+  .request-detail-tabs > button > svg, .request-detail-tab-empty { display: none; }
+  .request-detail-tab-label { white-space: normal; }
 }

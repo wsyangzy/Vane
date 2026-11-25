@@ -8,7 +8,7 @@ import {
   DollarSign,
   X,
   Check,
-  ChevronDown,
+  Search,
   ExternalLink,
   BadgeDollarSign,
   Plus,
@@ -47,9 +47,11 @@ import {
   emptyTierValues,
   tierValuesFromRecord,
   groupPricingsByModel,
+  filterPricingGroups,
   groupPricingSpeeds,
   buildTierPayloads
 } from './pricingGroups.js';
+import LongContextPricing from './LongContextPricing.jsx';
 import './pricing.css';
 
 // ============================================
@@ -665,7 +667,7 @@ const PricingCard = ({ group, onEdit, onDelete, onSetDefault }) => {
     {selectedSpeed?.key === 'flex_batch' && selectedSpeed.records.length > 1 && <div className="pricing-tier-tabs" role="group" aria-label="Flex 或 Batch 价格">{selectedSpeed.records.map((record) => <button type="button" key={record.serviceTier} aria-pressed={record === pricing} onClick={() => setSelectedTier(record.serviceTier)}>{serviceTierLabel(record.serviceTier)}</button>)}</div>}
     <div className="pricing-rate-heading"><span>{records.length > 1 ? 'Token 单价' : serviceTierLabel(pricing.serviceTier || '')}</span><span>USD / 100 万 Token</span></div>
     <dl className="pricing-rate-list">{fields.map(({ field, label }) => <div key={field} data-field={field}><dt>{label}</dt><dd><span>$</span>{pricing[field] ?? '—'}</dd></div>)}</dl>
-    {group.provider === 'codex' && pricing.longContextThreshold > 0 && <details className="pricing-long-context"><summary><span>长上下文单价</span><span>&gt; {pricing.longContextThreshold.toLocaleString()} Token<ChevronDown size={12} /></span></summary><dl className="pricing-rate-list">{fields.map(({ field, label }) => <div key={field} data-field={field}><dt>{label}</dt><dd><span>$</span>{pricing[LONG_CONTEXT_FIELDS[field]] ?? '—'}</dd></div>)}</dl></details>}
+    {group.provider === 'codex' && pricing.longContextThreshold > 0 && <LongContextPricing key={pricing.serviceTier} pricing={pricing} fields={fields} fieldMapping={LONG_CONTEXT_FIELDS} modelName={group.modelName} speedLabel={serviceTierLabel(pricing.serviceTier || '')} />}
     <footer className="pricing-model-footer"><span className="pricing-model-footer-label">{records.length > 1 ? <span>{records.length} 个计费档位</span> : !group.isDefault && '标准定价'}</span><span>更新于 {group.updatedAt || '—'}</span></footer>
   </article>;
 };
@@ -683,6 +685,8 @@ const PricingPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [providerFilter, setProviderFilter] = useState('all');
+  const [modelSearch, setModelSearch] = useState('');
+  const searchRef = useRef(null);
 
   // 表单状态
   const [showForm, setShowForm] = useState(false);
@@ -828,9 +832,9 @@ const PricingPage = () => {
 
   // 档位不是模型的属性而是定价的维度：同一模型的多档定价聚合成一张卡片
   const pricingGroups = groupPricingsByModel(pricings);
-  const visiblePricingGroups = providerFilter === 'all'
-    ? pricingGroups
-    : pricingGroups.filter((group) => group.provider === providerFilter);
+  const visiblePricingGroups = filterPricingGroups(pricingGroups, providerFilter, modelSearch);
+  const hasSearch = Boolean(modelSearch.trim());
+  const clearSearch = () => { setModelSearch(''); searchRef.current?.focus(); };
   const providerFilters = [
     { value: 'all', label: '全部', icon: Database, count: pricingGroups.length },
     { value: 'claude', label: 'Claude', icon: ClaudeIcon, count: pricingGroups.filter((group) => group.provider === 'claude').length },
@@ -881,6 +885,13 @@ const PricingPage = () => {
             </button>
           ))}
         </div>
+        <div className="pricing-model-search">
+          <Search size={15} aria-hidden="true" />
+          <input ref={searchRef} type="search" aria-label="搜索模型" placeholder="搜索模型名称或显示名称" autoComplete="off" spellCheck={false} value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} onKeyDown={(event) => {
+            if (event.key === 'Escape' && modelSearch) { event.stopPropagation(); clearSearch(); }
+          }} />
+          {modelSearch && <button type="button" aria-label="清除模型搜索" onClick={clearSearch}><X size={14} /></button>}
+        </div>
         <span className="pricing-list-count" aria-live="polite">显示 {visiblePricingGroups.length} / {pricingGroups.length} 个模型</span>
       </div>
 
@@ -888,11 +899,9 @@ const PricingPage = () => {
       {visiblePricingGroups.length === 0 ? (
         <div className="bg-white rounded-2xl border border-slate-200/60 shadow-sm p-12 text-center">
           <div className="flex flex-col items-center gap-3">
-            <Calculator size={40} className="text-slate-300" />
-            <p className="text-slate-500">{providerFilter === 'all' ? '暂无定价配置' : `暂无 ${providerFilter === 'codex' ? 'Codex' : 'Claude'} 定价配置`}</p>
-            <Button icon={Plus} onClick={handleCreate}>
-              添加定价
-            </Button>
+            {hasSearch ? <Search size={40} className="text-slate-300" /> : <Calculator size={40} className="text-slate-300" />}
+            <p className="text-slate-500 [overflow-wrap:anywhere]">{hasSearch ? `未找到匹配“${modelSearch.trim()}”的模型` : providerFilter === 'all' ? '暂无定价配置' : `暂无 ${providerFilter === 'codex' ? 'Codex' : 'Claude'} 定价配置`}</p>
+            {hasSearch ? <Button variant="ghost" icon={X} onClick={clearSearch}>清除搜索</Button> : <Button icon={Plus} onClick={handleCreate}>添加定价</Button>}
           </div>
         </div>
       ) : (

@@ -66,6 +66,9 @@ func buildRequestQueryOptions(params RequestQueryParams, timezone string, limit,
 }
 
 func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) {
+	if requestID := strings.TrimSpace(params.RequestID); requestID != "" {
+		return a.getRequestByID(requestID)
+	}
 	for name, value := range map[string]string{"completed_since": params.CompletedSince, "completed_before": params.CompletedBefore} {
 		if value != "" {
 			parsed, err := time.Parse(time.RFC3339Nano, value)
@@ -136,6 +139,28 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 	return result, nil
 }
 
+func (a *App) getRequestByID(requestID string) (RequestListResult, error) {
+	a.mu.RLock()
+	tracker := a.usageTracker
+	a.mu.RUnlock()
+	result := RequestListResult{Requests: []RequestRecord{}, Page: 1, PageSize: 1}
+	if tracker == nil {
+		return result, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
+	defer cancel()
+	detail, err := tracker.FindRequestDetail(ctx, requestID)
+	if err != nil || detail == nil {
+		return result, err
+	}
+	result.Requests = append(result.Requests, requestDetailToRecord(*detail))
+	result.Total = 1
+	if detail.EndTime != nil {
+		a.enrichRequestDiagnostics(ctx, result.Requests)
+	}
+	return result, nil
+}
+
 func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 	// 使用统一的时间格式（2025-12-04 17:18:48）
 	endpointChain := parseEndpointChain(r.EndpointChain)
@@ -171,8 +196,10 @@ func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 		ServiceTier:                   r.ServiceTier,
 		PrivacyRedacted:               r.PrivacyRedacted,
 		PrivacyRedactionSummary:       r.PrivacyRedactionSummary,
+		ContextSummary:                r.ContextSummary,
 		Provider:                      r.Provider, // 提供商标识
 		Status:                        r.Status,
+		InProgress:                    r.ID == 0 && r.EndTime == nil,
 		StreamOutcome:                 r.StreamOutcome,
 		HTTPStatusIsUpstream:          r.HTTPStatusIsUpstream,
 		RetryCount:                    retryCount,

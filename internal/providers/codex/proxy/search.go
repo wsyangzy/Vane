@@ -52,6 +52,7 @@ func (h *Handler) serveSearchAdapter(w http.ResponseWriter, r *http.Request, bod
 	}
 	if strings.HasSuffix(r.URL.Path, "/service") {
 		cfg.Mode = "service"
+		cfg.Fallbacks = nil
 	}
 	if cfg.Mode == "native" || cfg.Mode == "auto" {
 		if cfg.Mode == "auto" && configErr == nil {
@@ -64,17 +65,12 @@ func (h *Handler) serveSearchAdapter(w http.ResponseWriter, r *http.Request, bod
 
 func (h *Handler) trySearchFallback(w http.ResponseWriter, r *http.Request, body []byte, requestID string, start time.Time, chain []chainNode) bool {
 	cfg, ok := r.Context().Value(searchFallbackKey{}).(search.Config)
-	if !ok || r.Context().Err() != nil || cfg.Validate() != nil {
+	if !ok || r.Context().Err() != nil {
 		return false
 	}
 	req, err := search.Parse(body)
-	if err != nil || req.Settings.ExternalWebAccess != nil && !*req.Settings.ExternalWebAccess {
+	if err != nil || !req.AllowsLiveAccess() || !req.HasAdapterCommand(cfg) {
 		return false
-	}
-	if _, ok := req.Commands["search_query"]; !ok {
-		if _, ok := req.Commands["image_query"]; !ok {
-			return false
-		}
 	}
 	return h.serveConfiguredSearch(w, r, body, requestID, start, cfg, nil, chain)
 }
@@ -89,7 +85,7 @@ func (h *Handler) serveConfiguredSearch(w http.ResponseWriter, r *http.Request, 
 		outcome.Reply.Output = "Search unavailable: 搜索设置读取失败"
 	} else {
 		client := *h.forwarder.client
-		client.Timeout = cfg.Timeout
+		client.Timeout = 0 // Each candidate uses its configured timeout via context.
 		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 		if h.forwarder.transportProvider != nil {
 			client.Transport, err = h.forwarder.transportProvider.Default()
@@ -115,10 +111,26 @@ func (h *Handler) serveConfiguredSearch(w http.ResponseWriter, r *http.Request, 
 		if !attempt.Sent {
 			continue
 		}
-		chain = append(chain, chainNode{Hop: len(chain) + 1, Channel: "搜索服务", Endpoint: cfg.Name(), Attempts: 1, StatusCode: attempt.Status, Error: attempt.Error, Local: attempt.Status == 0})
+		startMs := attempt.StartedAt.Sub(start).Milliseconds()
+		if startMs < 0 {
+			startMs = 0
+		}
+		endpoint := attempt.Service
+		if attempt.Operation == "网页提取" {
+			endpoint += " · " + attempt.Operation
+		}
+		chain = append(chain, chainNode{
+			Hop: len(chain) + 1, Channel: "搜索服务", Endpoint: endpoint, Attempts: 1,
+			StartMs: startMs, DurationMs: attempt.DurationMs, StatusCode: attempt.Status,
+			UsageCredits: attempt.UsageCredits, Error: attempt.Error, Local: attempt.Status == 0,
+		})
+	}
+	service := cfg.Name()
+	if outcome.Service != "" {
+		service = outcome.Service
 	}
 	if len(chain) > 0 {
-		h.recordForwarding(requestID, cfg.Name(), "搜索服务", model, chain)
+		h.recordForwarding(requestID, service, "搜索服务", model, chain)
 	}
 	if outcome.Failure != nil {
 		failure := outcome.Failure
@@ -128,7 +140,7 @@ func (h *Handler) serveConfiguredSearch(w http.ResponseWriter, r *http.Request, 
 			h.recordFailure(requestID, start, failure.Reason, failure.Detail, nil, model)
 		}
 	} else {
-		h.recordSuccess(requestID, start, http.StatusOK, nil, model, cfg.Name(), "", "搜索服务")
+		h.recordSuccess(requestID, start, http.StatusOK, nil, model, service, "", "搜索服务")
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)

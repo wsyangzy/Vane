@@ -11,9 +11,10 @@ import (
 func TestBundledOpenAIPricesCoverPublishedSpeedsAndCacheWrites(t *testing.T) {
 	catalog, err := OpenAIPriceCatalog()
 	require.NoError(t, err)
-	require.Equal(t, "2026-10-30", catalog.AsOf)
+	require.Equal(t, "2026-11-18", catalog.AsOf)
 	seen := map[string]bool{}
 	flagship := map[string][]float64{}
+	gpt62 := map[string]*pricingstore.ModelPricingRecord{}
 	for _, row := range catalog.Records {
 		key := row.Provider + "/" + row.ModelName + "/" + row.ServiceTier
 		require.False(t, seen[key], "duplicate catalog price: %s", key)
@@ -26,11 +27,33 @@ func TestBundledOpenAIPricesCoverPublishedSpeedsAndCacheWrites(t *testing.T) {
 		if row.ModelName == "gpt-6.1-sol" {
 			flagship[row.ServiceTier] = []float64{row.InputPrice, row.OutputPrice, row.CacheReadPrice, row.CacheWritePrice30m, row.CacheWritePrice12h}
 		}
+		if row.ModelName == "gpt-6.2-astra" || row.ModelName == "gpt-6.2-sol" {
+			gpt62[row.ModelName+"/"+row.ServiceTier] = row
+		}
 	}
 	require.Equal(t, map[string][]float64{
 		"": {2, 10, .1, 2.5, 5}, "batch": {1, 5, .05, 1.25, 2.5}, "flex": {1, 5, .05, 1.25, 2.5},
 		"fast": {4, 20, .2, 5, 10}, "ultrafast": {12, 60, .6, 15, 30},
 	}, flagship)
+	for key, expected := range map[string][]float64{
+		"gpt-6.2-astra/":          {8, 40, .4, 10, 20, 16, 60, .8, 20, 40},
+		"gpt-6.2-sol/":            {2, 10, .1, 2.5, 5, 4, 15, .2, 5, 10},
+		"gpt-6.2-astra/batch":     {4, 20, .2, 5, 10, 8, 30, .4, 10, 20},
+		"gpt-6.2-sol/batch":       {1, 5, .05, 1.25, 2.5, 2, 7.5, .1, 2.5, 5},
+		"gpt-6.2-astra/fast":      {16, 80, .8, 20, 40, 32, 120, 1.6, 40, 80},
+		"gpt-6.2-sol/fast":        {4, 20, .2, 5, 10, 8, 30, .4, 10, 20},
+		"gpt-6.2-astra/ultrafast": {24, 120, 1.2, 30, 60, 48, 180, 2.4, 60, 120},
+		"gpt-6.2-sol/ultrafast":   {6, 30, .3, 7.5, 15, 12, 45, .6, 15, 30},
+	} {
+		row := gpt62[key]
+		require.NotNil(t, row, "missing official price row %s", key)
+		require.Equal(t, int64(272000), row.LongContextThreshold, key)
+		require.Equal(t, expected, []float64{
+			row.InputPrice, row.OutputPrice, row.CacheReadPrice, row.CacheWritePrice30m, row.CacheWritePrice12h,
+			row.LongContextInputPrice, row.LongContextOutputPrice, row.LongContextCacheReadPrice,
+			row.LongContextCacheWritePrice, row.LongContextCacheWritePrice12h,
+		}, key)
+	}
 	require.False(t, seen["codex/gpt-5/ultrafast"], "do not fabricate unsupported speed prices")
 }
 

@@ -183,7 +183,7 @@ func mappingTargetAllowed(p RoutingProfile, target RouteTarget) bool {
 		return false
 	}
 	for _, member := range p.Members {
-		if member.Enabled && member.ChannelID == target.ChannelID && (member.GroupID == 0 || member.GroupID == target.GroupID) {
+		if member.Enabled && member.ChannelID == target.ChannelID && (target.GroupID == 0 || member.GroupID == 0 || member.GroupID == target.GroupID) {
 			return true
 		}
 	}

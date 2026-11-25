@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 	"github.com/wsyangzy/Vane/internal/routing"
@@ -38,6 +39,7 @@ func TestCodexProfileSearchSecretsStaySeparateAndRuntimeUsesCurrentProfile(t *te
 	saved, err := a.SaveCodexRoutingProfile(CodexRoutingProfileInput{Profile: p, SearchAPIKey: &key})
 	require.NoError(t, err)
 	require.True(t, saved.Search.HasAPIKey)
+	require.Equal(t, utf8.RuneCountInString(key), saved.Search.APIKeyLengths["tavily"])
 	encoded, err := json.Marshal(saved)
 	require.NoError(t, err)
 	require.NotContains(t, string(encoded), key)
@@ -90,7 +92,9 @@ func TestCodexSearchAPIKeyRevealIsScopedAndDoesNotChangePublicProfiles(t *testin
 	policy := routing.DefaultSearchPolicy()
 	profile.Search = &policy
 	firstKey := "test-first-profile-tavily"
-	first, err := a.SaveCodexRoutingProfile(CodexRoutingProfileInput{Profile: profile, SearchAPIKey: &firstKey})
+	first, err := a.SaveCodexRoutingProfile(CodexRoutingProfileInput{
+		Profile: profile, SearchAPIKey: &firstKey, SearchAPIKeys: map[string]string{"exa": "test-first-profile-exa"},
+	})
 	require.NoError(t, err)
 	profile.Name, profile.IsDefault = "second search profile", false
 	secondKey := "test-second-profile-tavily"
@@ -104,7 +108,7 @@ func TestCodexSearchAPIKeyRevealIsScopedAndDoesNotChangePublicProfiles(t *testin
 		id     int64
 		vendor string
 		key    string
-	}{{first.ID, "tavily", firstKey}, {first.ID, "brave", braveKey}, {second.ID, "tavily", secondKey}, {first.ID, "exa", ""}} {
+	}{{first.ID, "tavily", firstKey}, {first.ID, "brave", braveKey}, {second.ID, "tavily", secondKey}, {first.ID, "exa", "test-first-profile-exa"}, {second.ID, "exa", ""}} {
 		got, err := a.GetCodexSearchAPIKey(tc.id, tc.vendor)
 		require.NoError(t, err)
 		require.Equal(t, tc.key, got)
@@ -128,9 +132,50 @@ func TestCodexSearchAPIKeyRevealIsScopedAndDoesNotChangePublicProfiles(t *testin
 	require.NoError(t, err)
 	require.Equal(t, first.Revision, read.Revision)
 	require.Equal(t, "brave", read.Search.Vendor)
+	require.ElementsMatch(t, []string{"brave", "exa", "tavily"}, read.Search.ConfiguredVendors)
+	require.Equal(t, map[string]int{
+		"tavily": utf8.RuneCountInString(firstKey),
+		"brave":  utf8.RuneCountInString(braveKey),
+		"exa":    utf8.RuneCountInString("test-first-profile-exa"),
+	}, read.Search.APIKeyLengths)
+	cfg, err := a.codexSearchConfig(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "brave", cfg.Vendor)
+	require.Len(t, cfg.Fallbacks, 2)
+	require.Equal(t, "exa", cfg.Fallbacks[0].Vendor)
+	require.Equal(t, "https://api.exa.ai/search", cfg.Fallbacks[0].Endpoint)
+	require.Equal(t, "tavily", cfg.Fallbacks[1].Vendor)
+	require.NotContains(t, string(encoded), "test-first-profile-exa")
+	first.Search.Vendor = "searxng"
+	first.Search.Endpoint = "https://search.example.org/search"
+	first, err = a.SaveCodexRoutingProfile(CodexRoutingProfileInput{Profile: first})
+	require.NoError(t, err)
+	first.Search.Vendor = "tavily"
+	first.Search.Endpoint = routing.DefaultSearchEndpoint("tavily")
+	first, err = a.SaveCodexRoutingProfile(CodexRoutingProfileInput{Profile: first, SearchAPIKeys: map[string]string{"tavily": "", "brave": ""}})
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{"exa": utf8.RuneCountInString("test-first-profile-exa")}, first.Search.APIKeyLengths)
+	cfg, err = a.codexSearchConfig(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, cfg.APIKey, "the other profile's Tavily key must not be used")
+	require.Error(t, cfg.Validate(), "a preset address alone does not configure Tavily")
+	require.Len(t, cfg.Fallbacks, 2)
+	require.Equal(t, "exa", cfg.Fallbacks[0].Vendor)
+	require.Equal(t, "searxng", cfg.Fallbacks[1].Vendor)
+	require.Equal(t, "https://search.example.org/search", cfg.Fallbacks[1].Endpoint)
+	require.Empty(t, cfg.Fallbacks[1].APIKey)
 	_, err = a.storeDB.ExecContext(context.Background(), `UPDATE routing_profiles SET provider='claude' WHERE id=?`, second.ID)
 	require.NoError(t, err)
 	got, err = a.GetCodexSearchAPIKey(second.ID, "tavily")
+	require.Error(t, err)
+	require.Empty(t, got)
+	_, err = a.storeDB.ExecContext(context.Background(), `UPDATE codex_profile_search_credentials SET secret=X'0102' WHERE profile_id=? AND vendor='exa'`, first.ID)
+	require.NoError(t, err)
+	read, err = a.GetRoutingProfile("codex", first.ID)
+	require.NoError(t, err, "an unreadable credential must not block editing the profile")
+	require.Contains(t, read.Search.ConfiguredVendors, "exa")
+	require.NotContains(t, read.Search.APIKeyLengths, "exa")
+	got, err = a.GetCodexSearchAPIKey(first.ID, "exa")
 	require.Error(t, err)
 	require.Empty(t, got)
 }

@@ -30,6 +30,40 @@ func TestEnsureCodexChannelsSchemaAllowsDuplicateEndpointsAcrossCredentialGroups
 	}
 }
 
+func TestChannelCompactionMigrationDefaultsAndPreservesExplicitChoices(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexSchemaTestDB(t)
+	m := &schemaMigrator{}
+	if err := m.ensureCodexChannelsSchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`ALTER TABLE codex_channels DROP COLUMN compaction_mode`); err != nil {
+		t.Fatal(err)
+	}
+	id := insertCodexSchemaTestChannel(t, db, "anyrouter")
+	for range 2 {
+		if err := m.ensureCodexChannelsSchema(ctx, db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := NewSQLiteCodexChannelStore(db)
+	channel, err := s.GetByID(ctx, id)
+	if err != nil || channel == nil || channel.CompactionMode != "preserve" {
+		t.Fatalf("legacy channel compaction changed: %+v %v", channel, err)
+	}
+	channel.CompactionMode = "summary"
+	if err := s.UpdateByID(ctx, id, channel); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ensureCodexChannelsSchema(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	channels, err := s.List(ctx)
+	if err != nil || len(channels) != 1 || channels[0].CompactionMode != "summary" {
+		t.Fatalf("saved channel mode was lost: %+v %v", channels, err)
+	}
+}
+
 func TestEndpointPathStrategyMigrationPreservesHistoryAndExplicitSelections(t *testing.T) {
 	ctx := context.Background()
 	for _, preexistingColumn := range []bool{false, true} {

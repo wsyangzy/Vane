@@ -34,6 +34,8 @@ type Handler struct {
 
 	// retryCfg 同端点重试配置（来自设置页 retry.*）
 	retryCfg config.RetryConfig
+	// nil selects provider defaults; explicit configuration is copied per request.
+	responseRecoveryCfg *routing.ResponseRecoveryConfig
 	// failoverCfg 故障转移与挂起配置（来自设置页 failover.*）
 	failoverCfg config.FailoverConfig
 	// suspensionMgr 请求挂起队列（loop_retry 全部耗尽后等待运维干预）

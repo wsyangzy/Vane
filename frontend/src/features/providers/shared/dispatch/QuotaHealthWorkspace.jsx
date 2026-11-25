@@ -1,9 +1,14 @@
 import Tooltip from '@/shared/ui/Tooltip.jsx';
-import { useState } from 'react';
-import { Activity, CircleAlert, CircleHelp, Clock3, Database, FlaskConical, History, KeyRound, Layers, Pencil, Plus, Power, RefreshCw, Search, Server, Settings2, ShieldCheck, Wallet } from 'lucide-react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { Activity, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, CircleHelp, Clock3, Database, FlaskConical, History, KeyRound, Layers, Pencil, Plus, Power, RefreshCw, RotateCcw, Search, Server, Settings2, ShieldCheck, Wallet } from 'lucide-react';
 import { Button, SegmentedTabs } from '@/shared/ui/index.js';
+import { getDispatchRecovery, retryDispatchCandidate } from '@/services/wails/dispatch.js';
+import { dispatchRecoveryTarget, readCurrentDispatchCandidate, retryCurrentDispatchCandidate } from '@/shared/lib/dispatchRecovery.js';
+import { blockageLabel, describeBlockageRecovery } from '@/features/requests/utils/blockage.js';
+import { describeFailureReason } from '@/features/requests/utils/failureSummary.js';
 import { candidateHealthPresentation, quotaPresentation } from './dispatchState.js';
-import { filterQuotaHealthChannels, healthGroupSummary, quotaGroupSummary, quotaHealthChannels } from './quotaHealthState.js';
+import { filterQuotaHealthChannels, healthGroupSummary, paginateQuotaHealthChannels, quotaGroupSummary, quotaHealthChannels } from './quotaHealthState.js';
+import DispatchTabs from './DispatchTabs.jsx';
 import HealthCardGrid from './HealthCardGrid.jsx';
 import ManualBalanceDialog from './ManualBalanceDialog.jsx';
 import { formatUsd } from './manualBalanceState.js';
@@ -13,11 +18,11 @@ const number = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 });
 const date = (value) => value && new Date(value).getTime() > 0 ? new Date(value).toLocaleString() : '—';
 
 function ResourceCard({ channel, kind, children }) {
-  return <article className="qh-channel" aria-label={`${channel.name} ${kind}`}><header className="qh-channel-header"><span className="qh-channel-icon"><Server size={15} /></span><h4>{channel.name}</h4><span>{channel.groups.length} 个分组</span></header><div className="qh-channel-body">{children}</div></article>;
+  return <article className="qh-channel" aria-label={`${channel.name} ${kind}`}><header className="qh-channel-header"><span className="qh-channel-icon"><Server size={15} /></span><h4>{channel.name}</h4><span>{channel.groups.length}{channel.totalGroups > channel.groups.length && ` / ${channel.totalGroups}`} 个分组</span></header><div className="qh-channel-body">{children}</div></article>;
 }
 
-function WorkspaceSection({ title, icon: Icon, count, tools, className = '', children }) {
-  return <section className={`qh-section qh-overview-section ${className}`} aria-label={title}>
+function WorkspaceSection({ title, icon: Icon, count, tools, id, labelledBy, className = '', children }) {
+  return <section id={id} role={id ? 'tabpanel' : undefined} aria-labelledby={labelledBy} className={`qh-section qh-overview-section ${className}`} aria-label={title}>
     <header className="qh-section-heading"><div className="qh-section-title"><Icon size={16} /><h3>{title}</h3><span className="qh-count">{count}</span></div>{tools}</header>
     <div className="qh-section-content">{children}</div>
   </section>;
@@ -74,12 +79,77 @@ function ManualBalanceGroup({ channel, group, busy, onAction }) {
   </ResourceGroup>;
 }
 
-function HealthEndpoint({ candidate }) {
-  const health = candidateHealthPresentation(candidate);
-  return <div className="qh-endpoint"><div className="qh-endpoint-heading"><span className="qh-endpoint-dot" data-tone={health.tone} /><span className="qh-endpoint-name">{candidate.endpointName || (candidate.endpointAddress ? '未命名端点' : '端点信息待同步')}</span><span className="qh-badge" data-tone={health.tone}>{health.label}</span></div>
-    {candidate.endpointAddress && <p className="qh-endpoint-address">{candidate.endpointAddress}</p>}
-    <div className="qh-endpoint-meta"><span>{candidate.upstreamModel || candidate.model || '沿用请求模型'}</span>{candidate.protocol && <span className="qh-endpoint-protocol">{candidate.protocol === 'messages' ? 'Messages' : candidate.protocol === 'responses' ? 'Responses' : candidate.protocol}</span>}</div>
-    {(health.reason || health.until) && <div className="qh-health-reason" data-tone={health.tone}>{health.reason && <p>{health.reason}</p>}{date(health.until) !== '—' && <p>恢复 {date(health.until)}</p>}</div>}
+function HealthEndpoint({ provider, candidate, busy, onHealthChange }) {
+  const [open, setOpen] = useState(false);
+  const [inspection, setInspection] = useState(null);
+  const [working, setWorking] = useState('');
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const request = useRef(0);
+  const panelId = useId();
+  useEffect(() => () => { request.current++; }, []);
+  const target = dispatchRecoveryTarget(provider, candidate);
+  const stateKey = JSON.stringify([target, candidate.enabled, candidate.health]);
+  // Admission can change while the cooldown fields stay the same. A fresh
+  // workspace snapshot must invalidate the previous admission check.
+  const current = inspection?.key === stateKey && inspection.healthSource === candidate.health ? inspection.state : null;
+  const visibleError = error?.healthSource === candidate.health ? error?.message : '';
+  const visibleNotice = notice?.healthSource === candidate.health ? notice?.message : '';
+  const blockage = current?.blockage;
+  const recovery = blockage ? describeBlockageRecovery(blockage) : null;
+  const snapshot = candidateHealthPresentation(candidate);
+  const health = current ? {
+    label: blockage.reason ? blockageLabel(blockage.reason) : '可发送',
+    tone: !blockage.reason ? 'success' : blockage.reason.includes('repair') ? 'danger' : 'warning',
+    until: blockage.recoverAt,
+  } : snapshot;
+  const endpointName = candidate.endpointName || (candidate.endpointAddress ? '未命名端点' : '端点信息待同步');
+  const probing = candidate.health?.reason === 'account_probe_in_progress' || blockage?.recovery === 'probing';
+  const retryVisible = !probing && (candidate.health?.coolingDown || candidate.health?.repairRequired || current?.canRetry);
+  const inspect = async (retry = false) => {
+    const token = ++request.current;
+    setWorking(retry ? 'retry' : 'read'); setError(null); setNotice(null);
+    try {
+      const result = retry
+        ? await retryCurrentDispatchCandidate(target, { readRecovery: getDispatchRecovery, retryCandidate: retryDispatchCandidate })
+        : { state: await readCurrentDispatchCandidate(target, getDispatchRecovery) };
+      if (token === request.current) {
+        setInspection({ key: stateKey, healthSource: candidate.health, state: result.state });
+        if (retry) {
+          setNotice({ healthSource: candidate.health, message: result.released ? '已允许此端点重新尝试，后续请求会验证上游状态。' : '当前仍有其他阻塞，请按最新恢复条件处理。' });
+          setOpen(true);
+        }
+      }
+      if (result.released) await onHealthChange?.();
+    } catch (cause) {
+      if (token === request.current) { setError({ healthSource: candidate.health, message: cause?.message || '读取端点状态失败，请稍后重试。' }); setOpen(true); }
+    } finally {
+      if (token === request.current) setWorking('');
+    }
+  };
+  return <div className="qh-endpoint qh-health-endpoint" data-tone={health.tone}>
+    <div className="qh-endpoint-heading" data-retry={Boolean(retryVisible)}><span className="qh-endpoint-dot" data-tone={health.tone} /><span className="qh-endpoint-name">{endpointName}</span><span className="qh-badge" data-tone={health.tone}>{health.label}</span>
+      {retryVisible && <Tooltip asChild content={current && !current.canRetry ? '当前无法解除，请查看最新恢复条件' : '重新检查当前状态后，允许此端点用于后续请求'}><span className="qh-retry-control"><Button type="button" variant="secondary" size="sm" icon={RotateCcw} className="qh-retry-button" loading={working === 'retry'} disabled={busy || Boolean(working) || Boolean(current && !current.canRetry)} onClick={() => inspect(true)}>{candidate.health?.repairRequired ? '允许重试' : '解除冷却'}</Button></span></Tooltip>}
+      <Tooltip asChild content={open ? '收起端点详情' : '查看当前原因与恢复条件'}><button type="button" className="qh-icon-button" aria-label={`${open ? '收起' : '查看'} ${endpointName} 恢复详情`} aria-expanded={open} aria-controls={panelId} disabled={busy || Boolean(working)} onClick={() => { if (open) setOpen(false); else { setOpen(true); inspect(); } }}>{working === 'read' ? <RefreshCw size={13} className="animate-spin motion-reduce:animate-none" /> : <ChevronDown size={14} className={open ? 'rotate-180' : ''} />}</button></Tooltip>
+    </div>
+    {date(health.until) !== '—' && candidate.health?.reason !== 'account_probe_in_progress' && blockage?.recovery !== 'probing' && <p className="qh-endpoint-retry-time"><Clock3 size={11} />{blockage?.reason === 'daily_cost_limit_exceeded' ? '限额重置' : '冷却计时至'} {date(health.until)}</p>}
+    {open && <div id={panelId} className="qh-recovery-details" aria-label={`${endpointName} 当前恢复条件`} aria-busy={Boolean(working)}>
+      {working === 'read' && <p role="status">正在读取当前端点状态…</p>}
+      {visibleError && <p role="alert" className="qh-query-error">{visibleError}</p>}
+      {visibleNotice && <p role="status" className="qh-recovery-notice">{visibleNotice}</p>}
+      {!recovery && !working && !visibleError && <p>请刷新此端点，查看当前原因与恢复条件。</p>}
+      {recovery && <><dl className="qh-recovery-facts">
+        <div><dt>当前条件</dt><dd>{recovery.label}</dd></div>
+        {blockage.cause && <div><dt>触发原因</dt><dd>{describeFailureReason(blockage.cause) || blockage.cause}</dd></div>}
+        {recovery.costs && <div><dt>成本限额</dt><dd>{recovery.costs}</dd></div>}
+        <div><dt>恢复条件</dt><dd>{recovery.recovery}</dd></div>
+        {recovery.action && <div><dt>处理方式</dt><dd>{recovery.action}</dd></div>}
+        <div><dt>检查时间</dt><dd>{date(blockage.observedAt)}</dd></div>
+      </dl></>}
+      <button type="button" className="qh-small-action" disabled={busy || Boolean(working)} onClick={() => inspect()}><RefreshCw size={12} />刷新此端点状态</button>
+      {candidate.endpointAddress && <p className="qh-endpoint-address">{candidate.endpointAddress}</p>}
+      <div className="qh-endpoint-meta"><span>{candidate.upstreamModel || candidate.model || '沿用请求模型'}</span>{candidate.protocol && <span className="qh-endpoint-protocol">{candidate.protocol === 'messages' ? 'Messages' : candidate.protocol === 'responses' ? 'Responses' : candidate.protocol}</span>}</div>
+    </div>}
   </div>;
 }
 
@@ -87,19 +157,29 @@ function AccountLoad({ load }) {
   return <dl className="qh-load" aria-label="账号近期负载"><div><dt>并发</dt><dd>{load.concurrent}{load.maxConcurrent > 0 && <span> / {load.maxConcurrent}</span>}</dd></div><div><dt>近期 tokens</dt><dd>{number.format(load.decayedTokens)}</dd></div><div><dt>近期请求</dt><dd>{number.format(load.decayedRequests)}</dd></div></dl>;
 }
 
-function HealthGroup({ channel, group }) {
+function HealthGroup({ provider, channel, group, busy, onHealthChange }) {
   const summary = healthGroupSummary(group.candidates);
+  const [expanded, setExpanded] = useState(null);
+  const panelId = useId();
+  const open = expanded ?? summary.tone !== 'success';
   const load = group.candidates[0]?.load || {};
-  return <ResourceGroup label={`${channel.name} / ${group.name} 健康`} name={group.name} summary={<span className="qh-group-overview"><span className="qh-badge" data-tone={summary.tone}>{summary.label}</span><small>{group.candidates.length} 个候选</small></span>}>
-    <AccountLoad load={load} /><div className="qh-endpoints">{group.candidates.map((candidate) => <HealthEndpoint key={`${candidate.endpointId}/${candidate.model}/${candidate.upstreamModel}/${candidate.protocol}`} candidate={candidate} />)}</div>
-  </ResourceGroup>;
+  return <section className="qh-group qh-health-group" aria-label={`${channel.name} / ${group.name} 健康`}>
+    <button type="button" className="qh-health-group-heading" aria-label={`${open ? '收起' : '展开'} ${channel.name} / ${group.name} 健康`} aria-expanded={open} aria-controls={panelId} onClick={() => setExpanded(!open)}>
+      <KeyRound size={13} /><span className="qh-group-name">{group.name}</span><span className="qh-badge" data-tone={summary.tone}>{summary.label}</span><span className="qh-group-candidate-count">{group.candidates.length} 个候选</span><ChevronDown size={14} className={open ? 'rotate-180' : ''} />
+    </button>
+    {open && <div id={panelId} className="qh-health-group-content"><AccountLoad load={load} /><div className="qh-endpoints">{group.candidates.map(candidate => <HealthEndpoint key={`${candidate.endpointId}/${candidate.model}/${candidate.upstreamModel}/${candidate.protocol}`} provider={provider} candidate={candidate} busy={busy} onHealthChange={onHealthChange} />)}</div></div>}
+  </section>;
 }
 
-export default function QuotaHealthWorkspace({ provider, channels, accounts, candidates, quotas, balances = [], endpoints = [], model, onModelChange, busy, onRead, onRefresh, onBalanceUpdate, onPreview }) {
+export default function QuotaHealthWorkspace({ provider, channels, accounts, candidates, quotas, balances = [], endpoints = [], model, onModelChange, busy, onRead, onRefresh, onBalanceUpdate, onHealthChange, onPreview }) {
+  const viewTabsId = useId();
   const [query, setQuery] = useState('');
+  const [view, setView] = useState('health');
+  const [page, setPage] = useState(1);
   const [quotaScope, setQuotaScope] = useState('subscriptions');
   const [healthScope, setHealthScope] = useState('issues');
   const [balanceDialog, setBalanceDialog] = useState(null);
+  const root = useRef(null);
   const resources = quotaHealthChannels(channels, accounts, quotas, candidates, endpoints, balances);
   const quotaChannels = filterQuotaHealthChannels(resources, 'quotas', query, { subscriptionsOnly: quotaScope === 'subscriptions' });
   const healthChannels = filterQuotaHealthChannels(resources, 'candidates', query, { issuesOnly: healthScope === 'issues' });
@@ -107,20 +187,25 @@ export default function QuotaHealthWorkspace({ provider, channels, accounts, can
   const managedCount = visibleGroups.filter((group) => group.managed).length;
   const resourceCount = resources.reduce((total, channel) => total + channel.groups.length, 0);
   const issues = candidates.filter((candidate) => candidateHealthPresentation(candidate).tone !== 'success').length;
-  return <div className="quota-health-workspace">
-    <div className="qh-toolbar"><label className="qh-search"><Search size={14} /><input aria-label="搜索额度与健康" placeholder="搜索渠道、分组、模型或端点" value={query} onChange={(event) => setQuery(event.target.value)} /></label><Button type="button" size="sm" variant="secondary" icon={RefreshCw} disabled={busy} onClick={onRead}>读取快照</Button></div>
-    <WorkspaceSection title="额度与余额" icon={Database} className="qh-quota-section" count={`${visibleGroups.length} / ${resourceCount} 个分组`} tools={<ScopeSwitch label="额度展示范围" value={quotaScope} onChange={setQuotaScope} options={quotaScopes} />}>
+  const paginated = paginateQuotaHealthChannels(view === 'health' ? healthChannels : quotaChannels, page);
+  const changePage = next => { setPage(next); root.current?.scrollIntoView({ block: 'start' }); };
+  const viewTabs = [['health', <>健康与冷却<span className="qh-view-count" data-warning={issues > 0}>{issues ? `${issues} 项需关注` : `${candidates.length} 个候选`}</span></>, Activity], ['quota', <>额度与余额<span className="qh-view-count">{resourceCount} 个分组</span></>, Database]];
+  return <div ref={root} className="quota-health-workspace">
+    <div className="qh-view-switch"><DispatchTabs tabs={viewTabs} value={view} onChange={next => { setView(next); setPage(1); }} label="额度与健康视图" id={viewTabsId} /></div>
+    <div className="qh-toolbar"><label className="qh-search"><Search size={14} /><input aria-label="搜索额度与健康" placeholder={view === 'health' ? '搜索渠道、分组、模型或端点' : '搜索渠道、分组或额度'} value={query} onChange={event => { setQuery(event.target.value); setPage(1); }} /></label><Button type="button" size="sm" variant="secondary" icon={RefreshCw} disabled={busy} onClick={onRead}>刷新状态</Button></div>
+    {view === 'quota' && <WorkspaceSection id={`${viewTabsId}-quota-panel`} labelledBy={`${viewTabsId}-quota-tab`} title="额度与余额" icon={Database} className="qh-quota-section" count={`${visibleGroups.length} / ${resourceCount} 个分组`} tools={<ScopeSwitch label="额度展示范围" value={quotaScope} onChange={next => { setQuotaScope(next); setPage(1); }} options={quotaScopes} />}>
       {managedCount > 0 && <div className="qh-quota-controls"><label>订阅查询模型<input aria-label="主动查询的模型范围" placeholder="留空查询整体额度" value={model} disabled={busy} onChange={(event) => onModelChange(event.target.value)} /></label></div>}
       {quotaChannels.length > 0 && <p className="qh-section-note">{quotaScope === 'subscriptions' ? '订阅额度来自供应商；查询失败保留历史快照。' : '手动余额按请求成本扣减，仅为本地估算。未提供额度不影响健康检查或调度。'}</p>}
-      <HealthCardGrid>{quotaChannels.map((channel) => <ResourceCard key={channel.id} channel={channel} kind="额度">{channel.groups.map((group) => group.managed ? <QuotaGroup key={group.id} channel={channel} group={group} model={model} busy={busy} onRefresh={onRefresh} /> : <ManualBalanceGroup key={group.id} channel={channel} group={group} busy={busy} onAction={setBalanceDialog} />)}</ResourceCard>)}</HealthCardGrid>
+      <HealthCardGrid>{paginated.channels.map((channel) => <ResourceCard key={channel.id} channel={channel} kind="额度">{channel.groups.map((group) => group.managed ? <QuotaGroup key={group.id} channel={channel} group={group} model={model} busy={busy} onRefresh={onRefresh} /> : <ManualBalanceGroup key={group.id} channel={channel} group={group} busy={busy} onAction={setBalanceDialog} />)}</ResourceCard>)}</HealthCardGrid>
       {!quotaChannels.length && <div className="qh-scope-empty"><CircleHelp size={15} /><span>{query ? quotaScope === 'subscriptions' ? '没有匹配的订阅账号。' : '没有匹配的额度或余额资源。' : quotaScope === 'subscriptions' ? '暂无订阅账号，中转余额可在全部资源中查看和设置。' : '暂无凭证分组，请先添加渠道资源。'}</span>{quotaScope === 'subscriptions' && <button type="button" className="qh-small-action" onClick={() => setQuotaScope('all')}><Layers size={12} />查看全部资源</button>}</div>}
-    </WorkspaceSection>
-    <WorkspaceSection title="健康与冷却" icon={Activity} count={`${candidates.length} 个候选 · ${issues} 个需关注`} tools={<ScopeSwitch label="健康展示范围" value={healthScope} onChange={setHealthScope} options={healthScopes} />}>
-      {healthChannels.length > 0 && <p className="qh-section-note">近期负载按 1 小时半衰期衰减，同一账号的端点共享负载。</p>}
-      <HealthCardGrid>{healthChannels.map((channel) => <ResourceCard key={channel.id} channel={channel} kind="健康">{channel.groups.map((group) => <HealthGroup key={group.id} channel={channel} group={group} />)}</ResourceCard>)}</HealthCardGrid>
+    </WorkspaceSection>}
+    {view === 'health' && <WorkspaceSection id={`${viewTabsId}-health-panel`} labelledBy={`${viewTabsId}-health-tab`} title="健康与冷却" icon={Activity} count={`${candidates.length} 个候选 · ${issues} 个需关注`} tools={<ScopeSwitch label="健康展示范围" value={healthScope} onChange={next => { setHealthScope(next); setPage(1); }} options={healthScopes} />}>
+      {healthChannels.length > 0 && <p className="qh-section-note">展开端点可查看当前原因与恢复条件；解除冷却后由后续请求验证。正常分组默认收起。</p>}
+      <HealthCardGrid>{paginated.channels.map((channel) => <ResourceCard key={channel.id} channel={channel} kind="健康">{channel.groups.map((group) => <HealthGroup key={group.id} provider={provider} channel={channel} group={group} busy={busy} onHealthChange={onHealthChange} />)}</ResourceCard>)}</HealthCardGrid>
       {!healthChannels.length && <div className="qh-scope-empty" data-tone={!query && candidates.length && !issues ? 'success' : 'muted'}>{!query && candidates.length && !issues ? <ShieldCheck size={15} /> : <CircleHelp size={15} />}<span>{query ? healthScope === 'issues' ? '当前搜索范围内没有异常候选。' : '没有匹配的候选。' : !candidates.length ? '尚无候选健康状态。' : healthScope === 'issues' ? '当前没有异常候选。' : '没有可展示的候选。'}</span></div>}
-      {healthChannels.length > 0 && <footer className="qh-health-footer"><p>更新凭证可解除修复状态；具体模型限制可通过候选预览查看。</p><Button type="button" size="sm" variant="ghost" icon={FlaskConical} disabled={busy} onClick={onPreview}>查看候选健康</Button></footer>}
-    </WorkspaceSection>
+      {healthChannels.length > 0 && <footer className="qh-health-footer"><p>近期负载按 1 小时半衰期衰减，同一账号共享负载。</p><Button type="button" size="sm" variant="ghost" icon={FlaskConical} disabled={busy} onClick={onPreview}>查看候选健康</Button></footer>}
+    </WorkspaceSection>}
+    {paginated.pages > 1 && <nav className="qh-pagination" aria-label={`${view === 'health' ? '健康' : '额度'}资源分页`}><span>第 {paginated.start}–{paginated.end} 个分组，共 {paginated.total} 个 · 每页 8 个</span><div><Button type="button" variant="ghost" size="sm" icon={ChevronLeft} aria-label="上一页资源" disabled={paginated.page === 1} onClick={() => changePage(paginated.page - 1)}>上一页</Button><span className="qh-page-number">{paginated.page} / {paginated.pages}</span><Button type="button" variant="ghost" size="sm" icon={ChevronRight} aria-label="下一页资源" disabled={paginated.page === paginated.pages} onClick={() => changePage(paginated.page + 1)}>下一页</Button></div></nav>}
     {balanceDialog && <ManualBalanceDialog provider={provider} {...balanceDialog} onSave={onBalanceUpdate} onClose={() => setBalanceDialog(null)} />}
   </div>;
 }

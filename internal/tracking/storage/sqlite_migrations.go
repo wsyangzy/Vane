@@ -72,6 +72,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			alterSQL:    "ALTER TABLE request_logs ADD COLUMN privacy_redaction_summary TEXT",
 			description: "隐私脱敏摘要字段",
 		},
+		{
+			checkColumn: "context_summary",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN context_summary TEXT",
+			description: "上下文分类统计字段",
+		},
 		// 端点倍率快照字段（用于详情页计费过程展示）
 		{
 			checkColumn: "cost_multiplier",
@@ -285,6 +290,7 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 		{"failover_enabled", "ALTER TABLE codex_channels ADD COLUMN failover_enabled INTEGER NOT NULL DEFAULT 1", "Codex 渠道故障转移参与字段"},
 		{"non_stream_route", "ALTER TABLE codex_channels ADD COLUMN non_stream_route TEXT", "Codex 渠道非流改道字段"},
 		{"privacy_level", "ALTER TABLE codex_channels ADD COLUMN privacy_level TEXT", "Codex 渠道隐私级别字段"},
+		{"compaction_mode", "ALTER TABLE codex_channels ADD COLUMN compaction_mode TEXT NOT NULL DEFAULT 'preserve'", "Codex 渠道会话压缩方式"},
 	}
 	modelRouteMigrations := []struct {
 		checkColumn string

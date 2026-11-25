@@ -15,12 +15,13 @@ func TestProfileSearchPersistenceAndProviderCommitRollBackTogether(t *testing.T)
 	p := testRoutingProfile("codex", "search")
 	policy := routing.DefaultSearchPolicy()
 	policy.Vendor, policy.Endpoint, policy.HasAPIKey = "brave", "https://api.search.brave.com/res/v1/web/search", true
+	policy.APIKeyLengths = map[string]int{"brave": 32}
 	p.Search = &policy
 	if err := s.Save(ctx, &p); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := s.Get(ctx, "codex", p.ID)
-	if err != nil || loaded.Search == nil || loaded.Search.Vendor != "brave" || loaded.Search.HasAPIKey {
+	if err != nil || loaded.Search == nil || loaded.Search.Vendor != "brave" || loaded.Search.HasAPIKey || len(loaded.Search.APIKeyLengths) != 0 {
 		t.Fatalf("metadata or credential marker leaked: %+v %v", loaded, err)
 	}
 	revision := loaded.Revision

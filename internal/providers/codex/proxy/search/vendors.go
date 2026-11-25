@@ -26,6 +26,73 @@ func (c Config) Name() string {
 	}
 }
 
+func buildExtractCall(ctx context.Context, cfg Config, page string) (*http.Request, error) {
+	u, err := url.Parse(cfg.Endpoint)
+	if err != nil {
+		return nil, err
+	}
+	u.Path = strings.TrimSuffix(strings.TrimRight(u.Path, "/"), "/search")
+	u.RawPath = ""
+	payload := map[string]any{"urls": []string{page}}
+	if cfg.Vendor == "exa" {
+		u.Path += "/contents"
+		payload["text"] = map[string]int{"maxCharacters": 12000}
+	} else {
+		u.Path += "/extract"
+		payload["format"] = "markdown"
+		payload["include_usage"] = true
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Accept", "application/json")
+	if cfg.Vendor == "exa" {
+		r.Header.Set("X-API-Key", cfg.APIKey)
+	} else {
+		r.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	}
+	return r, nil
+}
+
+func decodeExtractResults(vendor string, raw []byte) ([]Result, error) {
+	var data struct {
+		Results *[]struct {
+			Title, URL, Text string
+			Content          string `json:"raw_content"`
+		} `json:"results"`
+	}
+	if json.Unmarshal(raw, &data) != nil || data.Results == nil {
+		return nil, errors.New("missing extract results")
+	}
+	var results []Result
+	for _, item := range *data.Results {
+		content := item.Content
+		if vendor == "exa" {
+			content = item.Text
+		}
+		content = strings.TrimSpace(content)
+		if content == "" {
+			continue
+		}
+		// Limit output delivered to the model without splitting UTF-8 characters.
+		if chars := []rune(content); len(chars) > 12000 {
+			content = string(chars[:12000])
+		}
+		title := item.Title
+		if title == "" {
+			title = "网页正文"
+		}
+		results = append(results, Result{Title: title, URL: item.URL, Snippet: content})
+	}
+	return results, nil
+}
+
 func buildCall(ctx context.Context, cfg Config, job work, include, exclude []string) (*http.Request, error) {
 	u, err := url.Parse(cfg.Endpoint)
 	if err != nil {
@@ -99,6 +166,9 @@ func buildCall(ctx context.Context, cfg Config, job work, include, exclude []str
 		payload = p
 	default:
 		p := map[string]any{"query": job.Q, "max_results": cfg.MaxResults, "search_depth": "basic", "include_domains": include, "exclude_domains": exclude, "include_images": job.images, "include_image_descriptions": job.images}
+		if cfg.Vendor == "" || cfg.Vendor == "tavily" {
+			p["include_usage"] = true
+		}
 		if start != "" {
 			p["start_date"] = start
 		}

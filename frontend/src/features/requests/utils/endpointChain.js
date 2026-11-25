@@ -90,10 +90,19 @@ export const getEndpointChainItems = (request) => {
   return parseEndpointChain(request?.endpoint_chain);
 };
 
+export const isCodexSearchRequest = (request = {}) => String(request.provider || '').toLowerCase() === 'codex'
+  && /\/alpha\/search(?:\/|$)/i.test(String(request.path || ''));
+
+const hasRecordedSearchServiceCall = (request, endpointChain) => isCodexSearchRequest(request)
+  && endpointChain.some(item => parseChainNode(item).channel === '搜索服务');
+
 export const getRequestResourcePath = (request = {}) => {
   const trace = request.dispatchTrace;
-  if (trace?.attemptCount === 0) return [];
-  const source = trace?.attempts?.length ? trace.attempts : getEndpointChainItems(request);
+  const endpointChain = getEndpointChainItems(request);
+  if (trace?.attemptCount === 0 && !hasRecordedSearchServiceCall(request, endpointChain)) return [];
+  const source = isCodexSearchRequest(request) && endpointChain.length
+    ? endpointChain
+    : trace?.attempts?.length ? trace.attempts : endpointChain;
   const nodes = source.map((item, index) => parseChainNode(item, index + 1)).filter(node => !node.skipReason);
   if (!nodes.length && !source.length && !trace && (request.channel || request.endpoint || request.endpoint_name)) {
     nodes.push(parseChainNode({ channel: request.channel, endpoint: request.endpoint || request.endpoint_name }));
@@ -132,10 +141,11 @@ export const getRequestChannelLabel = (request = {}, chainNodes = [], fallback =
   // A profile's candidates (including skipped reroute targets) are not sends.
   // Older records may still carry the legacy active channel in request.channel.
   const trace = request.dispatchTrace;
+  const hasSearchServiceCall = hasRecordedSearchServiceCall(request, getEndpointChainItems(request));
   if (trace) {
     const attemptedChannel = String(trace.attempts?.at(-1)?.channel || '').trim();
     if (attemptedChannel) return attemptedChannel;
-    if (trace.attemptCount === 0) return trace.finished || trace.stopReason ? '未发送' : '待调度';
+    if (trace.attemptCount === 0 && !hasSearchServiceCall) return trace.finished || trace.stopReason ? '未发送' : '待调度';
   }
 
   if (chainNodes.length > 0 && chainNodes.every(node => node.skipReason)) return '未发送';

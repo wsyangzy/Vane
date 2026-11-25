@@ -113,6 +113,15 @@ export const groupPricingsByModel = (records = []) => {
   return Array.from(groups.values());
 };
 
+export const filterPricingGroups = (groups, provider, query) => {
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return groups.filter((group) => {
+    if (provider !== 'all' && group.provider !== provider) return false;
+    const name = `${group.modelName} ${group.displayName}`.toLowerCase();
+    return terms.every((term) => name.includes(term));
+  });
+};
+
 /**
  * 把表单的多档位数据拆成后端调用计划。
  *

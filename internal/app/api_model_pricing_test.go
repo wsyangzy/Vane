@@ -43,6 +43,14 @@ func TestFreshPricingStartupSeedsOfficialRatesAndRespectsLaterEdits(t *testing.T
 	fast, err := a.modelPricingStore.GetTier(ctx, "codex", "gpt-6.1-sol", "fast")
 	require.NoError(t, err)
 	require.Equal(t, 4.0, fast.InputPrice)
+	astra, err := a.modelPricingStore.GetTier(ctx, "codex", "gpt-6.2-astra", "")
+	require.NoError(t, err)
+	require.NotNil(t, astra)
+	require.Equal(t, 8.0, astra.InputPrice)
+	sol, err := a.modelPricingStore.GetTier(ctx, "codex", "gpt-6.2-sol", "")
+	require.NoError(t, err)
+	require.NotNil(t, sol)
+	require.Equal(t, 2.0, sol.InputPrice)
 	fast.InputPrice = 7
 	require.NoError(t, a.modelPricingStore.Update(ctx, fast))
 	require.NoError(t, a.modelPricingStore.DeleteTier(ctx, "codex", "gpt-6.1-sol", "ultrafast"))
@@ -57,6 +65,47 @@ func TestFreshPricingStartupSeedsOfficialRatesAndRespectsLaterEdits(t *testing.T
 	require.NoError(t, err)
 	require.NotNil(t, fable)
 	require.Equal(t, .5, fable.CacheReadPrice, "restart must preserve a user's edited Claude price")
+}
+
+func TestGPT62PricesBackfillAfterEarlierCatalogAndRespectLaterEdits(t *testing.T) {
+	adapter, err := storage.NewSQLiteAdapter(storage.DatabaseConfig{DatabasePath: filepath.Join(t.TempDir(), "upgrade.db")})
+	require.NoError(t, err)
+	require.NoError(t, adapter.Open())
+	defer adapter.Close()
+	require.NoError(t, adapter.InitSchema())
+	ctx := context.Background()
+	st := pricingstore.NewSQLiteModelPricingStore(adapter.GetWriteDB())
+	catalog, err := pricingservice.OpenAIPriceCatalog()
+	require.NoError(t, err)
+	var earlierRows []*pricingstore.ModelPricingRecord
+	for _, row := range catalog.Records {
+		if row.ModelName != "gpt-6.2-astra" && row.ModelName != "gpt-6.2-sol" {
+			earlierRows = append(earlierRows, row)
+		}
+	}
+	_, err = st.BackfillOfficialPrices(ctx, "openai_prices_2026-10-30", earlierRows)
+	require.NoError(t, err)
+	a := &App{storeDB: adapter.GetWriteDB(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	a.setupModelPricingStore()
+	for _, model := range []string{"gpt-6.2-astra", "gpt-6.2-sol"} {
+		for _, tier := range []string{"", "batch", "fast", "ultrafast"} {
+			got, err := st.GetTier(ctx, "codex", model, tier)
+			require.NoError(t, err)
+			require.NotNil(t, got, "%s/%s must be added after the earlier catalog import", model, tier)
+		}
+	}
+	sol, err := st.GetTier(ctx, "codex", "gpt-6.2-sol", "")
+	require.NoError(t, err)
+	sol.InputPrice = 7
+	require.NoError(t, st.Update(ctx, sol))
+	require.NoError(t, st.DeleteTier(ctx, "codex", "gpt-6.2-astra", "ultrafast"))
+	a.setupModelPricingStore()
+	sol, err = st.GetTier(ctx, "codex", "gpt-6.2-sol", "")
+	require.NoError(t, err)
+	require.Equal(t, 7.0, sol.InputPrice)
+	ultra, err := st.GetTier(ctx, "codex", "gpt-6.2-astra", "ultrafast")
+	require.NoError(t, err)
+	require.Nil(t, ultra, "restart must preserve a user's disabled tier")
 }
 
 func TestClaudePricesBackfillAfterEarlierCatalogsPreservesExistingPrices(t *testing.T) {

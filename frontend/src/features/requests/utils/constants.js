@@ -52,7 +52,7 @@ export const TABLE_COLUMNS = [
   { id: 'model', label: '模型', alwaysVisible: false, width: 'auto' },
   { id: 'reasoningEffort', label: '推理强度', alwaysVisible: false, width: 'auto' },
   { id: 'serviceTier', label: '服务档位', alwaysVisible: false, width: 'auto' },
-  { id: 'channel', label: '渠道', alwaysVisible: false, width: 'auto' },
+  { id: 'channel', label: '渠道 / 分组', alwaysVisible: false, width: 'auto' },
   { id: 'endpoint', label: '请求调度', alwaysVisible: false, width: 'auto' },
   { id: 'duration', label: '用时/首字', alwaysVisible: false, width: 'auto' },
   { id: 'inputTokens', label: '输入', alwaysVisible: false, width: 'auto', align: 'right' },

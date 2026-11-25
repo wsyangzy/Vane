@@ -19,7 +19,7 @@ function websiteLabel(website) {
 }
 
 // The provider adapters own credentials, forms and endpoint normalization.
-export default function ChannelResourceRow({ provider, name, website, groups, endpoints, busy, onEdit, onDelete, onAddGroup, ...resourceActions }) {
+export default function ChannelResourceRow({ provider, name, website, groups, endpoints, details, busy, onEdit, onDelete, onAddGroup, ...resourceActions }) {
   const [structureOpen, setStructureOpen] = useState(false);
   const closeStructure = useCallback(() => setStructureOpen(false), []);
   const subscriptions = groups.filter((group) => group.authMode === 'client_passthrough').length;
@@ -56,7 +56,7 @@ export default function ChannelResourceRow({ provider, name, website, groups, en
           </div>
         </div>
       </div>
-      {structureOpen && <ChannelStructureDialog provider={provider} name={name} website={website} groups={groups} endpoints={endpoints} busy={busy} onClose={closeStructure} onEdit={onEdit} onDelete={onDelete} onAddGroup={onAddGroup} {...resourceActions} />}
+      {structureOpen && <ChannelStructureDialog provider={provider} name={name} website={website} groups={groups} endpoints={endpoints} details={details} busy={busy} onClose={closeStructure} onEdit={onEdit} onDelete={onDelete} onAddGroup={onAddGroup} {...resourceActions} />}
     </section>
   );
 }

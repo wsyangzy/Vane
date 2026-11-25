@@ -56,8 +56,10 @@ type RequestRecord struct {
 	ServiceTier              string      `json:"service_tier"`
 	PrivacyRedacted          bool        `json:"privacy_redacted"`
 	PrivacyRedactionSummary  string      `json:"privacy_redaction_summary,omitempty"`
+	ContextSummary           string      `json:"context_summary,omitempty"`
 	Provider                 string      `json:"provider"` // 提供商标识: claude/codex
 	Status                   string      `json:"status"`
+	InProgress               bool        `json:"in_progress"`
 	StreamOutcome            string      `json:"stream_outcome,omitempty"` // 终态枚举；历史行与活跃请求为空
 	HTTPStatus               int         `json:"http_status"`
 	HTTPStatusIsUpstream     bool        `json:"http_status_is_upstream"`
@@ -107,6 +109,7 @@ type RequestListResult struct {
 }
 
 type RequestQueryParams struct {
+	RequestID       string   `json:"request_id,omitempty"` // Exact lookup takes precedence over list filters.
 	Page            int      `json:"page"`
 	PageSize        int      `json:"page_size"`
 	StartDate       string   `json:"start_date"`       // 格式：2025-12-05T00:00 或 2025-12-05T00:00:00+08:00

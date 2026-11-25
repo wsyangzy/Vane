@@ -131,8 +131,10 @@ func (tp *TokenParser) ParseSSEEvent(line string) *ParseResult {
 	if line == "" && tp.collectingData && tp.eventBuffer.Len() > 0 {
 		switch tp.currentEvent {
 		case "message_start":
-			// 仅解析message_start以获取模型信息（不需要ParseResult）
 			tp.parseMessageStart()
+			if tp.partialUsage != nil {
+				return &ParseResult{TokenUsage: tp.partialUsage, ModelName: tp.modelName, OutputPending: true}
+			}
 			return nil
 		case "message_delta", "content_block_delta":
 			// 解析带 usage 的增量事件
@@ -287,8 +289,28 @@ func (tp *TokenParser) extractMessageDelta() *ParseResult {
 		return nil
 	}
 
+	var outputBytes, reasoningBytes int
+	if tp.currentEvent == "content_block_delta" {
+		delta, _ := messageDelta.Delta.(map[string]any)
+		typ, _ := delta["type"].(string)
+		switch typ {
+		case "text_delta":
+			text, _ := delta["text"].(string)
+			outputBytes = len(text)
+		case "input_json_delta":
+			text, _ := delta["partial_json"].(string)
+			outputBytes = len(text)
+		case "thinking_delta":
+			text, _ := delta["thinking"].(string)
+			reasoningBytes = len(text)
+		}
+	}
+
 	// 检查此增量事件是否包含使用信息
 	if messageDelta.Usage == nil {
+		if outputBytes+reasoningBytes > 0 {
+			return &ParseResult{OutputBytes: outputBytes, ReasoningBytes: reasoningBytes, Status: "non_token_response"}
+		}
 		// ⚠️ 兼容性处理：对于非Claude端点，增量事件可能不包含usage信息
 		// 这种情况下需要fallback机制来标记请求完成
 		if tp.requestID != "" {

@@ -32,7 +32,7 @@ test('unknown and permanent blocks never invent automatic recovery times', () =>
   assert.match(unknown.recovery, /恢复时间未知/);
 });
 
-test('every blocker appears in mixed upstream failure notifications with its saved group, amounts and remedy', () => {
+test('mixed failures keep blocker amounts and remedy in details, with a short notification', () => {
   const failure = { provider: 'codex', request_id: 'failed', failure_reason: 'incomplete_stream', http_status_is_upstream: true, http_status_code: 200,
     endpoint_chain: [{ channel: 'NewCodex', endpoint: '默认', attempts: 1, status_code: 200, error: '<html>upstream-body</html>' }],
     route_snapshot: { profile_id: 2, attempts: 1, candidates: [
@@ -46,15 +46,16 @@ test('every blocker appears in mixed upstream failure notifications with its sav
   assert.equal(details.blockingCandidates[0].credentialGroup, '混合池');
   const toast = buildFailureToast(failure);
   const message = toast.message.join('\n');
-  assert.match(message, /ZeroCat \/ 混合池/);
-  assert.match(message, /\$5\.1250.*\$5\.0000/);
-  assert.match(message, /限额重置|记录的等待时间已到/);
-  assert.match(message, /编辑此凭证分组/);
+  assert.equal(toast.message.length, 2);
+  assert.match(message, /已达每日成本限额/);
+  assert.match(details.blockingCandidates[0].recovery.costs, /\$5\.1250.*\$5\.0000/);
+  assert.match(details.blockingCandidates[0].recovery.recovery, /限额重置|记录的等待时间已到/);
+  assert.match(details.blockingCandidates[0].recovery.action, /编辑此凭证分组/);
   assert.ok(!message.includes('upstream-body'));
   assert.equal(createFailureNotificationAggregator().consume([failure], at).length, 1);
 });
 
-test('the notification merge keeps different groups or triggers separate while updating changed cost figures', () => {
+test('notifications for daily limits keep different groups or triggers separate', () => {
   const aggregator = createFailureNotificationAggregator();
   const request = (blockage) => ({ provider: 'codex', failure_reason: 'recovery_outside_budget', dispatchTrace: {
     profileId: 2, attempts: [], skipped: [{ channel: 'ZeroCat', reason: blockage.reason, blockage }],
@@ -63,7 +64,8 @@ test('the notification merge keeps different groups or triggers separate while u
   const next = aggregator.consume([request({ ...limit, daily_used_usd: 6 })], at + 1000)[0];
   assert.equal(first.id, next.id);
   assert.equal(next.update, true);
-  assert.match(next.message.join('\n'), /\$6\.0000/);
+  assert.match(next.message.at(-1), /已合并 2 个请求/);
+  assert.match(getRequestFailureDetails(request({ ...limit, daily_used_usd: 6 })).blockingCandidates[0].recovery.costs, /\$6\.0000/);
   const other = aggregator.consume([request({ ...limit, group_id: 6, group_name: '其他分组' })], at + 2000)[0];
   assert.notEqual(first.id, other.id);
   const trigger = aggregator.consume([request({ ...limit, cause: 'network_error' })], at + 3000)[0];
@@ -77,10 +79,11 @@ test('an empty resolved trace does not discard a direct daily cost rejection', (
 });
 
 test('recovery stop shows its recorded request limits beside the actual blocker', () => {
-  const toast = buildFailureToast({ provider: 'codex', failure_reason: 'recovery_outside_budget', http_status_is_upstream: false,
+  const request = { provider: 'codex', failure_reason: 'recovery_outside_budget', http_status_is_upstream: false,
     route_snapshot: { attempts: 0, max_attempts: 10, max_duration_ms: 60000, next_recovery_at: limit.recover_at,
-      candidates: [{ action: 'skipped', reason: limit.reason, candidate: { channel: '38', endpoint: '97' }, blockage: limit }] } });
-  assert.match(toast.message.join('\n'), /实际向上游发送 0 次/);
-  assert.match(toast.message.join('\n'), /最多发送 10 次，总时长上限 60 秒/);
-  assert.match(toast.message.join('\n'), /每日成本限额/);
+      candidates: [{ action: 'skipped', reason: limit.reason, candidate: { channel: '38', endpoint: '97' }, blockage: limit }] } };
+  const details = getRequestFailureDetails(request);
+  assert.match(details.stopContext.join('\n'), /实际向上游发送 0 次/);
+  assert.match(details.stopContext.join('\n'), /最多发送 10 次，总时长上限 60 秒/);
+  assert.match(buildFailureToast(request).message.join('\n'), /每日成本限额/);
 });

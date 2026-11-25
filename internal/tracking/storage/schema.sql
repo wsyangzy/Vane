@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
     environment TEXT NOT NULL DEFAULT 'release', -- 运行环境: dev/release（两版共享本库，靠此列隔离追踪视图）
     privacy_redacted BOOLEAN DEFAULT 0,        -- 发送上游前是否命中隐私脱敏
     privacy_redaction_summary TEXT,            -- 隐私脱敏命中摘要（仅规则名与命中数，绝不含原文）
+    context_summary TEXT,                      -- 上下文分类计数与估算 token
 
     -- 状态信息 (更新: 生命周期状态与错误原因分离 - 2025-09-28)
     status TEXT NOT NULL DEFAULT 'pending', -- 生命周期状态: pending/forwarding/processing/retry/suspended/completed/failed/cancelled
@@ -372,6 +373,7 @@ CREATE TABLE IF NOT EXISTS codex_channels (
     failover_enabled INTEGER NOT NULL DEFAULT 1,
     non_stream_route TEXT,                                      -- 非流改道 JSON {"mode","targets"}；NULL 表示关闭
     privacy_level TEXT,                                         -- 隐私级别：NULL=跟随全局 / third_party / trusted
+    compaction_mode TEXT NOT NULL DEFAULT 'preserve',
 
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')

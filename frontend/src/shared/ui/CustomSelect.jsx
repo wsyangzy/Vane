@@ -97,6 +97,8 @@ export const CustomSelect = ({
     if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current);
   }, []);
 
+  // Reopening during the exit animation reuses the portal. Recalculate its
+  // position even when isRendered stays true and the viewport has changed.
   useLayoutEffect(() => {
     if (!isRendered) return undefined;
     updatePosition();
@@ -105,7 +107,7 @@ export const CustomSelect = ({
     return () => {
       animatedAncestor?.removeEventListener('animationend', updatePosition);
     };
-  }, [isRendered, updatePosition, options]);
+  }, [isRendered, isOpen, updatePosition, options]);
 
   useEffect(() => {
     if (!isOpen) return undefined;

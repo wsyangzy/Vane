@@ -5,7 +5,7 @@
 // ============================================
 
 import { getEndpointChainItems, parseChainNode } from './endpointChain.js';
-import { blockageLabel, describeBlockageRecovery, mapBlockage } from './blockage.js';
+import { blockageLabel, describeBlockageRecovery, isHealthCooldown, mapBlockage } from './blockage.js';
 
 // failure_reason 是 Relay 的内部分类；这里给每个分类一句用户能看懂的说明。
 // last_failure_reason may contain provider text or a local failure; provenance
@@ -35,6 +35,9 @@ export const FAILURE_REASON_DETAILS = Object.freeze({
   credential_rejected: '上游拒绝此分组的凭证',
   permission_scope_unknown: '上游拒绝此请求，需核对账号余额和访问权限',
   endpoint_unavailable: '上游端点暂不可用',
+  model_not_found: '上游未提供此模型',
+  context_length_exceeded: '会话内容太长，超出了当前模型一次能处理的范围',
+  input_too_long: '会话内容太长，超出了当前模型一次能处理的范围',
   upstream_unavailable: '上游服务暂不可用',
   response_read_error: '上游响应正文读取失败',
   response_write_error: '响应写回客户端失败',
@@ -60,9 +63,9 @@ export const FAILURE_REASON_DETAILS = Object.freeze({
 });
 
 const RETRY_STOP_REASONS = new Set(['retry_budget_exhausted', 'retry_attempts_exhausted', 'retry_deadline_exceeded', 'recovery_outside_budget']);
+const COOLDOWN_ROUTE_STOPS = new Set(['route_unavailable', 'no_healthy_endpoints', ...RETRY_STOP_REASONS]);
 const retryContext = (request) => {
-  let snapshot = request.routeSnapshot || request.route_snapshot || {};
-  if (typeof snapshot === 'string') { try { snapshot = JSON.parse(snapshot); } catch { snapshot = {}; } }
+  const snapshot = routeSnapshot(request);
   const trace = request.dispatchTrace || {};
   const nextRecoveryAt = trace.nextRecoveryAt || snapshot?.next_recovery_at || snapshot?.nextRecoveryAt || '';
   const rawAttempts = trace.attemptCount ?? snapshot?.attempts;
@@ -98,7 +101,7 @@ const routeSnapshot = (request) => {
   return snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot) ? snapshot : {};
 };
 
-const skippedCandidates = (request) => {
+export const skippedCandidates = (request) => {
   const trace = request.dispatchTrace;
   const traced = Array.isArray(trace?.skipped) ? [...trace.skipped, ...(trace.attempts || [])
     .filter(item => item.action === 'failed' && item.blockage && item.blockage.reason !== item.reason)
@@ -107,7 +110,8 @@ const skippedCandidates = (request) => {
   const events = routeSnapshot(request).candidates;
   const skipped = (Array.isArray(events) ? events : [])
     .filter(event => (event?.action === 'skipped' || event?.action === 'failed' && event.blockage && event.blockage.reason !== event.reason) && event.candidate)
-    .map(event => ({ ...event.candidate, action: event.action, reason: event.blockage?.reason || event.reason || '', blockage: event.blockage }));
+    .map(event => ({ ...event.candidate, action: event.action,
+      reason: event.reason === 'candidate_duplicate' ? event.reason : event.blockage?.reason || event.reason || '', blockage: event.blockage }));
   if (skipped.length) return skipped;
   const reason = extractFailureCode(request.failure_reason || request.failureReason || '');
   return reason.startsWith('daily_cost_') || reason.startsWith('account_') || reason.startsWith('manual_balance_') || reason.startsWith('subscription_')
@@ -120,7 +124,7 @@ const groupedBlockers = (request) => {
   const groups = new Map();
   for (const item of skippedCandidates(request)) {
     const reason = item.reason || '';
-    if (!reason) continue;
+    if (!reason || reason === 'candidate_duplicate') continue;
     const candidate = item.candidate || item;
     const blockage = mapBlockage(item.blockage) || mapBlockage({ provider: request.provider,
       channel_id: item.channelId || (/^\d+$/.test(candidate.channel || '') ? candidate.channel : 0),
@@ -162,12 +166,6 @@ const blockerAdvice = (code, blockers) => {
   return `建议：${advice.join('；')}。`;
 };
 
-const blockerSummaryLines = (blockers) => blockers.flatMap(item => [
-  `${[item.channel, item.credentialGroup].filter(Boolean).join(' / ')}：${item.label}（${item.count} 个候选）`,
-  item.recovery.costs, item.recovery.recovery, item.recovery.action,
-  item.blockage.cause && `触发原因：${describeFailureReason(item.blockage.cause) || item.blockage.cause}`,
-].filter(Boolean));
-
 // A provider reply and a local scheduling/transport outcome have different
 // evidence. Never render an internal classification as the provider's words.
 export const getRequestFailureDetails = (request = {}) => {
@@ -186,14 +184,18 @@ export const getRequestFailureDetails = (request = {}) => {
   const hasUpstream = upstreamHops.length > 0 || source !== false && status > 0 && (!processingFailure || status >= 400);
   const raw = String(request.last_failure_reason || request.lastFailureReason || '');
   const detail = raw !== reason ? raw : '';
+  const upstreamExplanation = hasUpstream ? explainUpstreamFailure(upstreamHops[0]?.error || detail || reason, request) : null;
   const skipReason = localHops.find(node => node.skipReason)?.skipReason || '';
   const admissionReason = /^(account_|subscription_|state_|profile_|routing_|candidate_)/.test(reason)
     || reason.startsWith('search_') || reason === 'daily_cost_state_unavailable'
     || ['no_healthy_endpoints', 'no_supported_model_endpoint', 'daily_cost_limit_exceeded', 'privacy_filter_failed', 'image_streaming_unsupported'].includes(reason);
   const sent = nodes.some(node => !node.skipReason && (node.attempts > 0 || node.statusCode > 0 || !node.local && node.error)) || retry.attempts > 0;
   const unsent = !hasUpstream && !sent && (Boolean(skipReason) || retry.attempts === 0 || admissionReason);
+  const cooldownBlocked = unsent && (isHealthCooldown(reasonCode) || COOLDOWN_ROUTE_STOPS.has(reasonCode) || !reasonCode) && (
+    blockingCandidates.length > 0 ? blockingCandidates.every(item => isHealthCooldown(item.reason)) : isHealthCooldown(skipReason || reasonCode)
+  );
   return {
-    upstreamHops, localHops, hasUpstream,
+    upstreamHops, localHops, hasUpstream, cooldownBlocked, upstreamExplanation, nextRecoveryAt: retry.nextRecoveryAt,
     upstreamStatus: hasUpstream ? status : 0,
     upstreamDetail: hasUpstream ? processingFailure ? upstreamHops[0]?.error || '' : detail : '',
     showLocal: retryStop || processingFailure || localHops.length > 0 || blockingCandidates.length > 0 || !hasUpstream,
@@ -201,14 +203,15 @@ export const getRequestFailureDetails = (request = {}) => {
       : hasUpstream && (localHops.some(hop => hop.skipReason) || hasSkippedCandidates) ? '部分目标未发送'
         : hasUpstream && blockingCandidates.length ? '调用失败后的恢复条件' : '未收到上游响应',
     localSummary: reasonCode === 'recovery_outside_budget'
-      ? '候选端点预计恢复时间晚于本次请求剩余等待时限，Vane 因此停止继续尝试。'
+      ? '候选端点的最早重试时间超出本次请求的等待上限。'
+      : cooldownBlocked ? '候选端点仍在冷却，本次请求在 Vane 内结束。'
       : hasUpstream && blockingCandidates.length > 0
         ? hasSkippedCandidates ? '部分候选未发送；下方列出调度记录中的跳过原因。' : '本次上游调用失败后，以下候选进入阻塞状态。'
       : ['endpoint_exhausted', 'route_exhausted', 'non_stream_route_exhausted', 'all_channels_unavailable'].includes(reason) && !skipReason
       ? localHops.some(hop => hop.error) || detail ? '连接或响应传输未完成' : '未记录具体的本地失败原因'
       : describeFailureReason(retryStop ? reason : skipReason || reason) || (unsent ? '本地调度未选出可发送的目标' : '本次请求没有可用的上游响应记录'),
     localDetail: processingFailure || !hasUpstream ? detail : '',
-    stopContext: retryStop ? retryContextLines(request) : [],
+    stopContext: retryStop || cooldownBlocked ? retryContextLines(request) : [],
     blockingCandidates,
     blockerAdvice: blockerAdvice(reasonCode, blockingCandidates),
     category: reason === 'auxiliary_endpoint_unsupported' ? '辅助接口不受支持' : reason === 'image_endpoint_unsupported' ? '图像接口不受支持' : '',
@@ -242,6 +245,8 @@ const NOTIFY_REASONS = new Set([
   'account_repair_required',
   'route_unavailable',
   'auxiliary_endpoint_unsupported',
+  'context_length_exceeded',
+  'input_too_long',
 ]);
 
 // 旧记录的 failure_reason 形如 "endpoint_exhausted: request failed: ..."，冒号前才是分类。
@@ -249,6 +254,76 @@ export const extractFailureCode = (failureReason) => {
   if (typeof failureReason !== 'string') return '';
   const head = failureReason.trim().split(':')[0].trim().toLowerCase();
   return /^[a-z][a-z0-9_]*$/.test(head) ? head : '';
+};
+
+// Keep the provider's body intact. This explanation is a separate display layer,
+// including for older records classified only as invalid_request.
+const requestContextSummary = (request) => {
+  let summary = request.contextSummary || request.context_summary || {};
+  if (typeof summary === 'string') { try { summary = JSON.parse(summary); } catch { summary = {}; } }
+  return summary && typeof summary === 'object' && !Array.isArray(summary) ? summary : {};
+};
+
+// Only display the protocol vocabulary recorded by the backend. Type names
+// outside the allowlist must not turn diagnostics into a request-text surface.
+const INPUT_PROTOCOL_TYPES = ['message', 'reasoning', 'function_call', 'function_call_output', 'custom_tool_call',
+  'custom_tool_call_output', 'tool_search_call', 'tool_search_output', 'additional_tools', 'compaction',
+  'compaction_summary', 'compaction_trigger', 'configuration_update', 'other'];
+const TOOL_PROTOCOL_TYPES = ['function', 'custom', 'namespace', 'web_search', 'web_search_preview', 'tool_search',
+  'mcp', 'file_search', 'code_interpreter', 'image_generation', 'computer', 'computer_use_preview', 'local_shell', 'shell', 'apply_patch', 'other'];
+const protocolCount = (value) => Number.isSafeInteger(value) && value >= 0 ? value : 0;
+const protocolTypes = (counts, allowed) => allowed.filter(kind => protocolCount(counts?.[kind]) > 0)
+  .map(kind => `${kind} × ${counts[kind]}`).join('、');
+
+export const getRequestProtocolDiagnostics = (request = {}) => {
+  const protocol = requestContextSummary(request).protocol;
+  if (!protocol || typeof protocol !== 'object' || Array.isArray(protocol)) return [];
+  const inputs = protocolTypes(protocol.input_types, INPUT_PROTOCOL_TYPES);
+  const tools = protocolTypes(protocol.request_tool_types, TOOL_PROTOCOL_TYPES);
+  const additional = protocolTypes(protocol.additional_tool_types, TOOL_PROTOCOL_TYPES);
+  const combined = protocolTypes(protocol.tool_types, TOOL_PROTOCOL_TYPES);
+  return [
+    `会话压缩项：${protocolCount(protocol.compaction_items)} 项`,
+    `本次工具声明：${protocolCount(protocol.request_tools)} 项${tools ? `（${tools}）` : ''}`,
+    `历史工具声明（additional_tools）：${protocolCount(protocol.additional_tools)} 项${additional ? `（${additional}）` : ''}`,
+    !tools && !additional && combined && `工具类型：${combined}`,
+    inputs && `输入项类型：${inputs}`,
+  ].filter(Boolean);
+};
+
+export const explainUpstreamFailure = (raw, request = {}) => {
+  const text = typeof raw === 'string' ? raw : JSON.stringify(raw || {});
+  let envelope;
+  try { envelope = JSON.parse(text); } catch { envelope = {}; }
+  const error = envelope?.error || envelope?.response?.error || envelope;
+  const code = String(error?.code || error?.type || '').toLowerCase();
+  const message = String(error?.message || text).toLowerCase();
+  if (['context_length_exceeded', 'input_too_long'].includes(code)
+    || /\b(context_length_exceeded|input_too_long)\b/.test(message)
+    || /maximum context length|exceeds? (?:the |this model's )?context (?:window|length)/.test(message)) {
+    return { code: 'context_length_exceeded', summary: FAILURE_REASON_DETAILS.context_length_exceeded,
+      advice: '请先压缩会话、减少附带文件或工具输出，或切换到支持更长上下文的模型。' };
+  }
+  if (message.includes('invalid tool type')) {
+    const context = requestContextSummary(request);
+    const protocol = context.protocol;
+    const breakdown = context.parts?.summary?.breakdown;
+    const compactionCount = protocol?.compaction_items;
+    const compacted = Number.isSafeInteger(compactionCount) && compactionCount >= 0
+      ? compactionCount > 0 : Array.isArray(breakdown) && breakdown.some(item => item?.kind === 'compaction');
+    const toolTypes = TOOL_PROTOCOL_TYPES.filter(kind => protocolCount(protocol?.request_tool_types?.[kind]) > 0
+      || protocolCount(protocol?.additional_tool_types?.[kind]) > 0 || protocolCount(protocol?.tool_types?.[kind]) > 0);
+    // A saved channel preference is not proof of the configuration loaded by
+    // this request's client. Explain recorded tools without inferring its mode.
+    const toolAdvice = toolTypes.length
+      ? `请求中的工具声明包含 ${toolTypes.join('、')}；上游未指出具体被拒绝的类型。`
+      : '上游未指出具体被拒绝的工具类型。';
+    return { code: 'invalid_tool_type', summary: '上游不接受本次请求的工具格式',
+      advice: toolAdvice + (compacted
+        ? '本次还含原生压缩状态，但该错误不能确认压缩状态是原因。普通摘要不会改变工具格式，已有压缩状态不会自动转换。请确认客户端配置已应用并重启，再用新会话验证。'
+        : '请检查上游是否支持当前客户端使用的工具格式。') };
+  }
+  return null;
 };
 
 export const describeFailureReason = (failureReason) => {
@@ -303,32 +378,34 @@ const describeRoute = (request) => {
 
 /**
  * 把一条失败请求整理成右上角提示需要的 { type, title, message }。
- * message 是行数组，Toast 会渲染成列表：第一行是原因，第二行是尝试范围。
- * 上游报错原文、请求 ID、模型这类排查细节留给请求追踪页。
+ * message 最多两行，为合并后的请求计数留出一行。
  */
-export const buildFailureToast = (request = {}) => {
+export const buildFailureToast = (request = {}, local = getRequestFailureDetails(request), now = Date.now()) => {
   const failureReason = request.failure_reason || request.failureReason || '';
   const manual = failureNeedsManualIntervention(failureReason);
   const provider = providerLabel(request.provider);
-  const local = getRequestFailureDetails(request);
-  const contextLines = RETRY_STOP_REASONS.has(extractFailureCode(failureReason)) ? retryContextLines(request) : [];
-  if ((request.http_status_is_upstream === false || request.httpStatusIsUpstream === false || local.localHops.length > 0 || local.localTitle === '本地响应处理失败') && !local.hasUpstream) {
-    return { type: 'warning', title: `${provider} ${local.localTitle}`, message: [local.localSummary, ...contextLines,
-      ...blockerSummaryLines(local.blockingCandidates), !local.blockingCandidates.length && local.blockerAdvice].filter(Boolean) };
+  if (local.cooldownBlocked) {
+    const retryAt = new Date(local.nextRecoveryAt);
+    const next = retryAt.getTime() > now && `最近一条最早可重试时间 ${retryAt.toLocaleTimeString('zh-CN', { hour12: false })}`;
+    return { type: 'warning', title: `${provider} 请求未发送`, message: ['候选端点冷却中', next || '在请求追踪中查看恢复状态'] };
   }
 
-  const lines = [];
-  const summary = describeFailureReason(failureReason);
-  if (summary) lines.push(summary);
-  lines.push(...contextLines);
-  lines.push(...blockerSummaryLines(local.blockingCandidates));
+  const blockerLabels = [...new Set(local.blockingCandidates.map(item => item.label))];
+  const blocker = blockerLabels.length > 1 ? '候选端点存在多种阻塞，详见请求追踪' : blockerLabels[0];
+  if (!local.hasUpstream && (local.localTitle === '请求未发送' || local.localTitle === '本地响应处理失败'
+    || (request.http_status_is_upstream ?? request.httpStatusIsUpstream) === false || local.localHops.length > 0)) {
+    return { type: 'warning', title: `${provider} ${local.localTitle}`, message: [local.localSummary,
+      blocker && !local.localSummary.includes(blocker) && blocker].filter(Boolean) };
+  }
+
+  const summary = local.upstreamExplanation?.summary || describeFailureReason(failureReason);
   const route = describeRoute(request);
-  if (route) lines.push(route);
+  const lines = [summary || '服务暂时不可用，请稍后重试', local.upstreamExplanation?.advice || blocker || route].filter(Boolean);
 
   return {
     type: manual ? 'warning' : 'error',
     title: manual ? `${provider} 请求等待处理` : `${provider} 请求失败`,
-    message: lines.length > 0 ? lines : ['服务暂时不可用，请稍后重试'],
+    message: lines,
   };
 };
 

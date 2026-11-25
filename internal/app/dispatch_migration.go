@@ -58,7 +58,12 @@ func (a *App) CheckRoutingConfiguration(provider string) (RoutingConfigurationSt
 	a.poolMu.Unlock()
 	if defaultID > 0 && runtime != nil {
 		plan := runtime.Plan(ctx, defaultID, "", true, DispatchInput{}.turn(), true)
-		check("candidate_preview", plan.Error == "" && len(plan.EligibleCandidates) > 0, "默认方案模拟至少包含一个可用候选")
+		available := plan.Error == "" && len(plan.EligibleCandidates) > 0
+		message := "当前默认方案有可立即使用的端点"
+		if !available {
+			message = "当前默认方案暂无可立即使用的端点，请点击该方案的「模拟调度」查看原因"
+		}
+		check("candidate_preview", available, message)
 	} else {
 		check("candidate_preview", false, "请先完成默认调度方案")
 	}

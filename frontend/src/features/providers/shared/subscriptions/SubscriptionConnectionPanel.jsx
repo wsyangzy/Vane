@@ -3,6 +3,8 @@ import { Cable, Check, CheckCircle2, ChevronDown, ChevronUp, Copy, FileCode2, Fi
 import { Button, CustomSelect } from '@/shared/ui/index.js';
 import { listRoutingProfiles, manageSubscriptionConnection, setDefaultRoutingProfile } from '@/services/wails/index.js';
 import SubscriptionConnectionPreview from './SubscriptionConnectionPreview.jsx';
+import CompactionSettings from '@/features/providers/codex/components/CompactionSettings.jsx';
+import BackupRecordsModal from '@/features/settings/components/BackupRecordsModal.jsx';
 import { dispatchReason, profileSwitchBlockReason } from '../dispatch/dispatchState.js';
 import { getErrorMessage } from '@/shared/lib/errorMessage.js';
 
@@ -10,6 +12,8 @@ const errorText = (error) => dispatchReason(getErrorMessage(error, '操作失败
 
 export default function SubscriptionConnectionPanel({ provider, embedded = false, onBusyChange, onUpdated }) {
   const [expanded, setExpanded] = useState(false);
+  const [backupsOpen, setBackupsOpen] = useState(false);
+  const backupTriggerRef = useRef(null);
   const [status, setStatus] = useState(null);
   const [profiles, setProfiles] = useState([]);
   const [preview, setPreview] = useState(null);
@@ -19,6 +23,8 @@ export default function SubscriptionConnectionPanel({ provider, embedded = false
   const [notice, setNotice] = useState('');
   const [confirmed, setConfirmed] = useState(false);
   const [catalogChoice, setCatalogChoice] = useState(null);
+  const [compactionChoice, setCompactionChoice] = useState(null);
+  const compactionMode = compactionChoice ?? (status?.compactionMode === 'native' ? 'native' : 'summary');
   const catalogMode = catalogChoice?.mode ?? status?.modelCatalogMode ?? 'local';
   const catalogPath = catalogChoice?.path ?? status?.modelCatalogPath ?? '';
   const generation = useRef(0);
@@ -41,7 +47,7 @@ export default function SubscriptionConnectionPanel({ provider, embedded = false
     const timer = setInterval(load, 5000);
     return () => { clearInterval(timer); generation.current += 1; };
   }, [load]);
-  useEffect(() => { setPreview(null); setConfirmed(false); }, [status?.profileId, status?.bindingVersion, status?.managed, status?.authEnabled]);
+  useEffect(() => { setPreview(null); setConfirmed(false); }, [status?.profileId, status?.bindingVersion, status?.managed, status?.authEnabled, status?.compactionMode]);
   const clearPreview = () => { setPreview(null); setConfirmed(false); setNotice(''); setError(''); };
   const run = async (action) => {
     setBusy(action); setError(''); setNotice('');
@@ -50,11 +56,11 @@ export default function SubscriptionConnectionPanel({ provider, embedded = false
         profileId: preview?.profileId,
         revision: action === 'restore' ? status?.revision : preview?.revision,
         bindingVersion: preview?.bindingVersion, contentRevision: preview?.contentRevision,
-        ...(provider === 'codex' ? { modelCatalogMode: catalogMode, modelCatalogPath: catalogPath } : {})
+        ...(provider === 'codex' ? { modelCatalogMode: catalogMode, modelCatalogPath: catalogPath,
+          compactionMode } : {})
       });
       if (action === 'preview') { setPreview(result); setConfirmed(false); }
-      if (action === 'apply') { setCatalogChoice(null); setPreview(null); setConfirmed(false); setNotice('已备份并自动写入客户端配置。请重新启动客户端使配置生效。'); }
-      if (action === 'restore') { setCatalogChoice(null); setPreview(null); setConfirmed(false); setNotice('已恢复接入 Vane 前的客户端配置，请重新启动客户端。'); }
+      if (action === 'apply') { setCatalogChoice(null); setCompactionChoice(null); setPreview(null); setConfirmed(false); setNotice('已备份并自动写入客户端配置。请重新启动客户端使配置生效，之后在 Vane 调整调度方案无需重启。'); }
       await load();
     } catch (e) { setPreview(null); setConfirmed(false); setError(errorText(e)); }
     finally { setBusy(''); }
@@ -78,7 +84,7 @@ export default function SubscriptionConnectionPanel({ provider, embedded = false
       await setDefaultRoutingProfile(provider, Number(value));
       await load();
       await onUpdated?.();
-      setNotice('已切换默认调度方案，新请求立即使用该方案。');
+      setNotice('已切换默认调度方案，新请求立即使用该方案。客户端凭证接入方式改变时，需重新应用对应模板。');
     } catch (e) { setError(errorText(e)); await load(); }
     finally { setBusy(''); }
   };
@@ -94,7 +100,7 @@ export default function SubscriptionConnectionPanel({ provider, embedded = false
       <div className="flex min-w-0 flex-wrap items-center gap-2"><Cable size={16} className="text-indigo-600" /><h2 className="text-sm font-semibold text-slate-800">连接到 Vane</h2><span className={`rounded px-2 py-0.5 text-xs ${status?.running ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{status?.running ? '代理运行中' : status ? '代理未运行' : '状态未读取'}</span><span className="text-xs text-slate-500">{title} → Vane</span></div>
       {!embedded && <button type="button" className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-indigo-600 hover:bg-indigo-50" aria-expanded={expanded} onClick={() => expanded ? close() : setExpanded(true)}>{expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}{expanded ? '收起配置' : '配置客户端'}</button>}
     </div>
-    {(embedded || expanded) && <div className="min-w-0 space-y-1.5 border-t border-slate-100 p-2.5">
+    {(embedded || expanded) && <div className="min-w-0 space-y-3 border-t border-slate-100 p-2.5">
       {!embedded && <p className="text-xs leading-5 text-slate-600">为本机 {title} 生成接入配置，请求由 Vane 默认调度方案转发。</p>}
       <div aria-label="客户端接入设置" className="grid min-w-0 items-center gap-3 rounded-lg border border-slate-200 bg-slate-50/70 p-2.5 md:grid-cols-2 md:gap-4">
         <div className="min-w-0 space-y-1.5 border-b border-slate-200 pb-3 md:border-r md:border-b-0 md:pr-4 md:pb-0">
@@ -113,6 +119,10 @@ export default function SubscriptionConnectionPanel({ provider, embedded = false
           {status && <p className="leading-4 text-slate-500">{status.authEnabled ? '自动使用 Vane 代理令牌。' : 'Vane 未开启代理鉴权。'}{status.profileId > 0 && (status.managed ? '上游凭证由 Vane 提供。' : `需要 ${title} 提供官方登录凭证。`)}</p>}
         </div>
       </div>
+      {provider === 'codex' && <>
+        <p className="text-xs leading-5 text-slate-500">修改下方选项后，生成预览并应用配置，再重启 Codex。调度方案的日常调整立即用于新请求。</p>
+        <CompactionSettings mode={compactionMode} onChange={value => { setCompactionChoice(value); clearPreview(); }} disabled={Boolean(busy) || !status} />
+      </>}
       {provider === 'codex' && <fieldset className="min-w-0 space-y-2 rounded-lg border border-slate-200 p-2.5 [&>legend+*]:mt-0" disabled={Boolean(busy) || !status}>
         <legend className="px-1 text-xs font-medium text-slate-700">模型目录来源</legend>
         <div className="grid min-w-0 gap-2 sm:grid-cols-2">
@@ -146,12 +156,13 @@ export default function SubscriptionConnectionPanel({ provider, embedded = false
         </ol>
         <p>{provider === 'codex' ? '专用模板会自动添加 X-Relay-Key，用于连接 Vane；API 渠道和 Vane 托管账号的默认模板无需此项。' : '专用模板会自动补充连接 Vane 的认证配置。'}</p>
       </div>}
-      <div className="flex flex-wrap gap-2"><Button type="button" size="sm" className="gap-1.5" variant="secondary" onClick={load} disabled={Boolean(busy)}><RefreshCw size={14} />刷新状态</Button><Button ref={previewTriggerRef} type="button" size="sm" className="gap-1.5" onClick={() => run('preview')} disabled={Boolean(busy) || !status?.endpointReady || (provider === 'codex' && catalogMode === 'local' && !catalogPath.trim())}><FileCode2 size={14} />{busy === 'preview' ? '正在生成…' : '生成配置预览'}</Button><Button type="button" size="sm" className="gap-1.5" variant="secondary" onClick={() => run('restore')} disabled={Boolean(busy) || !status?.backupAvailable}><RotateCcw size={14} />恢复原客户端配置</Button></div>
+      <div className="flex flex-wrap gap-2"><Button type="button" size="sm" className="gap-1.5" variant="secondary" onClick={load} disabled={Boolean(busy)}><RefreshCw size={14} />刷新状态</Button><Button ref={previewTriggerRef} type="button" size="sm" className="gap-1.5" onClick={() => run('preview')} disabled={Boolean(busy) || !status?.endpointReady || (provider === 'codex' && catalogMode === 'local' && !catalogPath.trim())}><FileCode2 size={14} />{busy === 'preview' ? '正在生成…' : '生成配置预览'}</Button><Button ref={backupTriggerRef} type="button" size="sm" className="gap-1.5" variant="secondary" onClick={() => setBackupsOpen(true)} disabled={Boolean(busy)}><RotateCcw size={14} />备份记录与恢复</Button></div>
       {!embedded && <p className="text-xs leading-5 text-slate-500">在预览窗口核对配置后，可备份并写入目标文件。</p>}
       {error && <p role="alert" className="break-words text-xs text-rose-600 [overflow-wrap:anywhere]">{error}</p>}
       {statusError && <p role="alert" className="break-words text-xs text-rose-600 [overflow-wrap:anywhere]">{statusError}</p>}
       {notice && <p role="status" className="flex items-start gap-1 break-words text-xs text-emerald-700 [overflow-wrap:anywhere]"><Check size={14} className="shrink-0" />{notice}</p>}
     </div>}
+    {backupsOpen && <BackupRecordsModal provider={provider} triggerRef={backupTriggerRef} onClose={() => setBackupsOpen(false)} onRestored={() => { clearPreview(); setCatalogChoice(null); setCompactionChoice(null); load(); onUpdated?.(); }} />}
     {preview && <SubscriptionConnectionPreview provider={provider} preview={preview} confirmed={confirmed} onConfirmedChange={setConfirmed} busy={busy} stale={stalePreview} canApply={Boolean(status?.running && status?.endpointReady)} error={error} notice={notice} onCopy={copy} onRegenerate={() => run('preview')} onApply={() => run('apply')} onClose={() => { setPreview(null); setConfirmed(false); }} triggerRef={previewTriggerRef} />}
   </section>;
 }

@@ -36,3 +36,32 @@ func TestNativePlanPreservesDefaultMembersAndModelThroughRecovery(t *testing.T) 
 		t.Fatal("native request mutated normal text routing rules")
 	}
 }
+
+func TestNativeRequestNeverReadsOrOverwritesTextAffinity(t *testing.T) {
+	ctx := context.Background()
+	config := runtimeTestConfig()
+	config.Profiles[0].Members = append(config.Profiles[0].Members, RoutingMember{ChannelID: 2, GroupID: 3, Enabled: true, Weight: 1})
+	config.Profiles[0].AffinityMode = AffinityTurn
+	strict := false
+	config.Profiles[0].Rules = []RoutingRule{{ID: 1, Kind: "model", MatchModel: "gpt-test", Enabled: true, Targets: []RouteTarget{{ChannelID: 2, GroupID: 3}}, FallbackToDefault: &strict}}
+	r := NewProfileRuntime(config)
+	turn := runtimeTestTurn("same-turn")
+	text := r.Plan(ctx, 0, "gpt-test", true, turn, false)
+	selected := runtimeTestSend(t, r, &text, 0)
+	r.RememberResponseStates(&text, selected, []string{"text-state"})
+	textOnly := len(r.affinity)
+	withState := WithProfileStateKeys(ctx, []string{"text-state"})
+	native := r.PlanNative(withState, 0, "native-model", "images")
+	if native.Decision.Kind != "default" || native.Decision.ReusedTurn || native.Model != "native-model" || native.EligibleCandidates[0].ChannelID != 1 {
+		t.Fatalf("native request reused text policy/model: %+v", native)
+	}
+	image := runtimeTestSend(t, r, &native, 0)
+	r.RememberResponseStates(&native, image, []string{"native-state"})
+	if len(r.affinity) != textOnly {
+		t.Fatal("native request added protocol affinity")
+	}
+	after := r.Plan(ctx, 0, "gpt-test", true, turn, false)
+	if after.Decision.RuleID != 1 || !after.Decision.ReusedTurn || after.Model != "gpt-test" || after.EligibleCandidates[0].ChannelID != 2 {
+		t.Fatalf("native completion overwrote text routing: %+v", after)
+	}
+}

@@ -5,8 +5,12 @@
 import { AlertTriangle, Trash2 } from 'lucide-react';
 import { Button } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
+import CredentialGroupRoutingImpact from '../../shared/credentials/CredentialGroupRoutingImpact.jsx';
+import useCredentialGroupRoutingImpact from '../../shared/credentials/useCredentialGroupRoutingImpact.js';
 
-const DeleteConfirmDialog = ({ endpoint, onConfirm, onCancel, loading }) => renderModalPortal(
+const DeleteConfirmDialog = ({ endpoint, routingGroupId, onConfirm, onCancel, loading }) => {
+  const impact = useCredentialGroupRoutingImpact('claude', routingGroupId);
+  return renderModalPortal(
   <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 animate-fade-in pt-[20vh]">
     <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
       <div className="flex items-center gap-3 mb-4">
@@ -19,10 +23,13 @@ const DeleteConfirmDialog = ({ endpoint, onConfirm, onCancel, loading }) => rend
         </div>
       </div>
 
-      <p className="text-slate-700 mb-6">
-        确定要删除端点 <span className="font-semibold">&quot;{endpoint?.name}&quot;</span> 吗？
-        删除后将无法恢复。
-      </p>
+      <div className="mb-6">
+        <p className="text-slate-700">
+          确定要删除端点 <span className="font-semibold">&quot;{endpoint?.name}&quot;</span> 吗？
+          删除后将无法恢复。
+        </p>
+        <CredentialGroupRoutingImpact impact={impact} endpoint disabled={loading} />
+      </div>
 
       <div className="flex justify-end gap-3">
         <Button variant="ghost" onClick={onCancel} disabled={loading}>
@@ -39,6 +46,7 @@ const DeleteConfirmDialog = ({ endpoint, onConfirm, onCancel, loading }) => rend
       </div>
     </div>
   </div>
-);
+  );
+};
 
 export default DeleteConfirmDialog;

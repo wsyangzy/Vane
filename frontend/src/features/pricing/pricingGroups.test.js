@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   groupPricingsByModel,
+  filterPricingGroups,
   groupPricingSpeeds,
   buildTierPayloads,
   emptyTierValues,
@@ -48,6 +49,29 @@ const row = (overrides) => ({
   updatedAt: '2026-09-01',
   isDefault: false,
   ...overrides
+});
+
+test('模型搜索按模型 ID 或显示名称匹配，忽略大小写和首尾空格，保留完整档位', () => {
+  const groups = groupPricingsByModel([
+    row({ modelName: 'gpt-6.2-astra', displayName: 'GPT-6.2 Astra' }),
+    row({ id: 2, modelName: 'gpt-6.2-astra', serviceTier: 'fast' }),
+    row({ id: 3, modelName: 'gpt-6.2-sol', displayName: '每日助手' })
+  ]);
+  assert.deepEqual(filterPricingGroups(groups, 'all', '  GPT-6.2-ASTRA  '), [groups[0]]);
+  assert.deepEqual(filterPricingGroups(groups, 'all', '每日助手'), [groups[1]]);
+  assert.equal(filterPricingGroups(groups, 'all', 'gpt 6.2 astra')[0].tiers.length, 1);
+});
+
+test('模型搜索与 provider 筛选叠加；清空搜索恢复当前 provider 的全部模型', () => {
+  const groups = groupPricingsByModel([
+    row({ modelName: 'gpt-6.2-sol', provider: 'claude' }),
+    row({ id: 2, modelName: 'gpt-6.2-sol', provider: 'codex' }),
+    row({ id: 3, modelName: 'gpt-6.2-astra', provider: 'codex' })
+  ]);
+  assert.deepEqual(filterPricingGroups(groups, 'codex', 'sol'), [groups[1]]);
+  assert.deepEqual(filterPricingGroups(groups, 'codex', '  '), groups.slice(1));
+  assert.deepEqual(filterPricingGroups(groups, 'all', ''), groups);
+  assert.deepEqual(filterPricingGroups(groups, 'all', 'unknown-model'), []);
 });
 
 test('同一模型的多个档位聚合成一张卡片，档位按标准顺序排列', () => {

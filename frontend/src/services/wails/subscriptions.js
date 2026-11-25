@@ -7,7 +7,8 @@ const manageSubscriptionConnection = async (provider, action, input = {}) => {
   const result = await WailsApp.ManageSubscriptionConnection({
     provider, action, profile_id: input.profileId || 0, local_key: input.localKey || '',
     revision: input.revision || '', binding_version: input.bindingVersion || 0, content_revision: input.contentRevision || '',
-    model_catalog_mode: input.modelCatalogMode || '', model_catalog_path: input.modelCatalogPath || ''
+    model_catalog_mode: input.modelCatalogMode || '', model_catalog_path: input.modelCatalogPath || '',
+    ...(input.compactionMode !== undefined ? { compaction_mode: input.compactionMode } : {}),
   });
   return {
     profileId: Number(result.profile_id || 0), profileName: result.profile_name || '', authEnabled: Boolean(result.auth_enabled),
@@ -17,7 +18,8 @@ const manageSubscriptionConnection = async (provider, action, input = {}) => {
     officialURL: result.official_url, managed: Boolean(result.managed),
     officialEnabled: Boolean(result.official_enabled), snippet: result.snippet, command: result.command,
     contentRevision: result.content_revision,
-    modelCatalogMode: result.model_catalog_mode || '', modelCatalogPath: result.model_catalog_path || ''
+    modelCatalogMode: result.model_catalog_mode || '', modelCatalogPath: result.model_catalog_path || '',
+    compactionMode: result.compaction_mode || 'preserve', remoteCompaction: result.remote_compaction || '',
   };
 };
 

@@ -178,16 +178,43 @@ func (h *Handler) tryEndpointCycleForStage(
 		)
 
 		// 同端点重试转发
-		var onAttempt func()
-		if routed && stage.execution != nil {
-			onAttempt = func() {
+		recordedAttempts := 0
+		rejectedResponse := false
+		recovery := h.newResponseRecoveryState(r, requestID)
+		recovery.onRejected = func(resp *http.Response, raw []byte) {
+			(*endpointChain)[len(*endpointChain)-1].Attempts += recovery.attempts - recordedAttempts
+			recordedAttempts = recovery.attempts
+			ctx := r.Context()
+			if resp.Request != nil {
+				ctx = resp.Request.Context()
+			}
+			annotateLastChainError(endpointChain, resp.StatusCode, subscription.Redact(ctx, chainBodyText(raw, recovery.rule.ID)), resp.Header, false)
+			closeLastHop(*endpointChain, startTime)
+			h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
+			rejectedResponse = true
+		}
+		onAttempt := func() {
+			if rejectedResponse {
+				*endpointChain = append(*endpointChain, chainNode{
+					Hop: len(*endpointChain) + 1, Channel: channelName,
+					CredentialGroup: endpoint.CredentialGroupName, Endpoint: endpoint.Name,
+					StartMs: time.Since(startTime).Milliseconds(),
+				})
+				if routed && stage.execution != nil {
+					stage.execution.Fail(stage.candidate(endpoint, requestedModel), routing.Failure{Scope: routing.ScopeRequest, Reason: recovery.rule.ID})
+				}
+				rejectedResponse = false
+				h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
+			}
+			if routed && stage.execution != nil {
 				stage.execution.Begin(stage.candidate(endpoint, requestedModel))
 				h.recordRouteSnapshot(requestID, stage.executionSnapshot())
 			}
 		}
-		resp, fwdErr, attempts := h.forwardWithRetry(r, body, endpoint, isStreaming, requestID, onAttempt)
+		attemptRequest := r.WithContext(withResponseRecoveryState(r.Context(), recovery))
+		resp, fwdErr, attempts := h.forwardWithRetry(attemptRequest, body, endpoint, isStreaming, requestID, onAttempt)
 		if attempts > 0 {
-			(*endpointChain)[len(*endpointChain)-1].Attempts += attempts
+			(*endpointChain)[len(*endpointChain)-1].Attempts += attempts - recordedAttempts
 			opts := tracking.UpdateOptions{}
 			if attemptCount != nil {
 				*attemptCount += attempts
@@ -206,6 +233,11 @@ func (h *Handler) tryEndpointCycleForStage(
 
 		// 客户端取消（context.Canceled）：直接结束
 		if errors.Is(fwdErr, context.Canceled) {
+			if recovery.retried() {
+				annotateLastChainError(endpointChain, 0, fwdErr.Error(), nil, true)
+				closeLastHop(*endpointChain, startTime)
+				h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
+			}
 			h.logger.Info("[Codex 请求取消]",
 				"provider", "codex",
 				"request_id", requestID,
@@ -239,18 +271,35 @@ func (h *Handler) tryEndpointCycleForStage(
 		}
 		// 成功路径：无错误且 status < 400
 		if fwdErr == nil && resp != nil && resp.StatusCode < 400 {
+			if recovery.retried() {
+				(*endpointChain)[len(*endpointChain)-1].StatusCode = resp.StatusCode
+				h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
+			}
 			if routed && h.states != nil {
 				resp.Body = routing.CaptureResponse(resp.Body, func(data []byte) { h.observeRoutedState(r, stage.candidate(endpoint, requestedModel), data) })
 			}
 			if isStreaming {
-				streamErr, served := h.handleStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, endpoint.CredentialGroupName, channelName, len(*endpointChain))
+				streamErr, served := h.handleStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, endpoint.CredentialGroupName, channelName, len(*endpointChain), func(streamErr *UpstreamStreamError, _ bool) {
+					if recovery.retried() {
+						if streamErr != nil {
+							annotateLastChainError(endpointChain, resp.StatusCode, streamErr.Error(), resp.Header, false)
+						}
+						closeLastHop(*endpointChain, startTime)
+						h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
+					}
+				})
 				if streamErr == nil {
 					h.markEndpointServed(endpoint, served, len(*failedIDs) > 0, channelName, requestID, routed)
 					return cycleResult{completed: true}
 				}
 				fwdErr = streamErr
 			} else {
-				served := h.handleNonStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, endpoint.CredentialGroupName, channelName, len(*endpointChain))
+				served := h.handleNonStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, endpoint.CredentialGroupName, channelName, len(*endpointChain), func() {
+					if recovery.retried() {
+						closeLastHop(*endpointChain, startTime)
+						h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
+					}
+				})
 				h.markEndpointServed(endpoint, served, len(*failedIDs) > 0, channelName, requestID, routed)
 				return cycleResult{completed: true}
 			}
@@ -259,6 +308,7 @@ func (h *Handler) tryEndpointCycleForStage(
 		// 失败路径：先读取上游响应摘要（仅当 resp 非空）
 		var errSummary string
 		var errBody []byte
+		var clientErrorBody []byte
 		var status int
 		if resp != nil {
 			status = resp.StatusCode
@@ -270,9 +320,17 @@ func (h *Handler) tryEndpointCycleForStage(
 			errBody, errSummary = h.readErrorBody(resp)
 			errBody = []byte(subscription.Redact(r.Context(), string(errBody)))
 			errSummary = subscription.Redact(r.Context(), errSummary)
+			clientErrorBody = errBody
+			if recordedAttempts > 0 && resp.Request != nil {
+				if plain, decoded := decodeRecoveryErrorBody(resp, errBody); decoded {
+					errBody = plain
+				}
+				errBody = redactCodexErrorBody(resp.Request, errBody)
+				errSummary = chainBodyText(errBody, recovery.rule.ID)
+			}
 			lastUpstreamStatus = status
 			lastUpstreamHeaders = resp.Header.Clone()
-			lastUpstreamBody = append([]byte(nil), errBody...)
+			lastUpstreamBody = append([]byte(nil), clientErrorBody...)
 			var streamErr *UpstreamStreamError
 			lastUpstreamInvalidStream = isStreaming && errors.As(fwdErr, &streamErr) && streamErr.InvalidProtocol
 		} else if streamErr, ok := fwdErr.(*UpstreamStreamError); ok {
@@ -283,12 +341,18 @@ func (h *Handler) tryEndpointCycleForStage(
 
 		// 三态分类
 		action := h.classifier.Classify(resp, fwdErr)
+		if recovery.rule.ID != "" {
+			action = ActionFailFast
+		}
 		var routeFailure routing.Failure
 		if routed {
 			if errors.Is(fwdErr, routing.ErrBudgetExhausted) {
 				return cycleResult{lastErr: fwdErr, lastUpstreamStatus: lastUpstreamStatus, lastUpstreamHeaders: lastUpstreamHeaders, lastUpstreamBody: lastUpstreamBody, lastUpstreamInvalidStream: lastUpstreamInvalidStream}
 			}
 			routeFailure = codexRequestFailure(r, status, errBody, fwdErr)
+			if recovery.rule.ID != "" {
+				routeFailure.Scope, routeFailure.Terminal = routing.ScopeRequest, true
+			}
 			if stage.execution != nil {
 				stage.execution.Fail(stage.candidate(endpoint, requestedModel), routeFailure)
 				h.recordRouteSnapshot(requestID, stage.executionSnapshot())
@@ -329,7 +393,7 @@ func (h *Handler) tryEndpointCycleForStage(
 					h.writeInvalidStreamFailure(w)
 					return cycleResult{completed: true}
 				}
-				h.passthroughWithBody(w, resp, errBody)
+				h.passthroughWithBody(w, resp, clientErrorBody)
 				return cycleResult{completed: true}
 			}
 			// 无上游响应的 FailFast：目前只有响应头超时会走到这里（请求已被上游接收，不重放）
@@ -475,7 +539,7 @@ func (h *Handler) markEndpointServed(endpoint *CodexEndpoint, served bool, faile
 }
 
 // forwardWithRetry 单端点同端点重试（指数退避）
-// 仅在 classifier 返回 ActionRetry 时重试（瞬时错误：网络错误、408、425）
+// classifier 控制普通重试；独立的响应恢复规则在发送层消耗同一请求预算。
 // 其他情况（成功、ActionFailover、ActionFailFast）立即返回，由外层 cycle 处理
 func (h *Handler) forwardWithRetry(
 	r *http.Request,
@@ -499,6 +563,20 @@ func (h *Handler) forwardWithRetry(
 	var lastResp *http.Response
 	var lastErr error
 	attempts := 0
+	recovery := responseRecoveryStateFromContext(r.Context())
+	if recovery == nil {
+		recovery = h.newResponseRecoveryState(r, requestID)
+		r = r.WithContext(withResponseRecoveryState(r.Context(), recovery))
+	}
+	recovery.beforeRetry = func(ctx context.Context) error {
+		if err := routing.BudgetFromContext(ctx).Begin(ctx); err != nil {
+			return err
+		}
+		if len(onAttempt) > 0 && onAttempt[0] != nil {
+			onAttempt[0]()
+		}
+		return nil
+	}
 
 	if h.manager.PoolRuntime() != nil {
 		maxAttempts = 1
@@ -536,8 +614,12 @@ func (h *Handler) forwardWithRetry(
 		if len(onAttempt) > 0 && onAttempt[0] != nil {
 			onAttempt[0]()
 		}
+		recovery.attempts = attempts + 1
 		resp, err := fwd.Forward(sendRequest, body, endpoint)
-		attempts++
+		attempts = recovery.attempts
+		if recovery.rule.ID != "" {
+			return resp, err, attempts
+		}
 		lastResp = resp
 		lastErr = err
 

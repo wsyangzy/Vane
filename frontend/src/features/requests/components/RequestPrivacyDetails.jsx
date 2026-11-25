@@ -1,4 +1,8 @@
-import { Activity, Clock, FileSearch, ShieldCheck } from 'lucide-react';
+import { useId, useState } from 'react';
+import { Activity, ChevronUp, Clock, FileSearch, History, ShieldCheck } from 'lucide-react';
+import { PrivacyActivityDetails } from '@/features/privacy/PrivacyActivityDetails.jsx';
+import { normalizePrivacyActivity } from '@/services/wails/privacy.js';
+import { Button } from '@/shared/ui/index.js';
 import { PRIVACY_RULE_SOURCE_LABELS, PRIVACY_STATE_STYLES } from '../utils/requestMetadata.js';
 
 const reasonLabels = {
@@ -23,14 +27,21 @@ const stateNotes = {
 };
 
 export default function RequestPrivacyDetails({ privacy }) {
+  const [recordOpen, setRecordOpen] = useState(false);
+  const recordId = useId();
   const activity = privacy.activity;
   const hasScan = activity && !['disabled', 'skipped', 'unknown'].includes(privacy.state);
   const warnings = [...new Set([activity?.skipped_reason, activity?.restore_skipped].filter(Boolean))];
   return <div className="request-privacy-details space-y-4">
     <section className="rounded-xl border border-slate-200 bg-white p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-indigo-500" /><h3 className="text-sm font-semibold text-slate-900">本次请求的防护结果</h3></div>
-        <span className={`rounded-md border px-2 py-1 text-xs font-semibold ${PRIVACY_STATE_STYLES[privacy.state]}`}>{privacy.label}</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`rounded-md border px-2 py-1 text-xs font-semibold ${PRIVACY_STATE_STYLES[privacy.state]}`}>{privacy.label}</span>
+          <Button type="button" variant="secondary" size="sm" icon={recordOpen ? ChevronUp : History} aria-expanded={recordOpen} aria-controls={recordId} onClick={() => setRecordOpen(open => !open)}>
+            {recordOpen ? '收起防护记录' : '查看防护记录'}
+          </Button>
+        </div>
       </div>
       <p className="mt-3 text-sm leading-6 text-slate-500">{stateNotes[privacy.state]}</p>
       <div className="mt-4 grid grid-cols-3 divide-x divide-slate-100 rounded-lg border border-slate-100 bg-slate-50/60 py-3">
@@ -42,6 +53,11 @@ export default function RequestPrivacyDetails({ privacy }) {
       </div>
       {activity?.truncated && <p className="mt-3 text-xs text-amber-700">扫描范围受限：仅检查了部分内容。</p>}
       {warnings.length > 0 && <div className="mt-3 space-y-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">{warnings.map(reason => <p key={reason}>{reasonLabel(reason)}</p>)}</div>}
+      <div id={recordId} hidden={!recordOpen} className="mt-4">
+        {recordOpen && (activity || privacy.hits.length > 0
+          ? <PrivacyActivityDetails item={normalizePrivacyActivity(activity || { state: privacy.state, rule_hits: privacy.hits })} />
+          : <p className="text-xs text-slate-500">本次请求暂无可查看的防护记录。</p>)}
+      </div>
     </section>
     <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
       <header className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-4 py-3"><h3 className="text-sm font-semibold text-slate-900">规则命中明细</h3><span className="text-xs text-slate-500">{privacy.hits.length} 条规则</span></header>
@@ -49,7 +65,7 @@ export default function RequestPrivacyDetails({ privacy }) {
     </section>
     <div className="rounded-lg border border-slate-200 bg-slate-50/70 px-4 py-3 text-xs leading-6 text-slate-500">
       {activity ? <><p>记录来源：隐私防护 → 防护记录，已按当前请求 ID 和服务关联。</p><p>扫描路径：<span className="font-mono [overflow-wrap:anywhere]">{activity.path || '未记录'}</span>{activity.created_at && <> · 记录时间：{new Date(activity.created_at).toLocaleString('zh-CN', { hour12: false })}</>}</p></> : privacy.state !== 'none' && <p>此历史请求仅保留命中摘要，扫描耗时、跳过原因和响应还原情况未记录。</p>}
-      <p>仅展示处理状态、规则与次数，不保存或展示命中原文、请求正文及可逆映射。</p>
+      <p>防护记录保留命中的字段位置、规则和次数。命中原文、请求正文及可逆映射不会写入防护记录。</p>
     </div>
   </div>;
 }

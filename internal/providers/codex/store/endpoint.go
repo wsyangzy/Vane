@@ -60,6 +60,7 @@ type CodexEndpointStore interface {
 	GetActiveByChannelID(ctx context.Context, channelID int64) (*CodexEndpointRecord, error)
 	ListByChannelID(ctx context.Context, channelID int64) ([]*CodexEndpointRecord, error)
 	Update(ctx context.Context, id int64, name, baseURL string, credentialGroupID int64, apiKey string, failoverEnabled bool, skipHealthCheck bool, priority, timeoutSeconds int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []CodexModelMultiplierRecord, pathStrategy ...string) error
+	SetPathStrategy(ctx context.Context, id int64, strategy string) error
 	DeleteByID(ctx context.Context, id int64) error
 	SetActive(ctx context.Context, id int64) error
 
@@ -98,6 +99,20 @@ func (s *SQLiteCodexEndpointStore) getQuerier() interface {
 		return s.tx
 	}
 	return s.db
+}
+
+func (s *SQLiteCodexEndpointStore) SetPathStrategy(ctx context.Context, id int64, strategy string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_endpoints SET path_strategy = ? WHERE id = ?`, strategy, id)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err == nil && n == 0 {
+		return sql.ErrNoRows
+	}
+	return err
 }
 
 const codexEndpointColumns = `id, channel_id, COALESCE(credential_group_id, 0), COALESCE(api_key, ''), name, base_url, COALESCE(is_active, 0), COALESCE(failover_enabled, 1), COALESCE(skip_health_check, 0), COALESCE(priority, 0), COALESCE(timeout_seconds, 0), COALESCE(cost_multiplier, 1.0), COALESCE(input_cost_multiplier, 1.0), COALESCE(output_cost_multiplier, 1.0), COALESCE(cache_read_cost_multiplier, 1.0), COALESCE(billing_output_token_source, 'output_tokens'), COALESCE(model_multipliers, '[]'), COALESCE(created_at, ''), COALESCE(updated_at, ''), COALESCE(path_strategy, 'legacy')`

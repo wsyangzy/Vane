@@ -3,6 +3,24 @@ export const PATH_STRATEGY_OPTIONS = [
   { value: 'base', label: '按 API 基础地址拼接' }
 ];
 
+export const getEndpointPathStrategy = (endpoint) => endpoint?.pathStrategy || endpoint?.path_strategy || 'legacy';
+
+export const pathStrategyLabel = (strategy) => PATH_STRATEGY_OPTIONS.find(option => option.value === strategy)?.label || '沿用旧版路径';
+
+export const endpointPathIdentity = (endpoint) => JSON.stringify([
+  endpoint?.id, endpoint?.baseURL || endpoint?.base_url, endpoint?.credentialGroupId || endpoint?.credential_group_id || 0,
+]);
+
+export function getDetectedPathStrategy(result, current) {
+  const candidates = result?.candidates || [];
+  const verified = candidates.filter(candidate => candidate.verified);
+  if (verified.length !== 1) return '';
+  if (candidates.length === 1) return current === 'legacy' ? 'v1' : current;
+  const unsupported = candidates.every(candidate => candidate.verified || [404, 405].includes(candidate.http_status) ||
+    (candidate.http_status >= 300 && candidate.http_status < 400) || candidate.result === 'invalid_response');
+  return unsupported ? verified[0].path_strategy : '';
+}
+
 export const previewEndpointPath = (baseURL, strategy) => {
   const base = String(baseURL || '').trim().replace(/\/+$/, '');
   if (!base) return '';

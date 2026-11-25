@@ -3,11 +3,88 @@ package tracking
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/tracking/storage"
 )
+
+func TestFindRequestDetailKeepsLiveUsageSeparateFromFinalUsage(t *testing.T) {
+	tracker := newUsageStatsCacheTestTracker(t)
+	t.Cleanup(func() { _ = tracker.Close() })
+
+	const id = "req-live-usage"
+	model, status := "model-a", "processing"
+	tracker.RecordRequestStart(id, "", "", "POST", "/v1/messages", true)
+	tracker.RecordRequestUpdate(id, UpdateOptions{ModelName: &model, Status: &status})
+	tracker.RecordContextSummary(id, "messages", []byte(`{"messages":[{"role":"user","content":"start"}]}`))
+	read := func() *RequestDetail {
+		t.Helper()
+		detail, err := tracker.FindRequestDetail(t.Context(), id)
+		if err != nil || detail == nil || detail.ContextSummary == "" {
+			t.Fatalf("read request detail: %+v, %v", detail, err)
+		}
+		return detail
+	}
+	initial := read()
+	checkEstimate := func(detail *RequestDetail, input, output bool) {
+		t.Helper()
+		var snapshot BillingDecisionSnapshot
+		if err := json.Unmarshal([]byte(detail.BillingRuleSnapshot), &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.LiveInputEstimated != input || snapshot.LiveOutputEstimated != output {
+			t.Fatalf("incorrect estimate flags: %+v", snapshot)
+		}
+	}
+	if initial.InputTokens <= 0 || initial.TotalCostUSD <= 0 || initial.EndTime != nil {
+		t.Fatalf("missing initial input estimate: %+v", initial)
+	}
+	checkEstimate(initial, true, false)
+	tracker.RecordStreamUsage(id, &TokenUsage{InputTokens: 100, OutputTokens: 1}, model, "", true)
+	first := read()
+	checkEstimate(first, false, false)
+	tracker.RecordStreamOutput(id, 5, 4)
+	tracker.RecordStreamOutput(id, 3, 4)
+	growing := read()
+	if growing.OutputTokens != 4 || growing.ReasoningTokens != 2 || growing.TotalCostUSD <= first.TotalCostUSD {
+		t.Fatalf("streamed deltas were not aggregated: %+v", growing)
+	}
+	checkEstimate(growing, false, true)
+	tracker.RecordStreamUsage(id, &TokenUsage{InputTokens: 100, OutputTokens: 25}, model, "", false)
+	tracker.RecordStreamOutput(id, 400, 400)
+	latest := read()
+	if latest.InputTokens != 100 || latest.OutputTokens != 25 || first.TotalCostUSD <= 0 || latest.TotalCostUSD <= first.TotalCostUSD {
+		t.Fatalf("live usage was not replaced and priced: first=%+v latest=%+v", first, latest)
+	}
+	checkEstimate(latest, false, false)
+	active, _ := tracker.GetActiveRequest(id)
+	if list := tracker.ActiveRequestToDetail(active); list.InputTokens != 0 || list.TotalCostUSD != 0 {
+		t.Fatalf("provisional usage leaked into the ordinary projection: %+v", list)
+	}
+
+	status = "forwarding"
+	tracker.RecordRequestUpdate(id, UpdateOptions{Status: &status})
+	if nextAttempt := read(); nextAttempt.OutputTokens != 0 || nextAttempt.InputTokens != initial.InputTokens {
+		t.Fatalf("retried request retained previous attempt usage: %+v", nextAttempt)
+	}
+	tracker.RecordStreamUsage(id, &TokenUsage{InputTokens: 300, OutputTokens: 25}, model, "", false)
+	tracker.RecordRequestSuccess(id, model, &TokenUsage{InputTokens: 110, OutputTokens: 50}, time.Second)
+	assertFinal := func() {
+		t.Helper()
+		final := read()
+		if final.Status != "completed" || final.EndTime == nil || final.InputTokens != 110 || final.OutputTokens != 50 {
+			t.Fatalf("final detail used provisional usage: %+v", final)
+		}
+		checkEstimate(final, false, false)
+	}
+	assertFinal()
+	if err := tracker.ForceFlush(); err != nil {
+		t.Fatal(err)
+	}
+	assertFinal()
+}
 
 func TestQueryRequestDetailsSupportsLegacyArchiveColumns(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")

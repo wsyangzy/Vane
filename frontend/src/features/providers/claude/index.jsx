@@ -8,7 +8,7 @@ import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import ModalPortalScope from '@/shared/ui/ModalPortalScope.jsx';
 import useEndpointsData from '@/features/providers/claude/hooks/useEndpointsData.js';
 import { EndpointForm, DeleteConfirmDialog } from './components/index.js';
-import SubscriptionManagement, { ClientConnectionButton } from '@/features/providers/shared/subscriptions/SubscriptionManagement.jsx';
+import SubscriptionManagement from '@/features/providers/shared/subscriptions/SubscriptionManagement.jsx';
 import ClientVersionBadge from '@/features/providers/shared/ClientVersionBadge.jsx';
 import { ClaudeIcon } from '@/features/requests/components/ModelTag.jsx';
 import CredentialGroupDetailModal from '@/features/providers/shared/credentials/CredentialGroupDetailModal.jsx';
@@ -733,16 +733,13 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
     try {
       setChannelActionLoading(true);
       await setDefaultClaudeCredentialGroup(group.id);
-      await loadStorageStatus();
-      await loadChannelsMeta();
-      await loadGroups();
-    } catch (err) {
-      console.error('设置默认凭证分组失败:', err);
-      setActionError(`设置默认分组失败: ${getErrorMessage(err, '未知错误')}`);
+      await loadChannelsMeta({ throwOnError: true });
+    } catch (error) {
+      throw new Error(getErrorMessage(error, '设置默认分组失败'));
     } finally {
       setChannelActionLoading(false);
     }
-  }, [loadChannelsMeta, loadGroups, loadStorageStatus]);
+  }, [loadChannelsMeta]);
 
   const handleDeleteCredentialGroup = useCallback((channelName, group) => {
     if (!group?.id) return;
@@ -902,7 +899,6 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
         resourcesBusy={loading || batchCheckLoading}
         onRefreshResources={handleRefresh}
         resourceActions={<>
-          <ClientConnectionButton provider="claude" onUpdated={handleRefresh} className="dispatch-resource-action" disabled={loading || batchCheckLoading} />
           <SubscriptionManagement provider="claude" channels={channelsMeta} onUpdated={handleRefresh} className="dispatch-resource-action" disabled={loading || batchCheckLoading} />
           {isSqliteMode && channelSections.length > 0 && <Button type="button" size="sm" icon={Plus} className="dispatch-resource-action" disabled={loading || batchCheckLoading} onClick={() => setShowCreateChannel(true)}>添加渠道</Button>}
         </>} endpoints={displayEndpoints.map((endpoint) => {
@@ -1126,6 +1122,7 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
       {deleteTarget && (
         <DeleteConfirmDialog
           endpoint={deleteTarget}
+          routingGroupId={deleteTarget.credentialGroupId || deleteTarget.credential_group_id || getCredentialGroupForEndpoint(credentialGroupsByChannel[deleteTarget.group || deleteTarget.channel], deleteTarget)?.id}
           onConfirm={handleConfirmDelete}
           onCancel={() => setDeleteTarget(null)}
           loading={deleteLoading}

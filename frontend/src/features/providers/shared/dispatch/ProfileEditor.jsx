@@ -1,9 +1,13 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowRight, ArrowUp, Ban, Check, CheckCircle2, ChevronDown, GitBranch, Info, Plus, Replace, Route, Save, Sparkles, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowRight, ArrowUp, Ban, Check, CheckCircle2, ChevronDown, Copy, GitBranch, Info, Plus, Replace, Route, Save, Sparkles, Trash2, X } from 'lucide-react';
 import { Button, CustomSelect, Tooltip } from '@/shared/ui/index.js';
 import ProfileSearchEditor from '../../codex/components/ProfileSearchEditor.jsx';
 import IntentStatistics from './IntentStatistics.jsx';
 import ProfileMembersEditor from './ProfileMembersEditor.jsx';
+import CopyRulesDialog from './CopyRulesDialog.jsx';
+import { DragHandle, OrderInput } from './OrderControls.jsx';
+import useDragOrder from './useDragOrder.js';
+import { copyProfileRules, moveListItem, positionProfileRule, removeProfileRule, setProfileRulePriority } from './profileEditingState.js';
 import { affinityOptions, candidateModeOptions, editableProfile, ruleDraftIssue, ruleKindLabel, ruleTargetLabels, setIntentRoutingEnabled, strategyOptions, validateProfileDraft } from './dispatchState.js';
 import { motionDuration } from '@/shared/hooks/usePresence.js';
 import { formatDispatchDuration, ruleFallbackOptions } from '@/shared/lib/dispatchPolicy.js';
@@ -21,26 +25,25 @@ function Choice({ label, value, options, onChange, disabled }) { return <div cla
 function CheckBox({ label, value, onChange, disabled }) { return <label className="inline-flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" className="accent-indigo-600" checked={value} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />{label}</label>; }
 function Section({ title, children, action }) { return <section className="min-w-0 rounded-xl border border-slate-200 bg-white"><div className="flex min-h-10 items-center justify-between gap-2 border-b border-slate-100 px-3"><h3 className="text-xs font-semibold text-slate-700">{title}</h3>{action}</div><div className="space-y-3 p-3">{children}</div></section>; }
 
-function TargetsEditor({ targets, onChange, profiles, channels, accounts, profile, mapping = false }) {
+function TargetsEditor({ targets, onChange, profiles, channels, accounts, profile, mapping = false, busy = false }) {
   const update = (index, patch) => onChange(targets.map((target, at) => at === index ? { ...target, ...patch } : target));
-  const move = (index, delta) => { const next = [...targets]; [next[index], next[index + delta]] = [next[index + delta], next[index]]; onChange(next); };
+  const move = (index, delta) => onChange(moveListItem(targets, index, index + delta));
+  const drag = useDragOrder(targets.map(target => target.rowKey), (from, to) => onChange(moveListItem(targets, targets.findIndex(target => target.rowKey === from), targets.findIndex(target => target.rowKey === to))), busy);
   const members = profile.members.filter((member) => member.enabled);
   const availableChannels = mapping ? channels.filter((channel) => members.some((member) => member.channelId === channel.id)) : channels;
   const groupsFor = (channelId) => accounts.filter((account) => account.channelId === channelId && (!mapping || members.some((member) => member.channelId === channelId && (member.groupId === 0 || member.groupId === account.groupId))));
-  const initialGroup = (channelId) => mapping ? members.find((member) => member.channelId === channelId)?.groupId ?? 0 : 0;
-  const addTarget = () => onChange([...targets, { rowKey: crypto.randomUUID(), profileId: 0, channelId: mapping ? availableChannels[0]?.id || 0 : 0, groupId: mapping ? initialGroup(availableChannels[0]?.id) : 0, upstreamModel: '' }]);
+  const addTarget = () => onChange([...targets, { rowKey: crypto.randomUUID(), profileId: 0, channelId: mapping ? availableChannels[0]?.id || 0 : 0, groupId: 0, upstreamModel: '' }]);
   return <div className="space-y-2">
     <div className="flex min-w-0 flex-wrap items-center justify-between gap-1 text-[11px] leading-5"><span className="font-medium text-slate-600">{mapping ? '映射目标' : '路由目标'} · {targets.length}</span><span className="text-slate-400">{profile.candidateMode === 'ordered_channels' ? '按上下顺序选择渠道，归属保持优先复用已选资源' : '目标汇入统一候选池，由调度策略选择'}</span></div>
     {targets.map((target, index) => {
       const useProfile = !mapping && (target.profileId || target.targetKind === 'profile');
-      const allGroups = !mapping || members.some((member) => member.enabled && member.channelId === target.channelId && member.groupId === 0);
-      return <div key={target.rowKey} role="group" aria-label={`路由目标 ${index + 1}`} data-target-empty={useProfile ? !(target.profileId > 0) : !(target.channelId > 0)} className="dispatch-target-card">
-        <div className="mb-2 flex min-w-0 items-center justify-between gap-2"><span className="flex items-center gap-2 text-[11px] font-medium text-slate-600"><span className="inline-flex h-5 min-w-5 items-center justify-center rounded bg-white px-1 font-mono text-[10px] text-slate-400 ring-1 ring-slate-200">{String(index + 1).padStart(2, '0')}</span>{profile.candidateMode === 'ordered_channels' ? index === 0 ? '优先目标' : '后备目标' : `候选目标 ${index + 1}`}</span><div className="flex shrink-0"><button type="button" className={iconButton} aria-label={`上移目标 ${index + 1}`} disabled={index === 0} onClick={() => move(index, -1)}><ArrowUp size={13} /></button><button type="button" className={iconButton} aria-label={`下移目标 ${index + 1}`} disabled={index === targets.length - 1} onClick={() => move(index, 1)}><ArrowDown size={13} /></button><button type="button" className={iconButton} aria-label={`删除目标 ${index + 1}`} onClick={() => onChange(targets.filter((_, at) => at !== index))}><X size={13} /></button></div></div>
+      return <div key={target.rowKey} {...drag.rowProps(target.rowKey)} role="group" aria-label={`路由目标 ${index + 1}`} data-target-empty={useProfile ? !(target.profileId > 0) : !(target.channelId > 0)} className="dispatch-target-card">
+        <div className="mb-2 flex min-w-0 items-center justify-between gap-2"><span className="flex items-center gap-2 text-[11px] font-medium text-slate-600"><DragHandle label={`拖动目标 ${index + 1}`} {...drag.handleProps(target.rowKey)} /><OrderInput label={`目标 ${index + 1} 顺序`} value={index + 1} min={1} max={targets.length} onCommit={position => onChange(moveListItem(targets, index, position - 1))} />{profile.candidateMode === 'ordered_channels' ? index === 0 ? '优先目标' : '后备目标' : `候选目标 ${index + 1}`}</span><div className="flex shrink-0"><button type="button" className={iconButton} aria-label={`上移目标 ${index + 1}`} disabled={index === 0} onClick={() => move(index, -1)}><ArrowUp size={13} /></button><button type="button" className={iconButton} aria-label={`下移目标 ${index + 1}`} disabled={index === targets.length - 1} onClick={() => move(index, 1)}><ArrowDown size={13} /></button><button type="button" className={iconButton} aria-label={`删除目标 ${index + 1}`} onClick={() => onChange(targets.filter((_, at) => at !== index))}><X size={13} /></button></div></div>
         <div className={`dispatch-target-fields${mapping ? ' dispatch-target-fields-mapping' : ''}`}>
           {!mapping && <Choice label="目标类型" value={useProfile ? 'profile' : 'channel'} options={[{ value: 'profile', label: '调度方案' }, { value: 'channel', label: '渠道 / 分组' }]} onChange={(targetKind) => update(index, { targetKind, profileId: 0, channelId: 0, groupId: 0 })} />}
-          {useProfile ? <Choice label="目标方案" value={target.profileId} options={profiles.map((item) => ({ value: item.id, label: `${item.name}${item.enabled ? '' : '（已停用）'}` }))} onChange={(profileId) => update(index, { profileId })} /> : <Choice label={mapping ? '本方案渠道' : '目标渠道'} value={target.channelId} options={availableChannels.map((channel) => ({ value: channel.id, label: channel.name }))} onChange={(channelId) => update(index, { channelId, profileId: 0, groupId: initialGroup(channelId) })} />}
-          <Choice label="目标分组" disabled={Boolean(useProfile)} value={target.groupId} options={[...(allGroups ? [{ value: 0, label: '全部分组 / 方案成员' }] : []), ...groupsFor(target.channelId).map((account) => ({ value: account.groupId, label: `${account.groupName} · ${formatMultiplierDisplayValue(account.costMultiplier)}` }))]} onChange={(groupId) => update(index, { groupId })} />
-          <Field label={mapping ? '映射后的实际模型' : '实际模型（可选）'} required={mapping} placeholder={mapping ? '填写支持的模型名' : '沿用渠道模型策略'} value={target.upstreamModel} onChange={(upstreamModel) => update(index, { upstreamModel })} />
+          {useProfile ? <Choice label="目标方案" value={target.profileId} options={profiles.map((item) => ({ value: item.id, label: `${item.name}${item.enabled ? '' : '（已停用）'}` }))} onChange={(profileId) => update(index, { profileId })} /> : <Choice label={mapping ? '本方案渠道' : '目标渠道'} value={target.channelId} options={availableChannels.map((channel) => ({ value: channel.id, label: channel.name }))} onChange={(channelId) => update(index, { channelId, profileId: 0, groupId: 0 })} />}
+          <Choice label="目标分组" disabled={Boolean(useProfile)} value={target.groupId} options={[{ value: 0, label: mapping ? '全部分组（本方案已参与）' : '全部分组 / 方案成员' }, ...groupsFor(target.channelId).map((account) => ({ value: account.groupId, label: `${account.groupName} · ${formatMultiplierDisplayValue(account.costMultiplier)}` }))]} onChange={(groupId) => update(index, { groupId })} />
+          <Field label={mapping ? '映射后的实际模型' : '实际模型（可选）'} required={mapping} placeholder={mapping ? '填写支持的模型名' : '留空沿用渠道 / 分组模型策略'} value={target.upstreamModel} onChange={(upstreamModel) => update(index, { upstreamModel })} />
         </div>
       </div>;
     })}
@@ -58,7 +61,7 @@ const ruleDescriptions = {
   intent: '使用意图分类结果选择目标；仅在意图路由总开关开启时生效。',
 };
 
-function RuleEditor({ rule, index, intents, intentEnabled, targetProps, policy, focusRequest, scrollContainer, onChange, onDelete }) {
+function RuleEditor({ rule, index, intents, intentEnabled, targetProps, policy, focusRequest, scrollContainer, orderProps, handleProps, onPriority, onChange, onDelete }) {
   const cardRef = useRef(null);
   const panelId = useId();
   const [isOpen, setIsOpen] = useState(() => Boolean(focusRequest));
@@ -120,10 +123,12 @@ function RuleEditor({ rule, index, intents, intentEnabled, targetProps, policy, 
     rule.kind !== 'non_stream' && rule.requireStream != null ? rule.requireStream ? '仅流式' : '仅非流式' : '',
   ].filter(Boolean).join(' · ');
   const targetsLabel = ruleTargetLabels(rule.targets, targetProps).join('；') || '待添加目标';
-  return <section ref={cardRef} data-rule-key={rule.rowKey} data-open={isOpen} className="dispatch-rule-card t-acc min-w-0 rounded-lg border border-slate-200 bg-white p-3">
+  return <section ref={cardRef} {...orderProps} data-rule-key={rule.rowKey} data-open={isOpen} className="dispatch-rule-card t-acc min-w-0 rounded-lg border border-slate-200 bg-white p-3">
+    <div className="dispatch-rule-toolbar flex min-w-0 items-center gap-2">
+    <DragHandle label={`拖动第 ${index + 1} 条规则`} {...handleProps} />
     <button type="button" aria-expanded={isOpen} aria-controls={panelId} aria-label={`第 ${index + 1} 条规则：${condition}`}
       onClick={() => setIsOpen(previous => !previous)}
-      className="dispatch-rule-heading flex w-full min-w-0 items-center gap-2 rounded text-left text-xs font-medium text-slate-700 focus-visible:outline-2 focus-visible:outline-indigo-500">
+      className="dispatch-rule-heading flex min-w-0 flex-1 items-center gap-2 rounded text-left text-xs font-medium text-slate-700 focus-visible:outline-2 focus-visible:outline-indigo-500">
       <span className="t-acc-chevron shrink-0 text-slate-500"><ChevronDown size={14} /></span>
       <span className="shrink-0 font-mono text-[10px] text-slate-400">{String(index + 1).padStart(2, '0')}</span>
       <Tooltip content={ruleDescriptions[rule.kind]} className="shrink-0"><span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] ${kindTone}`}><KindIcon size={11} aria-hidden="true" />{rule.kind === 'mapping' ? '模型映射' : ruleKindLabel(rule.kind)}</span></Tooltip>
@@ -135,30 +140,40 @@ function RuleEditor({ rule, index, intents, intentEnabled, targetProps, policy, 
       <span className="shrink-0 text-[10px] font-normal text-slate-400">{rule.targets.length} 个目标</span>
       {!rule.enabled && <span className="shrink-0 text-slate-400">已停用</span>}
     </button>
+    <OrderInput prefix="优先级" label={`第 ${index + 1} 条规则优先级（小者优先）`} value={rule.priority} disabled={targetProps.busy} onCommit={onPriority} />
+    <Tooltip asChild content="删除规则"><button type="button" className={`${iconButton} hover:text-rose-600 focus-visible:outline-2 focus-visible:outline-indigo-500`} aria-label={`删除第 ${index + 1} 条规则`} onClick={onDelete}><Trash2 size={14} /></button></Tooltip>
+    </div>
     <div id={panelId} className="t-acc-panel" inert={!isOpen}>
     <div className="t-acc-panel-inner"><fieldset disabled={!isOpen} className="min-w-0 space-y-3 pt-3">
       {(modelCondition || intentCondition) && <div className={`grid gap-3 ${modelCondition && intentCondition ? 'sm:grid-cols-2' : ''}`}>{modelCondition && <div className="min-w-0 space-y-1.5"><Field label="客户端请求模型" required placeholder="如 gpt-* 或 regex:^gpt-(4|5).*$" value={rule.matchModel} onChange={(matchModel) => onChange({ matchModel })} /><p className="text-[11px] leading-5 text-slate-400">支持精确名称、* 通配符和 regex: 正则表达式；忽略大小写，匹配完整模型名。</p></div>}{intentCondition && <Choice label="匹配意图" value={rule.intentId} options={[{ value: '', label: '不限意图' }, ...intents.map((intent) => ({ value: intent.id, label: intent.name || intent.id }))]} onChange={(intentId) => onChange({ intentId })} />}</div>}
       <TargetsEditor {...targetProps} mapping={rule.kind === 'mapping'} targets={rule.targets} onChange={(targets) => onChange({ targets })} />
-      <div role="group" aria-label="执行顺序与回退" className="rounded-lg border border-slate-200 bg-slate-50/40 p-3"><h4 className="mb-3 flex items-center gap-1.5 text-[11px] font-medium text-slate-600"><Route size={13} />执行顺序与回退</h4><div className="dispatch-execution-fields"><Field label="同类规则优先级（小者优先）" type="number" value={rule.priority} onChange={(priority) => onChange({ priority })} />{rule.kind !== 'non_stream' && <Choice label="流式条件" value={triState(rule.requireStream)} options={[{ value: 'default', label: '流式 / 非流式均可' }, { value: 'yes', label: '仅流式' }, { value: 'no', label: '仅非流式' }]} onChange={(value) => onChange({ requireStream: fromTriState(value) })} />}<Choice label="目标使用时机" value={rule.mode} options={modes} onChange={(mode) => onChange({ mode })} /><Choice label="目标失败后" value={triState(rule.fallbackToDefault)} options={ruleFallbackOptions(policy)} onChange={(value) => onChange({ fallbackToDefault: fromTriState(value) })} /></div><p role="status" className="mt-3 flex flex-wrap gap-x-2 gap-y-1 border-t border-slate-200/70 pt-2 text-[11px] leading-5"><span className="text-slate-500">本轮路径</span><span className="font-medium text-indigo-600">{path}</span></p><p className="mt-1 text-[11px] leading-5 text-slate-400">同类规则优先级用于选择命中的规则；目标上下顺序用于渠道选择。全部候选失败后，等待重试由设置页的「调度保护」控制。</p></div>
-      <div className="flex items-center justify-between gap-2"><CheckBox label="启用规则" value={rule.enabled} onChange={(enabled) => onChange({ enabled })} /><Button type="button" size="sm" variant="ghost" icon={Trash2} onClick={onDelete}>删除规则</Button></div>
+      <div role="group" aria-label="执行顺序与回退" className="rounded-lg border border-slate-200 bg-slate-50/40 p-3"><h4 className="mb-3 flex items-center gap-1.5 text-[11px] font-medium text-slate-600"><Route size={13} />执行顺序与回退</h4><div className="dispatch-execution-fields">{rule.kind !== 'non_stream' && <Choice label="流式条件" value={triState(rule.requireStream)} options={[{ value: 'default', label: '流式 / 非流式均可' }, { value: 'yes', label: '仅流式' }, { value: 'no', label: '仅非流式' }]} onChange={(value) => onChange({ requireStream: fromTriState(value) })} />}<Choice label="目标使用时机" value={rule.mode} options={modes} onChange={(mode) => onChange({ mode })} /><Choice label="目标失败后" value={triState(rule.fallbackToDefault)} options={ruleFallbackOptions(policy)} onChange={(value) => onChange({ fallbackToDefault: fromTriState(value) })} /></div><p role="status" className="mt-3 flex flex-wrap gap-x-2 gap-y-1 border-t border-slate-200/70 pt-2 text-[11px] leading-5"><span className="text-slate-500">本轮路径</span><span className="font-medium text-indigo-600">{path}</span></p><p className="mt-1 text-[11px] leading-5 text-slate-400">同类规则优先级用于选择命中的规则；目标上下顺序用于渠道选择。全部候选失败后，等待重试由设置页的「调度保护」控制。</p></div>
+      <CheckBox label="启用规则" value={rule.enabled} onChange={(enabled) => onChange({ enabled })} />
     </fieldset></div></div>
   </section>;
 }
 
-export default function ProfileEditor({ profile, profiles, channels, accounts, policy, busy, statistics, statisticsLoaded, statisticsError, onRefreshStatistics, onSave, onCancel }) {
+export default function ProfileEditor({ profile, profiles, channels, accounts, policy, busy, statistics, statisticsLoaded, statisticsError, onRefreshStatistics, relatedWorkspaces = [], showStoredIntent = false, onSave, onCancel }) {
   const [draft, setDraft] = useState(() => editableProfile(profile));
   const [error, setError] = useState('');
   const [ruleFocus, setRuleFocus] = useState(null);
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [copyNotice, setCopyNotice] = useState('');
+  const [copiedIntent, setCopiedIntent] = useState(false);
+  const copyButton = useRef(null);
   const scrollContainer = useRef(null);
   const update = (patch) => setDraft((previous) => ({ ...previous, ...patch }));
   const updateRule = (index, patch) => update({ rules: draft.rules.map((rule, at) => at === index ? { ...rule, ...patch } : rule) });
   const updateIntent = (index, patch) => update({ intents: draft.intents.map((intent, at) => at === index ? { ...intent, ...patch } : intent) });
   const classifier = draft.classifier;
+  const classifierResources = classifier?.provider === draft.provider ? { channels, accounts } : relatedWorkspaces.find(({ provider }) => provider === classifier?.provider);
   const classifierChange = (patch) => update({ classifier: { ...classifier, ...patch } });
   const intentEnabled = Boolean(classifier?.enabled);
   const strategy = strategyOptions.find((option) => option.value === draft.strategy);
-  const targetProps = { profiles, channels, accounts, profile: draft };
-  const visibleRules = draft.rules.map((rule, index) => ({ rule, index })).filter(({ rule }) => intentEnabled || (rule.kind !== 'intent' && !rule.intentId));
+  const targetProps = { profiles, channels, accounts, profile: draft, busy };
+  const showIntent = showStoredIntent || copiedIntent;
+  const visibleRules = draft.rules.map((rule, index) => ({ rule, index })).filter(({ rule }) => intentEnabled || showIntent || (rule.kind !== 'intent' && !rule.intentId));
+  const ruleDrag = useDragOrder(visibleRules.map(({ rule }) => rule.rowKey), (from, to) => setDraft(previous => positionProfileRule(previous, from, previous.rules.findIndex(rule => rule.rowKey === to))), busy);
   const hiddenIntentRules = draft.rules.length - visibleRules.length;
   const unfinishedRule = visibleRules.find(({ rule }) => rule.enabled && ruleDraftIssue(draft, rule));
   const focusRule = (rowKey) => setRuleFocus({ rowKey, token: crypto.randomUUID() });
@@ -167,7 +182,7 @@ export default function ProfileEditor({ profile, profiles, channels, accounts, p
   const createRule = (kind) => {
     if (unfinishedRule) { focusRule(unfinishedRule.rule.rowKey); return; }
     const rowKey = crypto.randomUUID();
-    update({ rules: [...draft.rules, { rowKey, id: Math.max(0, ...draft.rules.map((rule) => rule.id)) + 1, enabled: true, kind, name: '', priority: draft.rules.length, matchModel: '', requireStream: kind === 'non_stream' ? false : null, intentId: '', mode: 'prefer', targets: [], fallbackToDefault: null }] });
+    update({ rules: [...draft.rules, { rowKey, id: Math.max(0, ...draft.rules.map((rule) => rule.id)) + 1, enabled: true, kind, name: '', priority: draft.rules.length ? Math.max(...draft.rules.map(rule => Number(rule.priority))) + 1 : 0, matchModel: '', requireStream: kind === 'non_stream' ? false : null, intentId: '', mode: 'prefer', targets: [], fallbackToDefault: null }] });
     focusRule(rowKey);
   };
   return <form className="dispatch-profile-form flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden" onSubmit={(event) => { event.preventDefault(); const message = validateProfileDraft(draft); setError(message); if (!message) onSave(draft); }}>
@@ -208,14 +223,23 @@ export default function ProfileEditor({ profile, profiles, channels, accounts, p
         </div></details>
       </div>
       <ProfileMembersEditor profile={draft} channels={channels} accounts={accounts} busy={busy} onChange={setDraft} />
-      <Section title="匹配规则" action={<Tooltip content="模型路由与映射按精确名称、通配符、正则表达式、纯 * 的顺序匹配，再处理组合条件、非流改道和意图；同类优先级小者先执行。"><span tabIndex={0} aria-label="规则匹配顺序" className="rounded text-slate-400 focus-visible:outline-indigo-500"><Info size={14} /></span></Tooltip>}>
+      <Section title="匹配规则" action={<div className="flex items-center gap-2"><Button ref={copyButton} type="button" size="sm" variant="ghost" icon={Copy} disabled={busy || !profiles.some(item => item.provider === draft.provider && item.id !== draft.id && item.rules.length)} onClick={() => setCopyOpen(true)}>从其他方案复制</Button><Tooltip content="模型路由与映射按精确名称、通配符、正则表达式、纯 * 的顺序匹配，再处理组合条件、非流改道和意图；同类优先级小者先执行。"><span tabIndex={0} aria-label="规则匹配顺序" className="rounded text-slate-400 focus-visible:outline-indigo-500"><Info size={14} /></span></Tooltip></div>}>
+        {copyOpen && <CopyRulesDialog profile={draft} profiles={profiles} channels={channels} accounts={accounts} busy={busy} returnFocusRef={copyButton} onClose={() => setCopyOpen(false)} onConfirm={(source, selected) => {
+          const next = copyProfileRules(draft, source, selected, { profiles, channels, accounts });
+          setDraft(next);
+          if (next.intents.length > draft.intents.length) setCopiedIntent(true);
+          setCopyNotice(`已从「${source.name}」追加 ${next.rules.length - draft.rules.length} 条规则，保存后生效。`);
+          setError('');
+          setCopyOpen(false);
+        }} />}
+        {copyNotice && <p role="status" className="wrap-anywhere text-[11px] leading-5 text-indigo-600">{copyNotice}</p>}
+        <p className="text-[11px] leading-5 text-slate-400">拖动把手可排序，放下后按顺序重排优先级；也可直接输入优先级，小者先执行。规则类型与模型匹配顺序仍优先。</p>
         <div className="grid gap-2 sm:grid-cols-2">
           <div role="group" aria-label="模型路由规则" className="flex min-w-0 flex-col rounded-lg border border-indigo-100 bg-indigo-50/40 p-2.5">
             <h4 className="flex items-center gap-1.5 text-xs font-semibold text-slate-700"><GitBranch size={14} className="shrink-0 text-indigo-500" />模型路由</h4>
-            <p className="mt-1 text-[11px] leading-5 text-slate-500">按请求模型选择处理资源；模型映射是在本方案渠道内替换模型名，也属于模型路由。</p>
+            <p className="mt-1 text-[11px] leading-5 text-slate-500">按请求模型选择渠道、分组或方案；填写实际模型即可完成模型映射。</p>
             <div className="mt-auto flex flex-wrap gap-1.5 pt-2">
               <Button type="button" variant="ghost" size="sm" icon={Plus} aria-label="添加模型路由" disabled={Boolean(unfinishedRule)} className="border border-indigo-200/70 bg-white/80 hover:border-indigo-300 hover:bg-white hover:text-indigo-600" onClick={() => createRule('model')}>添加模型路由</Button>
-              <Button type="button" variant="ghost" size="sm" icon={Replace} aria-label="添加模型映射" disabled={Boolean(unfinishedRule)} className="border border-teal-200/70 bg-teal-50/50 text-teal-700 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-800" onClick={() => createRule('mapping')}>添加模型映射</Button>
             </div>
           </div>
           <div role="group" aria-label="非流改道规则" className="flex min-w-0 flex-col rounded-lg border border-amber-100 bg-amber-50/40 p-2.5">
@@ -227,21 +251,21 @@ export default function ProfileEditor({ profile, profiles, channels, accounts, p
         {unfinishedRule && <div role="status" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2 text-[11px] text-amber-800"><span>请先完成第 {unfinishedRule.index + 1} 条规则：{ruleDraftIssue(draft, unfinishedRule.rule)}，再添加下一条。</span><Button type="button" variant="ghost" size="sm" icon={ArrowDown} onClick={() => focusRule(unfinishedRule.rule.rowKey)}>继续配置</Button></div>}
         {visibleRules.map(({ rule, index }) => {
           const focusRequest = ruleFocus?.rowKey === rule.rowKey ? ruleFocus : null;
-          return <RuleEditor key={`${rule.rowKey}:${focusRequest?.token || ''}`} rule={rule} index={index} intents={draft.intents} intentEnabled={intentEnabled} targetProps={targetProps} policy={policy} focusRequest={focusRequest} scrollContainer={scrollContainer} onChange={(patch) => updateRule(index, patch)} onDelete={() => update({ rules: draft.rules.filter((_, at) => at !== index) })} />;
+          return <RuleEditor key={`${rule.rowKey}:${focusRequest?.token || ''}`} rule={rule} index={index} intents={draft.intents} intentEnabled={intentEnabled || showIntent} targetProps={targetProps} policy={policy} focusRequest={focusRequest} scrollContainer={scrollContainer} orderProps={ruleDrag.rowProps(rule.rowKey)} handleProps={ruleDrag.handleProps(rule.rowKey)} onPriority={priority => setDraft(previous => setProfileRulePriority(previous, rule.rowKey, priority))} onChange={(patch) => updateRule(index, patch)} onDelete={() => setDraft(previous => removeProfileRule(previous, rule.rowKey))} />;
         })}
         {!visibleRules.length && <p className="py-2 text-center text-xs text-slate-400">未配置匹配规则时，使用上方的默认编排。</p>}
         {hiddenIntentRules > 0 && <p className="text-[11px] text-slate-400">{hiddenIntentRules} 条依赖意图的规则已随总开关停用；开启意图路由后可编辑。</p>}
       </Section>
-      {draft.provider === 'codex' && <ProfileSearchEditor key={draft.id} profileId={draft.id} value={draft.search} onChange={(search) => update({ search })} disabled={busy} />}
+      {draft.provider === 'codex' && <ProfileSearchEditor key={draft.id} profileId={draft.id} savedSearch={profile.search} value={draft.search} onChange={(search) => update({ search })} disabled={busy} />}
       <Section title="意图路由 · 可选" action={<CheckBox label="启用意图路由" value={intentEnabled} onChange={(enabled) => setDraft((previous) => setIntentRoutingEnabled(previous, enabled))} />}>
-        <p className="flex items-start gap-2 text-[11px] leading-5 text-slate-500"><Sparkles size={14} className="mt-0.5 shrink-0" /><span>{intentEnabled ? '按用户消息分类后选择目标，会产生额外模型用量。模型与非流规则仍优先执行。' : '已关闭：不分类，也不执行意图路由。已有定义和分类器设置保留，开启后再配置。'}</span></p>
-        {intentEnabled && <>
+        <p className="flex items-start gap-2 text-[11px] leading-5 text-slate-500"><Sparkles size={14} className="mt-0.5 shrink-0" /><span>{intentEnabled ? '按用户消息分类后选择目标，会产生额外模型用量。模型与非流规则仍优先执行。' : showIntent ? '意图路由已关闭，仍可编辑规则与意图定义；开启后生效。' : '已关闭：不分类，也不执行意图路由。已有定义和分类器设置保留，开启后再配置。'}</span></p>
+        {(intentEnabled || showIntent && (classifier || draft.intents.length > 0)) && <>
       <Section title="意图定义" action={<Button type="button" variant="ghost" size="sm" icon={Plus} onClick={() => update({ intents: [...draft.intents, { rowKey: crypto.randomUUID(), id: '', name: '', description: '', enabled: true, priority: draft.intents.length, targets: [], mode: 'prefer', fallbackIntent: '', fallbackToDefault: null }] })}>添加意图</Button>}>
-        <IntentStatistics statistics={statistics} intents={draft.intents} saved={Boolean(draft.id)} loaded={statisticsLoaded} error={statisticsError} busy={busy} onRefresh={onRefreshStatistics} />
+        {onRefreshStatistics && <IntentStatistics statistics={statistics} intents={draft.intents} saved={Boolean(draft.id)} loaded={statisticsLoaded} error={statisticsError} busy={busy} onRefresh={onRefreshStatistics} />}
         {draft.intents.map((intent, index) => <details key={intent.rowKey} open className="rounded-lg border border-slate-200 p-3"><summary className="cursor-pointer text-xs font-medium text-slate-700">{intent.name || `意图 ${index + 1}`}</summary><div className="mt-3 space-y-3"><div className="grid gap-2 sm:grid-cols-3"><Field label="意图 ID（字符串）" value={intent.id} onChange={(id) => updateIntent(index, { id })} /><Field label="意图名称" value={intent.name} onChange={(name) => updateIntent(index, { name })} /><Field label="优先级" type="number" value={intent.priority} onChange={(priority) => updateIntent(index, { priority })} /><Choice label="执行顺序" value={intent.mode} options={modes} onChange={(mode) => updateIntent(index, { mode })} /><Choice label="回退意图" value={intent.fallbackIntent} options={[{ value: '', label: '无回退意图' }, ...draft.intents.filter((item) => item.rowKey !== intent.rowKey && item.id).map((item) => ({ value: item.id, label: item.name || item.id }))]} onChange={(fallbackIntent) => updateIntent(index, { fallbackIntent })} /><Choice label="目标失败后" value={triState(intent.fallbackToDefault)} options={ruleFallbackOptions(policy)} onChange={(value) => updateIntent(index, { fallbackToDefault: fromTriState(value) })} /></div><label className="block space-y-1 text-xs text-slate-500">分类说明<textarea className={`${control} h-20 resize-y py-2`} value={intent.description} onChange={(event) => updateIntent(index, { description: event.target.value })} /></label><TargetsEditor {...targetProps} targets={intent.targets} onChange={(targets) => updateIntent(index, { targets })} /><div className="flex items-center justify-between"><CheckBox label="启用意图" value={intent.enabled} onChange={(enabled) => updateIntent(index, { enabled })} /><Button type="button" variant="ghost" size="sm" icon={Trash2} onClick={() => update({ intents: draft.intents.filter((_, at) => at !== index) })}>删除意图</Button></div></div></details>)}
         {!draft.intents.length && <p className="text-xs text-slate-400">分类默认关闭，可先配置模型和非流规则。</p>}
       </Section>
-      <Section title="分类器设置"><div className="grid gap-3 sm:grid-cols-3"><Choice label="分类服务" value={classifier.provider} options={[{ value: 'claude', label: 'Claude' }, { value: 'codex', label: 'Codex' }]} onChange={(provider) => classifierChange({ provider, channelId: 0, groupId: 0 })} />{classifier.provider === draft.provider ? <><Choice label="分类渠道" value={classifier.channelId} options={channels.map((channel) => ({ value: channel.id, label: channel.name }))} onChange={(channelId) => classifierChange({ channelId, groupId: 0 })} /><Choice label="分类分组" value={classifier.groupId} options={accounts.filter((account) => account.channelId === classifier.channelId).map((account) => ({ value: account.groupId, label: account.groupName }))} onChange={(groupId) => classifierChange({ groupId })} /></> : <><Field label="分类渠道 ID" type="number" min="1" value={classifier.channelId} onChange={(channelId) => classifierChange({ channelId })} /><Field label="分类分组 ID" type="number" min="1" value={classifier.groupId} onChange={(groupId) => classifierChange({ groupId })} /></>}<Field label="分类模型" value={classifier.model} onChange={(model) => classifierChange({ model })} /><Field label="超时（毫秒）" type="number" min="1" max="30000" value={classifier.timeoutMs} onChange={(timeoutMs) => classifierChange({ timeoutMs })} /><Field label="最低可信度（0–1）" type="number" min="0" max="1" step="0.05" value={classifier.confidence} onChange={(confidence) => classifierChange({ confidence })} /><Choice label="分类失败处理" value={classifier.failureMode} options={[{ value: 'default', label: '使用默认方案' }, { value: 'previous', label: '沿用上一意图' }, { value: 'no_intent', label: '继续执行其他规则' }]} onChange={(failureMode) => classifierChange({ failureMode })} /></div><p className="text-[11px] leading-5 text-slate-400">分类输入在服务端经过隐私处理；缓存默认 10 分钟，同一轮次合并分类，失败冷却 30 秒。跨服务分类请填写对应管理页中的渠道与分组 ID。</p></Section>
+      {classifier && <Section title="分类器设置"><div className="grid gap-3 sm:grid-cols-3"><Choice label="分类服务" value={classifier.provider} options={[{ value: 'claude', label: 'Claude' }, { value: 'codex', label: 'Codex' }]} onChange={(provider) => classifierChange({ provider, channelId: 0, groupId: 0 })} />{classifierResources ? <><Choice label="分类渠道" value={classifier.channelId} options={[{ value: 0, label: '请选择渠道' }, ...classifierResources.channels.map((channel) => ({ value: channel.id, label: channel.name }))]} onChange={(channelId) => classifierChange({ channelId, groupId: 0 })} /><Choice label="分类分组" value={classifier.groupId} options={[{ value: 0, label: '请选择分组' }, ...classifierResources.accounts.filter((account) => account.channelId === classifier.channelId).map((account) => ({ value: account.groupId, label: account.groupName }))]} onChange={(groupId) => classifierChange({ groupId })} /></> : <><Field label="分类渠道 ID" type="number" min="1" value={classifier.channelId} onChange={(channelId) => classifierChange({ channelId })} /><Field label="分类分组 ID" type="number" min="1" value={classifier.groupId} onChange={(groupId) => classifierChange({ groupId })} /></>}<Field label="分类模型" value={classifier.model} onChange={(model) => classifierChange({ model })} /><Field label="超时（毫秒）" type="number" min="1" max="30000" value={classifier.timeoutMs} onChange={(timeoutMs) => classifierChange({ timeoutMs })} /><Field label="最低可信度（0–1）" type="number" min="0" max="1" step="0.05" value={classifier.confidence} onChange={(confidence) => classifierChange({ confidence })} /><Choice label="分类失败处理" value={classifier.failureMode} options={[{ value: 'default', label: '使用默认方案' }, { value: 'previous', label: '沿用上一意图' }, { value: 'no_intent', label: '继续执行其他规则' }]} onChange={(failureMode) => classifierChange({ failureMode })} /></div><p className="text-[11px] leading-5 text-slate-400">分类输入在服务端经过隐私处理；缓存默认 10 分钟，同一轮次合并分类，失败冷却 30 秒。{!classifierResources && '跨服务分类请填写对应管理页中的渠道与分组 ID。'}</p></Section>}
         </>}
       </Section>
     </fieldset>

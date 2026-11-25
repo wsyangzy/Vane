@@ -6,20 +6,34 @@ import (
 	"time"
 )
 
-// NextRecovery waits only for a timed condition. Disabled resources, credential
-// repair, unsupported models and unknown quota never create a retry loop.
+type profileRecoveryState struct {
+	next    time.Time
+	ready   bool
+	probing bool
+}
+
+// NextRecovery reports only a known recovery time. An in-flight health probe
+// has no known completion time and is handled by WaitForRecovery instead.
 func (r *ProfileRuntime) NextRecovery(plan *DispatchPlan, external func(DispatchCandidate) (time.Time, bool)) (time.Time, bool) {
+	state := r.recoveryState(plan, external)
+	return state.next, !state.next.IsZero()
+}
+
+func (r *ProfileRuntime) recoveryState(plan *DispatchPlan, external func(DispatchCandidate) (time.Time, bool)) profileRecoveryState {
+	var result profileRecoveryState
 	if plan == nil || plan.Preview || plan.state == nil || plan.state.runtime != r || !plan.Profile.WaitForRecovery || plan.Budget.Check() != nil {
-		return time.Time{}, false
+		return result
 	}
 	plan.state.mu.Lock()
 	defer plan.state.mu.Unlock()
-	if plan.state.reserved || plan.state.responseStarted || plan.state.successful || plan.state.stopped != "" || plan.state.recoveryWaited {
-		return time.Time{}, false
+	if plan.state.reserved || plan.state.responseStarted || plan.state.successful || plan.state.stopped != "" {
+		return result
 	}
 	config := plan.state.native.apply(r.snapshot())
+	if _, exists := runtimeProfile(config, plan.Profile.ID); !exists {
+		return result
+	}
 	now := r.now()
-	var next time.Time
 	for _, evaluation := range plan.Evaluations {
 		if strings.HasPrefix(evaluation.Reason, "state_") || plan.state.stateRejected[evaluation.Candidate.Identity()] != "" {
 			continue
@@ -36,10 +50,13 @@ func (r *ProfileRuntime) NextRecovery(plan *DispatchPlan, external func(Dispatch
 			continue
 		}
 		var ready time.Time
-		if evaluation.Blockage != nil && evaluation.Blockage.Recovery == "automatic" && evaluation.Blockage.RecoverAt != nil {
+		// Health is refreshed by PrepareCandidate and the provider callback.
+		// A captured cooldown deadline may already have been cleared or extended.
+		if evaluation.Blockage != nil && evaluation.Blockage.Recovery == "automatic" && evaluation.Blockage.RecoverAt != nil && evaluation.Reason != "cooldown" && evaluation.Reason != "account_cooling_down" {
 			ready = *evaluation.Blockage.RecoverAt
 		}
-		if candidate.Health.CoolingDown {
+		probing := candidate.Health.Reason == "account_probe_in_progress"
+		if candidate.Health.CoolingDown && !probing {
 			if candidate.Health.Until.IsZero() {
 				continue
 			}
@@ -69,18 +86,79 @@ func (r *ProfileRuntime) NextRecovery(plan *DispatchPlan, external func(Dispatch
 		}
 		if external != nil {
 			at, ok := external(candidate)
-			if !ok {
+			if !ok && !probing {
 				continue
 			}
-			if at.After(ready) {
-				ready = at
+			if ok {
+				probing = false
+				if at.After(ready) {
+					ready = at
+				}
 			}
 		}
-		if ready.After(now) && (next.IsZero() || ready.Before(next)) {
-			next = ready
+		if ready.After(now) {
+			if result.next.IsZero() || ready.Before(result.next) {
+				result.next = ready
+			}
+		} else if probing {
+			result.probing = true
+		} else if !evaluation.Eligible || !ready.IsZero() {
+			// Recheck an opened gate, rather than replaying an already-tried
+			// candidate with no evidence of a recoverable condition.
+			result.ready = true
 		}
 	}
-	return next, !next.IsZero()
+	return result
+}
+
+// WaitForRecovery keeps the admitted request while timed health/quota gates or
+// another request's recovery probe can still open within the shared budget.
+// Probe polling uses Wait, so it never fabricates an endpoint recovery time.
+func (r *ProfileRuntime) WaitForRecovery(ctx context.Context, plan *DispatchPlan, external func(DispatchCandidate) (time.Time, bool)) (bool, error) {
+	if plan == nil || plan.Preview || plan.state == nil || plan.state.runtime != r || !plan.Profile.WaitForRecovery {
+		return false, nil
+	}
+	waited, recorded, rechecked := false, false, false
+	for {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if err := plan.Budget.Check(); err != nil {
+			return false, err
+		}
+		state := r.recoveryState(plan, external)
+		if (waited || !rechecked) && state.ready || waited && !state.probing && state.next.IsZero() {
+			rechecked = true
+			if r.Recover(ctx, plan) {
+				return true, nil
+			}
+			waited = false
+			continue
+		}
+		if !state.probing && state.next.IsZero() {
+			return false, nil
+		}
+		if !recorded {
+			plan.state.mu.Lock()
+			plan.state.appendEvent(DispatchTraceEvent{Action: "wait", Reason: "waiting_for_account_recovery"})
+			plan.state.mu.Unlock()
+			recorded = true
+		}
+		var err error
+		if state.probing {
+			delay := 100 * time.Millisecond
+			if !state.next.IsZero() && time.Until(state.next) < delay {
+				delay = time.Until(state.next)
+			}
+			err = plan.Budget.Wait(ctx, delay)
+		} else {
+			err = plan.Budget.WaitRecovery(ctx, time.Until(state.next))
+		}
+		if err != nil {
+			return false, err
+		}
+		waited = true
+	}
 }
 
 func recoveryResource(config RuntimeConfig, previous DispatchCandidate) (DispatchCandidate, bool) {
@@ -119,10 +197,9 @@ func (r *ProfileRuntime) Recover(ctx context.Context, plan *DispatchPlan) bool {
 	state := plan.state
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.reserved || state.responseStarted || state.successful || state.stopped != "" || state.recoveryWaited {
+	if state.reserved || state.responseStarted || state.successful || state.stopped != "" {
 		return false
 	}
-	state.recoveryWaited = true
 	config := state.native.apply(r.snapshot())
 	_, exists := runtimeProfile(config, plan.Profile.ID)
 	if !exists {
@@ -136,7 +213,6 @@ func (r *ProfileRuntime) Recover(ctx context.Context, plan *DispatchPlan) bool {
 		}
 	}
 	state.ledger.tried = nil
-	state.appendEvent(DispatchTraceEvent{Action: "wait", Reason: "waiting_for_account_recovery"})
 	r.populateDispatchPlan(ctx, config, plan, state.previous, r.now())
 	return len(plan.EligibleCandidates) > 0
 }

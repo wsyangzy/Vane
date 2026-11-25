@@ -490,7 +490,7 @@ func (s *Service) PreviewRequest(path string, body []byte) RequestPreviewResult 
 		preview.restoration = newRestorationVault().request("", "preview")
 	}
 	var result ApplyResult
-	replacements := preview.scanSegments(&result, preview.candidateRules(), segments)
+	replacements := preview.scanSegments(&result, preview.candidateRules(), segments, nil)
 	if result.SkippedReason == SkippedScanLimit {
 		out.Error = "超过扫描上限，本次跳过扫描并原文放行"
 	}

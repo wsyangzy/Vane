@@ -61,6 +61,7 @@ type CodexChannelInfo struct {
 	ModelMapping     map[string]string          `json:"model_mapping"`
 	ReasoningEffort  string                     `json:"model_reasoning_effort"`
 	Enable1MContext  bool                       `json:"enable_1m_context"`
+	CompactionMode   string                     `json:"compaction_mode"`
 	Website          string                     `json:"website"`
 	IsActive         bool                       `json:"is_active"`
 	Priority         int                        `json:"priority"`
@@ -162,6 +163,7 @@ type CreateCodexChannelInput struct {
 	ModelMapping    map[string]string `json:"model_mapping"`
 	ReasoningEffort string            `json:"model_reasoning_effort"`
 	Enable1MContext bool              `json:"enable_1m_context"`
+	CompactionMode  string            `json:"compaction_mode"`
 	Website         string            `json:"website"`
 	Priority        int               `json:"priority"`
 	FailoverEnabled *bool             `json:"failover_enabled"`
@@ -175,6 +177,7 @@ type UpdateCodexChannelInput struct {
 	ModelMapping    map[string]string `json:"model_mapping"`
 	ReasoningEffort string            `json:"model_reasoning_effort"`
 	Enable1MContext bool              `json:"enable_1m_context"`
+	CompactionMode  *string           `json:"compaction_mode"`
 	Website         string            `json:"website"`
 	Priority        int               `json:"priority"`
 	FailoverEnabled *bool             `json:"failover_enabled"`

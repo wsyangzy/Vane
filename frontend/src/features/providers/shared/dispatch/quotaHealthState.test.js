@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { filterQuotaHealthChannels, healthGroupSummary, quotaGroupSummary, quotaHealthChannels } from './quotaHealthState.js';
+import { filterQuotaHealthChannels, healthGroupSummary, paginateQuotaHealthChannels, quotaGroupSummary, quotaHealthChannels } from './quotaHealthState.js';
 
 test('quota summary separates current usage from stale or unknown windows without inventing an overall quota', () => {
   const now = Date.parse('2026-10-26T12:00:00Z');
@@ -32,6 +32,32 @@ test('health summary keeps hidden endpoint failures visible and uses the stronge
   assert.equal(summary.tone, 'danger');
   assert.match(summary.reason, /上游拒绝凭证/);
   assert.deepEqual(healthGroupSummary([candidates[0]]), { label: '全部正常', tone: 'success', reason: '' });
+});
+
+test('pagination bounds large channels by groups without losing any group or separating its endpoints', () => {
+  const groups = Array.from({ length: 31 }, (_, id) => ({ id, candidates: [{ endpointId: `${id}-a` }, { endpointId: `${id}-b` }] }));
+  const channels = [{ id: 1, name: '多分组渠道', groups }];
+  const shown = [];
+  for (let page = 1; page <= 4; page++) {
+    const result = paginateQuotaHealthChannels(channels, page);
+    assert.equal(result.pages, 4);
+    assert.equal(result.total, 31);
+    assert.ok(result.channels[0].groups.length <= 8);
+    assert.equal(result.channels[0].totalGroups, 31);
+    shown.push(...result.channels[0].groups);
+  }
+  assert.deepEqual(shown, groups);
+  assert.equal(shown[0], groups[0]);
+  assert.equal(channels[0].groups.length, 31);
+});
+
+test('pagination retains channel order and clamps the current page after a search or live update', () => {
+  const channels = [{ id: 1, groups: [{ id: 11 }, { id: 12 }] }, { id: 2, groups: [{ id: 21 }, { id: 22 }] }];
+  const result = paginateQuotaHealthChannels(channels, 2, 3);
+  assert.deepEqual(result.channels.map(channel => [channel.id, channel.groups.map(group => group.id)]), [[2, [22]]]);
+  const filtered = paginateQuotaHealthChannels([{ id: 1, groups: [{ id: 11 }] }], 2, 3);
+  assert.deepEqual([filtered.page, filtered.pages, filtered.start, filtered.end], [1, 1, 1, 1]);
+  assert.deepEqual(paginateQuotaHealthChannels([], 10), { channels: [], page: 1, pages: 1, total: 0, start: 0, end: 0 });
 });
 
 test('relay groups remain visible without fabricated quota and manual balances stay group scoped', () => {

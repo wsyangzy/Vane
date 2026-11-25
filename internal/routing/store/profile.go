@@ -404,6 +404,8 @@ func writeProfileChildren(ctx context.Context, tx *sql.Tx, p *routing.RoutingPro
 	if p.Search != nil {
 		public := *p.Search
 		public.HasAPIKey = false
+		public.ConfiguredVendors = nil
+		public.APIKeyLengths = nil
 		config, err := json.Marshal(public)
 		if err != nil {
 			return err

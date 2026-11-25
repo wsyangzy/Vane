@@ -11,6 +11,60 @@
         ],
         "createdAt": "2026-11-17T02:24:30.100Z",
         "reason": "Codex review: existing HEAD uses a 2px error separator on collapsible upstream or transport diagnostics inside an attempt row; it identifies diagnostic error content rather than decorating a card."
+      },
+      {
+        "rule": "ai-color-palette",
+        "value": "*",
+        "files": [
+          "frontend/src/features/requests/index.jsx"
+        ],
+        "createdAt": "2026-11-18T01:49:34.150Z",
+        "reason": "Agent: the only finding in this file is the existing Codex or Claude provider badge nested in the heading; the heading itself uses slate text and the badge uses flat indigo on a light background."
+      },
+      {
+        "rule": "ai-color-palette",
+        "value": "*",
+        "files": [
+          "frontend/src/features/requests/components/RequestPrivacyDetails.jsx"
+        ],
+        "createdAt": "2026-11-19T04:00:48.895Z",
+        "reason": "Codex review: the existing ShieldCheck icon uses flat indigo on the white privacy panel to identify the protection section, matching the existing Vane privacy page. The adjacent heading text uses slate."
+      },
+      {
+        "rule": "ai-color-palette",
+        "value": "*",
+        "files": [
+          "frontend/src/features/providers/codex/components/ProfileSearchEditor.jsx"
+        ],
+        "createdAt": "2026-11-20T01:29:15.107Z",
+        "reason": "Codex review: line 82 is an existing Search icon using flat indigo on a white panel, while the h3 heading uses slate. AGENTS.md requires the existing Codex form system and indigo focus or selected states. The current diff changes only credential-length masking."
+      },
+      {
+        "rule": "ai-color-palette",
+        "value": "*",
+        "files": [
+          "frontend/src/features/providers/shared/dispatch/DispatchWorkspace.jsx"
+        ],
+        "createdAt": "2026-11-20T02:03:00.275Z",
+        "reason": "Codex review: line 111 uses an existing Layers icon with flat text-indigo-500 on a light panel; the adjacent h2 uses text-slate-800. There are no purple or violet gradients or cyan-on-dark colors in this file. AGENTS.md requires the existing Codex UI system and indigo focus/selected states. The task changes only configuration-status copy in this file."
+      },
+      {
+        "rule": "ai-color-palette",
+        "value": "*",
+        "files": [
+          "frontend/src/features/providers/shared/subscriptions/SubscriptionConnectionPanel.jsx"
+        ],
+        "createdAt": "2026-11-23T03:08:05.436Z",
+        "reason": "Codex review: line 102 is the existing flat indigo Cable icon on the light connection panel, while its adjacent heading uses slate; there are no purple gradients or cyan-on-dark colors, and AGENTS.md preserves the existing indigo control system."
+      },
+      {
+        "rule": "ai-color-palette",
+        "value": "*",
+        "files": [
+          "frontend/src/features/settings/components/BackupRecordsModal.jsx"
+        ],
+        "createdAt": "2026-11-24T00:50:00.279Z",
+        "reason": "Codex review: line 76 is a flat indigo Archive icon on the white backup dialog; its adjacent heading uses slate. It matches SubscriptionConnectionPreview.jsx and SettingsSection.jsx and the existing Vane indigo control system required by AGENTS.md. There are no purple or violet gradients or cyan-on-dark colors in this file."
       }
     ]
   }

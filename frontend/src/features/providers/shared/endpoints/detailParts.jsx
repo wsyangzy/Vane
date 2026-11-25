@@ -115,13 +115,13 @@ export const DetailTimestampFooter = ({ createdAt, updatedAt, density = 'normal'
   </footer>
 );
 
-export const ResourceDetailShell = ({ title, subtitle, eyebrow, icon: Icon, tone = 'endpoint', actions, summary, onClose, children }) => {
+export const ResourceDetailShell = ({ title, subtitle, eyebrow, icon: Icon, tone = 'endpoint', maxWidth, actions, summary, onClose, children }) => {
   const titleId = useId();
   return renderModalPortal(
     <div className="rd-backdrop fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose?.();
     }}>
-      <section role="dialog" aria-modal="true" aria-labelledby={titleId} data-detail-tone={tone} className="resource-detail-dialog flex max-h-[calc(100dvh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+      <section role="dialog" aria-modal="true" aria-labelledby={titleId} data-detail-tone={tone} style={maxWidth ? { maxWidth } : undefined} className="resource-detail-dialog flex max-h-[calc(100dvh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
         <header className="rd-header">
           <div className="rd-heading">
             <span className="rd-emblem">{Icon && <Icon size={19} />}</span>

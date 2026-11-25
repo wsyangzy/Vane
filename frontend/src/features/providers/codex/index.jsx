@@ -2,9 +2,9 @@ import { checkPoolEndpoint } from '@/services/wails/pools.js';
 import DispatchWorkspace from '@/features/providers/shared/dispatch/DispatchWorkspace.jsx';
 import ChannelResourceGrid from '@/features/providers/shared/pools/ChannelResourceGrid.jsx';
 import { useCallback, useEffect, useState } from 'react';
-import { Database, Plus } from 'lucide-react';
+import { Database, Plus, ScanLine } from 'lucide-react';
 import { Button, EmptyState, ErrorMessage, LoadingSpinner, useToast } from '@/shared/ui/index.js';
-import SubscriptionManagement, { ClientConnectionButton } from '@/features/providers/shared/subscriptions/SubscriptionManagement.jsx';
+import SubscriptionManagement from '@/features/providers/shared/subscriptions/SubscriptionManagement.jsx';
 import ClientVersionBadge from '@/features/providers/shared/ClientVersionBadge.jsx';
 import { getErrorMessage, getFailoverToggleErrorMessage } from '@/features/providers/shared/formatters.js';
 import CredentialGroupDetailModal from '@/features/providers/shared/credentials/CredentialGroupDetailModal.jsx';
@@ -17,6 +17,7 @@ import { CodexLogo } from './components/CodexLogo.jsx';
 import { ChannelFormModal } from './components/ChannelFormModal.jsx';
 import { CredentialGroupFormModal } from './components/CredentialGroupFormModal.jsx';
 import { EndpointFormModal } from './components/EndpointFormModal.jsx';
+import EndpointPathsWorkspace from './components/EndpointPathsWorkspace.jsx';
 import { DeleteConfirmDialog } from './components/DeleteConfirmDialog.jsx';
 import { DeleteCredentialGroupConfirmDialog } from './components/DeleteCredentialGroupConfirmDialog.jsx';
 import { ActiveChannelPauseDialog } from './components/ActiveChannelPauseDialog.jsx';
@@ -89,6 +90,9 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
   const [endpointFormError, setEndpointFormError] = useState('');
   const [deleteEndpointTarget, setDeleteEndpointTarget] = useState(null);
   const [endpointDetailTarget, setEndpointDetailTarget] = useState(null);
+  const [pathBatchBusy, setPathBatchBusy] = useState(false);
+  const [pathDialogOpen, setPathDialogOpen] = useState(false);
+  const [pathResults, setPathResults] = useState({});
 
   const selectedEndpointDetail = endpointDetailTarget ? (() => {
     const latestChannel = channels.find((channel) => channel.id === endpointDetailTarget.channelOwner?.id) ||
@@ -361,9 +365,9 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
     setActionLoading(`default-credential-group-${group.id}`);
     try {
       await setDefaultCodexCredentialGroup(group.id);
-      await fetchData({ silent: true });
-    } catch (err) {
-      toast.error(getErrorMessage(err, '设置默认分组失败'), '设置默认分组失败');
+      await fetchData({ silent: true, throwOnError: true });
+    } catch (error) {
+      throw new Error(getErrorMessage(error, '设置默认分组失败'));
     } finally {
       setActionLoading('');
     }
@@ -642,16 +646,19 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
       </div>
 
       <DispatchWorkspace provider="codex" refreshToken={channels} onViewRequests={onViewRequests}
-        resourcesBusy={loading || Boolean(actionLoading)}
+        resourcesBusy={loading || Boolean(actionLoading) || pathBatchBusy}
         onRefreshResources={() => fetchData({ silent: true, throwOnError: true })}
         resourceActions={<>
-          <ClientConnectionButton provider="codex" onUpdated={() => fetchData({ silent: true, throwOnError: true })} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading)} />
+          <Button type="button" size="sm" variant="secondary" icon={ScanLine} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading) || pathBatchBusy} aria-haspopup="dialog" aria-expanded={pathDialogOpen} onClick={() => setPathDialogOpen(true)}>端点路径</Button>
           <SubscriptionManagement provider="codex" channels={channels} onUpdated={() => fetchData({ silent: true, throwOnError: true })} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading)} />
           {channels.length > 0 && <Button type="button" size="sm" icon={Plus} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading)} onClick={openCreateChannelForm}>添加渠道</Button>}
         </>} endpoints={channels.flatMap((channel) => channel.endpoints.map((endpoint) => ({
         channelId: channel.id, groupId: endpoint.credentialGroupId || getDefaultCredentialGroup(channel)?.id || 0, endpointId: String(endpoint.id),
         name: endpoint.name, address: endpoint.baseURL,
       })))} onError={(message) => toast.error(message)} onSuccess={(message) => toast.success(message)}>
+      {pathDialogOpen && <EndpointPathsWorkspace channels={channels} disabled={loading || Boolean(actionLoading)}
+        results={pathResults} onResultsChange={setPathResults} onBusyChange={setPathBatchBusy}
+        onRefresh={() => fetchData({ silent: true, throwOnError: true })} onClose={() => setPathDialogOpen(false)} />}
       {error && (
         <div className="mb-4">
           <ErrorMessage message={error} onClose={() => setError('')} />
@@ -792,6 +799,7 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
           endpoint={selectedEndpointDetail.endpoint}
           channel={selectedEndpointDetail.channelOwner}
           globalConfig={globalConfig}
+          pathResult={pathResults[selectedEndpointDetail.endpoint.id]}
           onClose={() => setEndpointDetailTarget(null)}
           onEdit={(endpoint) => {
             setEndpointDetailTarget(null);
@@ -839,6 +847,7 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
       {deleteEndpointTarget && (
         <DeleteConfirmDialog
           title="删除端点"
+          routingGroupId={deleteEndpointTarget.endpoint.credentialGroupId || getDefaultCredentialGroup(deleteEndpointTarget.channelOwner)?.id}
           description={`即将从渠道「${deleteEndpointTarget.channelOwner?.name}」中删除端点「${deleteEndpointTarget.endpoint?.name || deleteEndpointTarget.endpoint?.baseURL || '未命名端点'}」。`}
           hint={
             deleteEndpointTarget.endpoint.isActive
