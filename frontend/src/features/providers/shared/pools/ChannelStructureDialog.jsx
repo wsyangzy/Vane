@@ -11,7 +11,7 @@ import { buildChannelGraph, fitChannelGraph, MAX_GRAPH_ZOOM, MIN_GRAPH_ZOOM, zoo
 const iconButton = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-2 focus-visible:outline-indigo-500 disabled:opacity-40';
 const menuItem = 'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-slate-600 hover:bg-slate-100 focus-visible:bg-slate-100 focus-visible:outline-none disabled:opacity-40';
 
-export default function ChannelStructureDialog({ provider, name, website, groups, endpoints, busy, onClose, onEdit, onDelete, onAddGroup, onOpenGroup, onEditGroup, onDeleteGroup, onSetDefaultGroup, onAddEndpoint, onOpenEndpoint, onEditEndpoint, onDeleteEndpoint, onHealthEndpoint, onToggleEndpointSkipHealthCheck }) {
+export default function ChannelStructureDialog({ provider, name, website, groups, endpoints, details, busy, onClose, onEdit, onDelete, onAddGroup, onOpenGroup, onEditGroup, onDeleteGroup, onSetDefaultGroup, onAddEndpoint, onOpenEndpoint, onEditEndpoint, onDeleteEndpoint, onHealthEndpoint, onToggleEndpointSkipHealthCheck }) {
   const titleId = useId();
   const dialogRef = useRef(null);
   const closeRef = useRef(null);
@@ -328,7 +328,7 @@ export default function ChannelStructureDialog({ provider, name, website, groups
           {actionError && <p role="alert" className="px-2.5 py-2 text-xs text-rose-600 [overflow-wrap:anywhere]">{actionError}</p>}
         </div>}
         <div ref={modalScope?.setTarget} className="channel-canvas-overlays" />
-        {channelDetailOpen && <ChannelDetailModal provider={provider} name={name} website={website} graph={graph} busy={controlsBusy} onClose={() => setChannelDetailOpen(false)} onEdit={onEdit ? () => { setChannelDetailOpen(false); openAction(onEdit); } : undefined} />}
+        {channelDetailOpen && <ChannelDetailModal provider={provider} name={name} website={website} details={details} busy={controlsBusy} onClose={() => setChannelDetailOpen(false)} onEdit={onEdit ? () => { setChannelDetailOpen(false); openAction(onEdit); } : undefined} />}
       </section>
     </div>,
     { root: true }
