@@ -4,6 +4,7 @@
 
 export {
     Activity,
+    ActivityFieldHit,
     BuiltinMatcherInfo,
     LegacyRule,
     Overview,
