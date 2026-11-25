@@ -34,6 +34,7 @@ import RequestDispatchDetails from './RequestDispatchDetails.jsx';
 import RequestFallbackChain from './RequestFallbackChain.jsx';
 import RequestCostWaterfall from './RequestCostWaterfall.jsx';
 import RequestContextMap from './RequestContextMap.jsx';
+import RequestCompactionStatus from './RequestCompactionStatus.jsx';
 import RequestAuxiliaryUsage from './RequestAuxiliaryUsage.jsx';
 import RequestPrivacyDetails from './RequestPrivacyDetails.jsx';
 import LocalRequestFailure from './LocalRequestFailure.jsx';
@@ -73,7 +74,7 @@ import {
   parseReasoningConfig,
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
-import { describeFailureReason, getRequestFailureDetails } from '../utils/failureSummary.js';
+import { describeFailureReason, getRequestFailureDetails, getRequestProtocolDiagnostics } from '../utils/failureSummary.js';
 import { getRequestOutcome, isRequestInProgress } from '../utils/requestOutcome.js';
 import { describeRouteSnapshot, describeRouteExecution } from '@/features/providers/shared/routing/routeTargets.js';
 
@@ -398,6 +399,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
     return '中转';
   };
   const failureDetails = getRequestFailureDetails(request);
+  const protocolDiagnostics = getRequestProtocolDiagnostics(request);
   const failureDetail = failureDetails.upstreamDetail;
   // 失败跳（最后一跳在前）：新链路逐跳记录了上游状态码、原文与诊断头
   const failedHops = isFailure ? failureDetails.upstreamHops : [];
@@ -417,6 +419,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
       networkHTTPStatus > 0 ? `HTTP 状态码: ${networkHTTPStatus}` : null,
       failureDetail
     ].filter(Boolean).join('\n');
+  const diagnosticErrorText = protocolDiagnostics.length
+    ? `${errorText}\n\n请求格式诊断：\n${protocolDiagnostics.join('\n')}` : errorText;
   const modelRewriteSource = request.modelRewriteSource || request.model_rewrite_source || '';
   const originalModelName = request.originalModelName || request.original_model_name || '';
   const modelRewriteTarget = request.modelRewriteTarget || request.model_rewrite_target || request.model || '';
@@ -547,6 +551,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                   </div>
                 </div>
               </div>
+
+              <RequestCompactionStatus request={request} />
 
               <div className="request-detail-overview-grid">
               {/* 基本信息 */}
@@ -1068,7 +1074,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                       <Tooltip content={copiedError ? '已复制' : '复制错误信息'}>
                         <button
                           onClick={() => {
-                            navigator.clipboard.writeText(errorText);
+                            navigator.clipboard.writeText(diagnosticErrorText);
                             setCopiedError(true);
                             setTimeout(() => setCopiedError(false), 2000);
                           }}
@@ -1084,6 +1090,10 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                     )}
                   </div>
                   <div className="min-w-0 max-w-full space-y-2 overflow-hidden p-4">
+                    {failureDetails.upstreamExplanation && <div className="space-y-1 text-sm leading-6 [overflow-wrap:anywhere]">
+                      <p className="font-medium text-rose-900">{failureDetails.upstreamExplanation.summary}</p>
+                      <p className="text-slate-600">{failureDetails.upstreamExplanation.advice}</p>
+                    </div>}
                     {failedHops.length > 0 ? (
                       <div className="divide-y divide-rose-200/70">
                         {/* 默认只列最终跳；转移过的早先失败跳按需展开，避免卡片随转移次数无限变长 */}

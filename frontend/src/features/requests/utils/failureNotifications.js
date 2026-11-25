@@ -39,14 +39,14 @@ export const createFailureNotificationAggregator = ({ windowMs = 30000, maxGroup
         const reason = request.failure_reason || request.failureReason || '';
         if (extractFailureCode(reason) === 'client_cancelled') continue;
         const details = getRequestFailureDetails(request);
-        if (!shouldNotifyFailure(reason) && !details.cooldownBlocked && !details.blockingCandidates.length) continue;
+        if (!shouldNotifyFailure(reason) && !details.upstreamExplanation && !details.cooldownBlocked && !details.blockingCandidates.length) continue;
         const scope = failureScope(request);
         // Candidate and rule differences do not change the action for a fully
         // cooldown-blocked request on the same dispatch profile.
         const coolingScope = scope[0] === 'profile' ? scope.slice(0, 2) : scope;
         const key = JSON.stringify([String(request.provider || 'claude').toLowerCase(), details.cooldownBlocked
           ? [coolingScope, 'unsent_cooldown']
-          : [scope, extractFailureCode(reason) || describeFailureReason(reason), blockerScope(details.blockingCandidates)]]);
+          : [scope, details.upstreamExplanation?.code || extractFailureCode(reason) || describeFailureReason(reason), blockerScope(details.blockingCandidates)]]);
         let group = groups.get(key);
         const existing = Boolean(group);
         if (!group) {

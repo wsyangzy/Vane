@@ -29,10 +29,21 @@ type contextEntry struct {
 }
 
 type contextRequestSummary struct {
-	Version int                    `json:"version"`
-	Parts   map[string]contextPart `json:"parts"`
-	Partial bool                   `json:"partial,omitempty"`
-	Turns   int                    `json:"turns,omitempty"`
+	Version  int                     `json:"version"`
+	Parts    map[string]contextPart  `json:"parts"`
+	Partial  bool                    `json:"partial,omitempty"`
+	Turns    int                     `json:"turns,omitempty"`
+	Protocol *contextProtocolSummary `json:"protocol,omitempty"`
+}
+
+type contextProtocolSummary struct {
+	InputTypes          map[string]int `json:"input_types"`
+	ToolTypes           map[string]int `json:"tool_types"`
+	RequestToolTypes    map[string]int `json:"request_tool_types"`
+	AdditionalToolTypes map[string]int `json:"additional_tool_types"`
+	RequestTools        int            `json:"request_tools"`
+	AdditionalTools     int            `json:"additional_tools"`
+	CompactionItems     int            `json:"compaction_items"`
 }
 
 type contextDocument struct {
@@ -120,7 +131,76 @@ func buildContextSummary(protocol string, body []byte) *contextRequestSummary {
 	if len(builder.parts) == 0 && !partial {
 		return nil
 	}
-	return builder.summary(partial)
+	summary := builder.summary(partial)
+	if protocol == "responses" {
+		summary.Protocol = summarizeResponseProtocol(input, payload.Tools)
+	}
+	return summary
+}
+
+// Persist only known protocol type names and counts. Unknown values are grouped
+// as other so a user-controlled type cannot leak request text into diagnostics.
+func summarizeResponseProtocol(input json.RawMessage, tools []json.RawMessage) *contextProtocolSummary {
+	result := &contextProtocolSummary{InputTypes: map[string]int{}, ToolTypes: map[string]int{},
+		RequestToolTypes: map[string]int{}, AdditionalToolTypes: map[string]int{}, RequestTools: len(tools)}
+	var countTools func([]json.RawMessage, map[string]int, int)
+	countTools = func(items []json.RawMessage, source map[string]int, depth int) {
+		if depth > 16 {
+			return
+		}
+		for _, raw := range items {
+			var tool contextDocument
+			if json.Unmarshal(raw, &tool) != nil {
+				continue
+			}
+			kind := tool.Type
+			switch kind {
+			case "function", "custom", "namespace", "web_search", "web_search_preview", "tool_search", "mcp", "file_search", "code_interpreter", "image_generation", "computer", "computer_use_preview", "local_shell", "shell", "apply_patch":
+			default:
+				kind = "other"
+			}
+			result.ToolTypes[kind]++
+			source[kind]++
+			if tool.Type == "namespace" {
+				var nested []json.RawMessage
+				if json.Unmarshal(tool.Tools, &nested) == nil {
+					countTools(nested, source, depth+1)
+				}
+			}
+		}
+	}
+	countTools(tools, result.RequestToolTypes, 0)
+	var text string
+	if hasContextValue(input) && json.Unmarshal(input, &text) == nil {
+		result.InputTypes["message"] = 1
+		return result
+	}
+	contextBlocks(input, func(raw json.RawMessage) {
+		var item contextDocument
+		if json.Unmarshal(raw, &item) != nil {
+			return
+		}
+		kind := item.Type
+		switch kind {
+		case "":
+			kind = "message"
+		case "message", "reasoning", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "tool_search_call", "tool_search_output", "additional_tools", "compaction", "compaction_summary", "compaction_trigger", "configuration_update":
+		default:
+			kind = "other"
+		}
+		result.InputTypes[kind]++
+		if item.Type == "compaction" || item.Type == "compaction_summary" {
+			result.CompactionItems++
+		}
+		if item.Type == "additional_tools" {
+			result.AdditionalTools++
+			var declared []json.RawMessage
+			if json.Unmarshal(item.Tools, &declared) == nil {
+				countTools(declared, result.AdditionalToolTypes, 0)
+			}
+		}
+	})
+	return result
 }
 
 func hasContextValue(raw json.RawMessage) bool {

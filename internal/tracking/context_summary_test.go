@@ -19,6 +19,43 @@ func summarizeContext(protocol string, body []byte) string {
 	return string(data)
 }
 
+func TestResponseProtocolSummaryHasCountsWithoutToolSchemasOrEncryptedState(t *testing.T) {
+	body := []byte(`{"tools":[{"type":"web_search"}],"input":[{"type":"additional_tools","tools":[{"type":"namespace","tools":[{"type":"custom","description":"private description","format":{"definition":"private schema"}},{"type":"private secret type"}]}]},{"type":"compaction","encrypted_content":"private encrypted state"},{"role":"user","content":"private prompt"}]}`)
+	raw := summarizeContext("responses", body)
+	if strings.Contains(raw, "private") {
+		t.Fatal("protocol diagnostics leaked request content")
+	}
+	var summary contextRequestSummary
+	if err := json.Unmarshal([]byte(raw), &summary); err != nil {
+		t.Fatal(err)
+	}
+	p := summary.Protocol
+	if p == nil || p.CompactionItems != 1 || p.AdditionalTools != 1 || p.RequestTools != 1 || p.InputTypes["message"] != 1 || p.ToolTypes["namespace"] != 1 || p.ToolTypes["custom"] != 1 || p.ToolTypes["web_search"] != 1 || p.ToolTypes["other"] != 1 {
+		t.Fatalf("incorrect protocol shape: %+v", p)
+	}
+	if !reflect.DeepEqual(p.RequestToolTypes, map[string]int{"web_search": 1}) ||
+		!reflect.DeepEqual(p.AdditionalToolTypes, map[string]int{"namespace": 1, "custom": 1, "other": 1}) {
+		t.Fatalf("tool sources were mixed together: %+v", p)
+	}
+}
+
+func TestResponseProtocolSummaryCountsStringInput(t *testing.T) {
+	var summary contextRequestSummary
+	if err := json.Unmarshal([]byte(summarizeContext("responses", []byte(`{"input":"private prompt"}`))), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.Protocol == nil || summary.Protocol.InputTypes["message"] != 1 || summary.Protocol.CompactionItems != 0 {
+		t.Fatalf("string input was not counted as a message: %+v", summary.Protocol)
+	}
+	summary = contextRequestSummary{}
+	if err := json.Unmarshal([]byte(summarizeContext("responses", []byte(`{"input":null,"previous_response_id":"private link"}`))), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Protocol.InputTypes) != 0 {
+		t.Fatalf("linked context with no input must not invent a message: %+v", summary.Protocol)
+	}
+}
+
 func TestContextSummaryRecordsStructureWithoutPayload(t *testing.T) {
 	body := []byte(`{"instructions":"private instruction","tools":[{"name":"private tool"}],"previous_response_id":"private link","input":[{"role":"developer","content":[{"type":"input_text","text":"<project_instructions>private path"},{"type":"input_text","text":"<skills_instructions>private skill"}]},{"role":"user","content":"private prompt"},{"type":"function_call_output","output":"private output"},{"type":"compaction","encrypted_content":"private summary"}]}`)
 	raw := summarizeContext("responses", body)
