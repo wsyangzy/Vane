@@ -375,7 +375,11 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 				continue
 			}
 			sent, quotaFailure := false, false
-			finish := func(tokens int64, successful bool, failure routing.Failure, retryAt time.Time) {
+			recovery := h.newResponseRecoveryState(r, requestID)
+			finish := func(tokens int64, successful bool, failure routing.Failure, retryAt time.Time) routing.Failure {
+				if recovery.rule.ID != "" && !successful {
+					failure.Scope, failure.Terminal = routing.ScopeRequest, true
+				}
 				releaseHealth(successful)
 				if sent && !successful && failure.Scope != "" && !quotaFailure && r.Context().Err() == nil {
 					_ = availability.Fail(candidate.ChannelID, candidate.GroupID, candidate.EndpointID, candidate.Identity().Model, failure, retryAt)
@@ -384,6 +388,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 				if sent {
 					closeLastHop(chain, start)
 				}
+				return failure
 			}
 			sendRequest := r
 			var lease *subscription.Lease
@@ -413,17 +418,38 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			if !isCodexImageRequest(r) && !isCodexSearchRequest(r) {
 				rewrite = rewriteModelForRoute(outbound, candidate.Identity().Model, h.logger, requestID)
 			}
-			beforeSend := func() error {
-				if err := attempt.Begin(sendRequest.Context()); err != nil {
-					return err
-				}
+			recordSend := func() {
 				sent = true
 				chain = append(chain, chainNode{Hop: len(chain) + 1, Channel: channel.Name, CredentialGroup: ep.CredentialGroupName, Endpoint: ep.Name, Attempts: 1, StartMs: time.Since(start).Milliseconds()})
 				h.recordForwarding(requestID, ep.Name, channel.Name, candidate.Identity().Model, chain)
 				publishProgress()
+			}
+			beforeSend := func() error {
+				if err := attempt.Begin(sendRequest.Context()); err != nil {
+					return err
+				}
+				recordSend()
 				return nil
 			}
 			sendRequest = sendRequest.WithContext(context.WithValue(sendRequest.Context(), codexProfileBeforeSendKey{}, beforeSend))
+			var rejectedResponse *http.Response
+			recovery.onRejected = func(resp *http.Response, raw []byte) {
+				attempt.SetUsage(codexAttemptUsage(h.tokenParser.ParseNonStreaming(raw), true, extractServiceTier(body)))
+				h.observeProfileResponse(sendRequest.Context(), candidate, resp.StatusCode, resp.Header, raw)
+				rejectedResponse = resp
+				text := subscription.Redact(sendRequest.Context(), chainBodyText(raw, recovery.rule.ID))
+				annotateLastChainError(&chain, resp.StatusCode, text, resp.Header, false)
+				closeLastHop(chain, start)
+				publishProgress()
+			}
+			recovery.beforeRetry = func(ctx context.Context) error {
+				if err := attempt.Retry(ctx, recovery.rule.ID); err != nil {
+					return err
+				}
+				recordSend()
+				return nil
+			}
+			sendRequest = sendRequest.WithContext(withResponseRecoveryState(sendRequest.Context(), recovery))
 			fwd := h.forwarder
 			if streaming {
 				fwd = h.streamFwd
@@ -431,7 +457,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			resp, err := fwd.Forward(sendRequest, rewrite.Body, ep)
 			if err != nil {
 				failure := codexRouteFailure(0, nil, err)
-				finish(0, false, failure, time.Time{})
+				failure = finish(0, false, failure, time.Time{})
 				if sent {
 					lastUpstreamError = subscription.Redact(sendRequest.Context(), chainErrorText(err, "", failure.Reason))
 					annotateLastChainError(&chain, 0, lastUpstreamError, nil, true)
@@ -449,18 +475,27 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			if resp.StatusCode >= 400 {
 				raw, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
-				attempt.SetUsage(codexAttemptUsage(h.tokenParser.ParseNonStreaming(raw), true, extractServiceTier(body)))
-				h.observeProfileResponse(sendRequest.Context(), candidate, resp.StatusCode, resp.Header, raw)
-				failure := codexRequestFailure(sendRequest, resp.StatusCode, raw, nil)
-				code, kind, _ := routing.ErrorIdentity(raw)
+				diagnosticBody := raw
+				if recovery.rule.ID != "" && resp.Request != nil {
+					if plain, decoded := decodeRecoveryErrorBody(resp, raw); decoded {
+						diagnosticBody = plain
+					}
+					diagnosticBody = redactCodexErrorBody(resp.Request, diagnosticBody)
+				}
+				attempt.SetUsage(codexAttemptUsage(h.tokenParser.ParseNonStreaming(diagnosticBody), true, extractServiceTier(body)))
+				if rejectedResponse != resp {
+					h.observeProfileResponse(sendRequest.Context(), candidate, resp.StatusCode, resp.Header, diagnosticBody)
+				}
+				failure := codexRequestFailure(sendRequest, resp.StatusCode, diagnosticBody, nil)
+				code, kind, _ := routing.ErrorIdentity(diagnosticBody)
 				for _, identifier := range []string{code, kind} {
 					switch identifier {
 					case "usage_limit_reached", "usage_limit_exceeded", "quota_exceeded", "insufficient_quota", "model_usage_limit_reached":
 						quotaFailure = true
 					}
 				}
-				finish(0, false, failure, routing.RetryAfter(resp.Header, time.Now()))
-				lastUpstreamError = subscription.Redact(sendRequest.Context(), chainBodyText(raw, failure.Reason))
+				failure = finish(0, false, failure, routing.RetryAfter(resp.Header, time.Now()))
+				lastUpstreamError = subscription.Redact(sendRequest.Context(), chainBodyText(diagnosticBody, failure.Reason))
 				annotateLastChainError(&chain, resp.StatusCode, lastUpstreamError, resp.Header, false)
 				publishProgress()
 				lastFailure, lastResponse, lastBody = failure.Reason, resp, raw
@@ -481,7 +516,11 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			if streaming {
 				if err := decodeCodexSubscriptionResponse(resp); err != nil {
 					resp.Body.Close()
-					finish(0, false, routing.Failure{Scope: routing.ScopeCandidate, Reason: "invalid_response_encoding"}, time.Time{})
+					failure := finish(0, false, routing.Failure{Scope: routing.ScopeCandidate, Reason: "invalid_response_encoding"}, time.Time{})
+					if failure.Terminal {
+						lastFailure = failure.Reason
+						break
+					}
 					continue
 				}
 				observed := &codexProfileStream{ReadCloser: resp.Body, handler: h, request: sendRequest, candidate: candidate, status: resp.StatusCode, headers: resp.Header.Clone()}
@@ -510,7 +549,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 						}
 					}
 					attempt.SetUsage(codexAttemptUsage(observed.usage, success, extractServiceTier(body)))
-					finish(tokens, success, failure, routing.RetryAfter(resp.Header, time.Now()))
+					failure = finish(tokens, success, failure, routing.RetryAfter(resp.Header, time.Now()))
 					if streamErr != nil {
 						lastUpstreamError = subscription.Redact(sendRequest.Context(), chainBodyText(observed.errorFrame, streamErr.Error()))
 						annotateLastChainError(&chain, resp.StatusCode, lastUpstreamError, resp.Header, false)
@@ -538,11 +577,18 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 						publishProgress()
 					}
 				}
+				if failure.Terminal {
+					break
+				}
 				continue
 			}
 			if err := decodeCodexSubscriptionResponse(resp); err != nil {
 				resp.Body.Close()
-				finish(0, false, routing.Failure{Scope: routing.ScopeCandidate, Reason: "invalid_response_encoding"}, time.Time{})
+				failure := finish(0, false, routing.Failure{Scope: routing.ScopeCandidate, Reason: "invalid_response_encoding"}, time.Time{})
+				if failure.Terminal {
+					lastFailure = failure.Reason
+					break
+				}
 				continue
 			}
 			raw, readErr := io.ReadAll(resp.Body)
@@ -555,7 +601,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			attempt.SetCachedTokens(cached)
 			if !success {
 				failure := codexRequestFailure(sendRequest, resp.StatusCode, raw, readErr)
-				finish(tokens, false, failure, routing.RetryAfter(resp.Header, time.Now()))
+				failure = finish(tokens, false, failure, routing.RetryAfter(resp.Header, time.Now()))
 				if resp.StatusCode >= 400 {
 					lastUpstreamError = subscription.Redact(sendRequest.Context(), chainBodyText(raw, failure.Reason))
 				} else {

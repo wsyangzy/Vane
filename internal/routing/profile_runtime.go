@@ -846,6 +846,57 @@ func (a *DispatchReservation) Commit(ctx context.Context) error {
 	return a.commitLocked(ctx)
 }
 
+// Retry starts another send on the same reservation before any output. The
+// provider owns the reason and retry limit; recovery does not reject the
+// selected candidate or advance rotation. Each send still has its own usage
+// settlement and consumes the shared request budget.
+func (a *DispatchReservation) Retry(ctx context.Context, reason string) error {
+	a.mu.Lock()
+	if a.finished || !a.committed {
+		a.mu.Unlock()
+		return errors.New("dispatch_attempt_not_inflight")
+	}
+	state := a.plan.state
+	state.mu.Lock()
+	if state.responseStarted || state.successful || state.stopped != "" {
+		state.mu.Unlock()
+		a.mu.Unlock()
+		return errors.New("response_already_started")
+	}
+	if check := state.runtime.snapshot().CheckAdmission; check != nil {
+		if reason := check(a.candidate); reason != "" {
+			state.mu.Unlock()
+			a.mu.Unlock()
+			return errors.New(reason)
+		}
+	}
+	if err := a.plan.Budget.Begin(ctx); err != nil {
+		state.mu.Unlock()
+		a.mu.Unlock()
+		return err
+	}
+	settlement := AttemptSettlement{Candidate: a.candidate, ID: a.settlementID, StartedAt: a.startedAt, Usage: a.usage}
+	reason = safeDispatchReason(reason, "upstream_failure")
+	state.appendEvent(DispatchTraceEvent{Candidate: a.candidate.Identity(), Action: "failed", Reason: reason, Scope: ScopeRequest})
+	state.ledger.event(ExecutionEvent{Candidate: a.candidate.Identity(), Action: "failed", Reason: reason, Scope: ScopeRequest})
+	state.runtime.scheduler.CommitSelection(a.plan.Profile, a.plan.EligibleCandidates, a.candidate, false, state.runtime.now())
+	state.ledger.Begin(a.candidate.Identity())
+	state.appendEvent(DispatchTraceEvent{Candidate: a.candidate.Identity(), Action: "attempt"})
+	a.startedAt = state.runtime.now()
+	a.settlementID = fmt.Sprintf("%s/%d/%d", a.plan.RequestID, a.startedAt.UnixNano(), len(state.events))
+	a.usage, a.cachedTokens = AttemptUsage{}, 0
+	publish := state.publish
+	state.mu.Unlock()
+	a.mu.Unlock()
+	if settle := state.runtime.snapshot().OnSettlement; settle != nil {
+		settle(settlement)
+	}
+	if publish != nil {
+		publish(a.plan.Trace())
+	}
+	return nil
+}
+
 func (a *DispatchReservation) commitLocked(ctx context.Context) error {
 	if a.finished || a.committed {
 		return errors.New("dispatch_attempt_already_committed")

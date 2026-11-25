@@ -227,7 +227,7 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 	if err := beginCodexProfileSend(r.Context()); err != nil {
 		return nil, err
 	}
-	resp, err := client.Do(req)
+	resp, err := f.doWithResponseRecovery(client, req, r)
 	if err != nil {
 		leaseFromContext(r.Context()).Finish(0, nil, nil, false)
 		if r.Context().Err() == nil {
@@ -266,15 +266,7 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 			if readErr != nil || len(raw) > 1<<20 {
 				return nil, fmt.Errorf("subscription_error_response_unavailable")
 			}
-			text := subscription.Redact(r.Context(), string(raw))
-			for _, name := range []string{"Authorization", "X-Api-Key"} {
-				value := req.Header.Get(name)
-				if value != "" {
-					text = strings.ReplaceAll(text, value, "[REDACTED]")
-					text = strings.ReplaceAll(text, strings.TrimPrefix(value, "Bearer "), "[REDACTED]")
-				}
-			}
-			resp.Body = io.NopCloser(strings.NewReader(text))
+			resp.Body = io.NopCloser(bytes.NewReader(redactCodexErrorBody(req, raw)))
 			resp.Header.Del("Content-Length")
 			resp.ContentLength = -1
 		}
