@@ -4,7 +4,8 @@ import { AlertCircle, Check, ChevronRight, Clock, Copy, Cpu, Database, FileText,
 import { isWailsEnvironment, getSystemStatus, getProxyURL, openClaudeConfigDir, openCodexConfigDir, openLogDir, openDataDir, requestQuit, copyToClipboard } from '@/services/wails/index.js';
 import { useToast } from '@/shared/ui/index.js';
 import releaseNotes from '@/app/release-notes.json';
-import { getReleaseAnnouncement, showReleaseToastSummary } from '@/app/updates/releaseAnnouncement.js';
+import { getReleaseAnnouncement, normalizeReleaseVersion } from '@/app/updates/releaseAnnouncement.js';
+import ReleaseNotesDialog from '@/app/updates/ReleaseNotesDialog.jsx';
 import './userMenu.css';
 import { usePresence } from '@/shared/hooks/usePresence.js';
 
@@ -38,25 +39,30 @@ export default function UserMenu() {
   const menuRef = useRef(null);
   const triggerRef = useRef(null);
   const copyTimerRef = useRef(null);
-  const releaseToastCleanupRef = useRef(null);
+  const [releaseAnnouncement, setReleaseAnnouncement] = useState(null);
   const toast = useToast();
   const isWails = isWailsEnvironment();
 
   const handleShowReleaseNotes = useCallback(() => {
-    const announcement = getReleaseAnnouncement(systemInfo?.version, releaseNotes);
-    if (!announcement) { toast.info('当前版本暂无更新说明', '版本更新'); return; }
     setIsOpen(false);
-    releaseToastCleanupRef.current?.();
-    releaseToastCleanupRef.current = showReleaseToastSummary({ announcement, showToast: toast.show, dismissToast: toast.dismiss });
-  }, [systemInfo?.version, toast]);
+    setReleaseAnnouncement(getReleaseAnnouncement(systemInfo?.version, releaseNotes) || {
+      version: normalizeReleaseVersion(systemInfo?.version), sections: [],
+    });
+  }, [systemInfo?.version]);
+
+  const handleToggleMenu = () => {
+    if (!isOpen) {
+      setCopied(false);
+      setInfoError('');
+      setLoading(isWails);
+    }
+    setIsOpen(!isOpen);
+  };
 
   useEffect(() => {
     if (!isOpen) return;
     let active = true;
-    setCopied(false);
-    setInfoError('');
     if (isWails) {
-      setLoading(true);
       Promise.allSettled([getSystemStatus(), getProxyURL()]).then(([status, address]) => {
         if (!active) return;
         const timestamp = Date.now();
@@ -84,7 +90,7 @@ export default function UserMenu() {
     };
   }, [isOpen, isWails]);
 
-  useEffect(() => () => { clearTimeout(copyTimerRef.current); releaseToastCleanupRef.current?.(); }, []);
+  useEffect(() => () => clearTimeout(copyTimerRef.current), []);
 
   const handleCopyAddress = async () => {
     if (!proxyAddress || copying) return;
@@ -110,7 +116,7 @@ export default function UserMenu() {
   const running = systemInfo?.proxy_running;
 
   return <div className="app-menu" ref={menuRef}>
-    <button type="button" ref={triggerRef} className="app-menu-trigger motion-control" data-active={isOpen} onClick={() => setIsOpen((previous) => !previous)} aria-label="应用菜单" aria-expanded={isOpen} aria-controls="application-menu"><SlidersHorizontal size={16} /></button>
+    <button type="button" ref={triggerRef} className="app-menu-trigger motion-control" data-active={isOpen} onClick={handleToggleMenu} aria-label="应用菜单" aria-expanded={isOpen} aria-controls="application-menu"><SlidersHorizontal size={16} /></button>
     {presence.present && <section id="application-menu" aria-label="应用菜单" inert={presence.closing} aria-hidden={presence.closing} data-origin="top-right" className={`app-menu-panel t-dropdown ${presence.className}`}>
       <header className="app-menu-heading"><h2>应用菜单</h2><span className="app-menu-status" data-running={Boolean(running)}><i aria-hidden="true" />{loading ? '读取中' : !systemInfo ? '状态未知' : running ? '代理运行中' : '代理已停止'}</span></header>
       <div className="app-menu-info">
@@ -129,5 +135,6 @@ export default function UserMenu() {
       {/* 退出按钮 */}
       <footer className="app-menu-footer"><button type="button" disabled={!isWails} onClick={handleQuit}><LogOut size={14} />退出应用</button></footer>
     </section>}
+    <ReleaseNotesDialog announcement={releaseAnnouncement} onClose={() => setReleaseAnnouncement(null)} returnFocusRef={triggerRef} />
   </div>;
 }

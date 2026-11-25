@@ -3,11 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import {
-  buildReleaseToastSummary,
   getReleaseAnnouncement,
-  normalizeReleaseVersion,
-  RELEASE_SUMMARY_TOAST_DURATION_MS,
-  showReleaseToastSummary
+  normalizeReleaseVersion
 } from './releaseAnnouncement.js';
 
 const sampleReleaseCatalog = {
@@ -53,40 +50,26 @@ test('release announcement accepts the legacy single-version shape', () => {
   assert.equal(getReleaseAnnouncement('8.6', legacyNotes), null);
 });
 
-test('manual release summary displays all categories in one toast', () => {
-  const announcement = {
+test('release sections preserve category names and item order for the dialog', () => {
+  const record = {
     version: '8.5',
     sections: [
       { title: '渠道与故障转移', items: ['完善初次配置', '优化并发切换'] },
       { title: '隐私防护', items: ['强化请求级脱敏'] }
     ]
   };
-  assert.deepEqual(buildReleaseToastSummary(announcement), {
-    title: 'v8.5 更新内容',
-    message: [
-      '渠道与故障转移：完善初次配置',
-      '渠道与故障转移：优化并发切换',
-      '隐私防护：强化请求级脱敏'
-    ]
-  });
+  assert.deepEqual(getReleaseAnnouncement('8.5', { releases: [record] }), record);
+});
 
-  const toastSource = readFileSync(new URL('../../shared/ui/Toast.jsx', import.meta.url), 'utf8');
-  assert.match(toastSource, /Array\.isArray\(message\)/);
-  assert.match(toastSource, /list-disc/);
-
-  const shown = [];
-  const dismissed = [];
-  const stop = showReleaseToastSummary({
-    announcement,
-    showToast: (message, options) => shown.push({ message, options }),
-    dismissToast: (toastId) => dismissed.push(toastId)
-  });
-
-  assert.equal(shown.length, 1);
-  assert.equal(shown[0].options.duration, RELEASE_SUMMARY_TOAST_DURATION_MS);
-  assert.equal(RELEASE_SUMMARY_TOAST_DURATION_MS, 12000);
-  stop();
-  assert.deepEqual(dismissed, [1]);
+test('release sections trim blank entries and retain usable categories', () => {
+  assert.deepEqual(getReleaseAnnouncement('1.2.3', { releases: [{ version: 'v1.2.3', sections: [
+    { title: '  修正  ', items: ['  保留第一项  ', '', null, '第二项'] },
+    { title: '空分类', items: [] },
+    { title: ' ', items: ['未分类更新'] },
+  ] }] }), { version: '1.2.3', sections: [
+    { title: '修正', items: ['保留第一项', '第二项'] },
+    { title: '其他更新', items: ['未分类更新'] },
+  ] });
 });
 
 test('app startup never pops release notes; they only show on version click', () => {
@@ -104,7 +87,6 @@ test('bundled release catalog starts with the current version and keeps entries 
   const versionMatch = globalsSource.match(/\bVersion\s*=\s*"([^"]+)"/);
   const versions = catalog.releases.map((release) => normalizeReleaseVersion(release.version));
   const currentAnnouncement = getReleaseAnnouncement(catalog.currentVersion, catalog);
-  const summary = buildReleaseToastSummary(currentAnnouncement);
 
   assert.ok(versionMatch, 'buildinfo.go must define Version');
   assert.equal(normalizeReleaseVersion(catalog.currentVersion), normalizeReleaseVersion(versionMatch[1]));
@@ -114,6 +96,7 @@ test('bundled release catalog starts with the current version and keeps entries 
     (count, section) => count + section.items.length, 0
   );
   assert.ok(expectedItemCount > 0);
-  assert.equal(summary.message.length, expectedItemCount);
-  assert.ok(summary.message.every((item) => item.length <= 48));
+  const items = currentAnnouncement.sections.flatMap(section => section.items);
+  assert.equal(items.length, expectedItemCount);
+  assert.ok(items.every(item => item.length <= 68));
 });
