@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
@@ -43,6 +44,9 @@ func TestCodexClientCompactionOptionsBelongToClientEntry(t *testing.T) {
 }
 
 func TestCodexClientCompactionPreviewApplyAndStalePreview(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("requires Windows DPAPI")
+	}
 	a, _, path := connectionTestApp(t, "codex")
 	preview, err := a.ManageSubscriptionConnection(SubscriptionConnectionCommand{Provider: "codex", Action: "preview", CompactionMode: "summary"})
 	require.NoError(t, err)
@@ -88,6 +92,9 @@ func TestCodexClientCompactionPreviewApplyAndStalePreview(t *testing.T) {
 }
 
 func TestCodexClientCompactionIgnoresLegacyChannelConflicts(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("requires Windows DPAPI")
+	}
 	a, profile, path := connectionTestApp(t, "codex")
 	channels, err := a.codexChannelService.ListChannels(context.Background())
 	require.NoError(t, err)

@@ -45,6 +45,9 @@ func connectionTestApp(t *testing.T, provider string) (*App, routing.RoutingProf
 }
 
 func TestVaneRoutingChangesApplyToContinuingClientWithoutConfigRewrite(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("requires Windows DPAPI")
+	}
 	for _, provider := range []string{"claude", "codex"} {
 		for _, affinity := range []routing.AffinityMode{routing.AffinityTurn, routing.AffinitySession, routing.AffinityAdaptive, routing.AffinityNone} {
 			t.Run(provider+"/"+string(affinity), func(t *testing.T) {
@@ -307,6 +310,9 @@ func TestUnifiedClientConnectionRejectsStaleDefaultAndKeepsRestoreAvailable(t *t
 }
 
 func TestCodexGlobalConfigMigratesSubscriptionRouteToUnifiedModeTwoAndIPv6(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("requires Windows DPAPI")
+	}
 	backupHome := t.TempDir()
 	t.Setenv("APPDATA", backupHome)
 	t.Setenv("CODEX_HOME", t.TempDir())
