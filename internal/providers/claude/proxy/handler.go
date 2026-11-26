@@ -386,6 +386,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			r.Body.Close()
 		}
 
+		if pool := h.endpointManager.PoolRuntime(); pool != nil && h.config != nil && h.config.TokenCounting.Enabled {
+			var rejection *routing.LocalRejection
+			r, rejection = pool.ProfileRuntime().AdmitLocalRequest(r, bodyBytes)
+			if rejection != nil {
+				rejection.Write(w)
+				return
+			}
+			ctx = r.Context()
+		}
 		lifecycleManager.StartRequest(r.RemoteAddr, r.Header.Get("User-Agent"), r.Method, r.URL.Path, false)
 		// count_tokens 与主流程共用同一套请求元数据（模型/推理配置/档位），
 		// 否则请求追踪里这些列会全空。
@@ -423,6 +432,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 检测是否为SSE流式请求
+	if pool := h.endpointManager.PoolRuntime(); pool != nil {
+		var rejection *routing.LocalRejection
+		r, rejection = pool.ProfileRuntime().AdmitLocalRequest(r, bodyBytes)
+		if rejection != nil {
+			rejection.Write(w)
+			return
+		}
+		ctx = r.Context()
+	}
 	isSSE := h.detectSSERequest(r, bodyBytes)
 
 	// 开始请求跟踪（传递流式标记）

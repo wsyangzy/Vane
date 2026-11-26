@@ -10,6 +10,18 @@ import {
   shouldNotifyFailure
 } from './failureSummary.js';
 
+test('configuration load failures keep the actual cause and explain legacy missing-profile records', () => {
+  const legacy = getRequestFailureDetails({ failure_reason: 'routing_profile_missing', last_failure_reason: 'routing_profile_missing', http_status_is_upstream: false, route_snapshot: { attempts: 0, candidates: [] } });
+  assert.equal(legacy.localTitle, '请求未发送');
+  assert.match(legacy.localSummary, /调度配置未能加载/);
+  assert.equal(legacy.localDetail, '');
+  const failure = getRequestFailureDetails({ failure_reason: 'routing_config_unavailable', last_failure_reason: '调度配置加载失败：no such column: intent_id', http_status_is_upstream: false, route_snapshot: { attempts: 0, candidates: [] } });
+  assert.match(failure.localSummary, /调度配置加载失败/);
+  assert.match(failure.localDetail, /no such column: intent_id/);
+  assert.equal(failure.hasUpstream, false);
+  assert.equal(shouldNotifyFailure('routing_config_unavailable'), true);
+});
+
 test('failure cards separate real upstream replies from local pre-send rejection', () => {
   const upstream = getRequestFailureDetails({ failure_reason: 'auxiliary_endpoint_unsupported', http_status_is_upstream: true, http_status_code: 404,
     last_failure_reason: '{"error":{"message":"Invalid URL"}}', endpoint_chain: [{ endpoint: 'one', attempts: 1, status_code: 404, error: 'Invalid URL' }] });

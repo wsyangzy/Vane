@@ -654,3 +654,110 @@ func TestCodexUnifiedRuntimeWithoutDefaultNeverSendsToActiveChannel(t *testing.T
 		t.Fatalf("missing default fell back to active channel: sends=%d", sends)
 	}
 }
+
+func TestCodexLocalFailureCooldownRecordsOnlyFirstIdenticalRequest(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprint(streaming), func(t *testing.T) {
+			tracker, err := tracking.NewUsageTracker(&tracking.Config{Enabled: true, DatabasePath: filepath.Join(t.TempDir(), "usage.db"), BufferSize: 50, BatchSize: 5, FlushInterval: time.Hour, CleanupInterval: time.Hour, MaxRetry: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { tracker.Close() })
+			sends := 0
+			h, runtime, _ := newProfileCodexFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				sends++
+				if streaming {
+					w.Header().Set("Content-Type", "text/event-stream")
+					io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":2}}}\n\n")
+				} else {
+					io.WriteString(w, `{"status":"completed","output":[],"usage":{"input_tokens":10,"output_tokens":2}}`)
+				}
+			})
+			h.usageTracker = tracker
+			runtime.Replace(routing.RuntimeConfig{Provider: "codex", LoadError: errors.New("SQL logic error: no such column: intent_id (1)")})
+			body := fmt.Sprintf(`{"model":"test","stream":%t,"input":"first"}`, streaming)
+			call := func(body string) *httptest.ResponseRecorder {
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(body)))
+				return rec
+			}
+			for i := 0; i < 28; i++ {
+				rec := call(body)
+				if rec.Code != 400 || rec.Header().Get("Retry-After") == "" || !strings.Contains(rec.Body.String(), "no such column: intent_id") {
+					t.Fatalf("missing local rejection: %d %s", rec.Code, rec.Body.String())
+				}
+				if i > 0 && !strings.Contains(rec.Body.String(), "首次记录") {
+					t.Fatal("duplicate entered normal processing")
+				}
+			}
+			rows, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{Limit: 100})
+			if err != nil || len(rows) != 1 || sends != 0 {
+				t.Fatalf("retries recorded or sent: rows=%d sends=%d err=%v", len(rows), sends, err)
+			}
+			if rows[0].FailureReason != "routing_config_unavailable" || !strings.Contains(rows[0].LastFailureReason, "no such column: intent_id") || rows[0].HTTPStatusIsUpstream {
+				t.Fatalf("failure evidence lost: %+v", rows[0])
+			}
+			call(strings.Replace(body, "first", "different", 1))
+			rows, _, err = tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{Limit: 100})
+			if err != nil || len(rows) != 2 {
+				t.Fatalf("different request suppressed: rows=%d err=%v", len(rows), err)
+			}
+			profile := routing.DefaultProfile("codex")
+			profile.ID, profile.IsDefault = 7, true
+			profile.Members = []routing.RoutingMember{{ChannelID: 1, GroupID: 11, Enabled: true}}
+			runtime.Replace(routing.RuntimeConfig{Provider: "codex", Profiles: []routing.RoutingProfile{profile}, Candidates: []routing.DispatchCandidate{{Provider: "codex", ChannelID: 1, GroupID: 11, EndpointID: "1", Protocol: "responses", Enabled: true}}})
+			if rec := call(body); rec.Code != 200 || sends != 1 {
+				t.Fatalf("repaired request blocked: %d %s sends=%d", rec.Code, rec.Body.String(), sends)
+			}
+			if err := tracker.ForceFlush(); err != nil {
+				t.Fatal(err)
+			}
+			rows, err = tracker.QueryRequestDetails(context.Background(), &tracking.QueryOptions{Limit: 100})
+			if err != nil || len(rows) != 3 {
+				t.Fatalf("archive differs from visible records: rows=%d err=%v", len(rows), err)
+			}
+		})
+	}
+}
+
+func TestCodexUnsentHealthCooldownStopsIdenticalRetriesUntilRecovery(t *testing.T) {
+	tracker, err := tracking.NewUsageTracker(&tracking.Config{Enabled: true, DatabasePath: filepath.Join(t.TempDir(), "usage.db"), BufferSize: 50, BatchSize: 5, FlushInterval: time.Hour, CleanupInterval: time.Hour, MaxRetry: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tracker.Close() })
+	sends := 0
+	h, runtime, _ := newProfileCodexFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		sends++
+		io.WriteString(w, `{"status":"completed","output":[]}`)
+	})
+	h.usageTracker = tracker
+	h.UpdateConfig(config.RetryConfig{DisableRecoveryWait: true}, config.FailoverConfig{})
+	profile, _ := runtime.Profile(1)
+	profile.Members = profile.Members[:1]
+	blocked := true
+	until := time.Now().Add(time.Minute)
+	runtime.Replace(routing.RuntimeConfig{Provider: "codex", Profiles: []routing.RoutingProfile{profile}, Candidates: []routing.DispatchCandidate{{Provider: "codex", ChannelID: 1, GroupID: 11, EndpointID: "1", Protocol: "responses", Enabled: true}}, PrepareCandidate: func(c routing.DispatchCandidate, model, override string) routing.DispatchCandidate {
+		c = routing.CopyCandidateForModel(c, model, override)
+		c.Health = routing.HealthState{CoolingDown: blocked, Until: until}
+		return c
+	}})
+	call := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"test","input":"hello"}`)))
+		return rec
+	}
+	for i := 0; i < 3; i++ {
+		if rec := call(); rec.Code != 400 || !strings.Contains(rec.Body.String(), "route_unavailable") {
+			t.Fatalf("cooldown response: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	rows, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{Limit: 10})
+	if err != nil || len(rows) != 1 || sends != 0 {
+		t.Fatalf("cooldown retries escaped: rows=%d sends=%d err=%v", len(rows), sends, err)
+	}
+	blocked = false
+	if rec := call(); rec.Code != 200 || sends != 1 {
+		t.Fatalf("recovery stayed blocked: %d %s", rec.Code, rec.Body.String())
+	}
+}

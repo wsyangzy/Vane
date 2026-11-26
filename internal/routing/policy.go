@@ -65,12 +65,20 @@ func applyRuleDefaults(p RoutingProfile, decision DispatchDecision, defaults *Ru
 
 func (r *PoolRuntime) SetCooldownPolicy(policy CooldownPolicy) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.config.CooldownPolicy = policy.normalized()
+	r.mu.Unlock()
+	if profile := r.ProfileRuntime(); profile != nil {
+		profile.mu.Lock()
+		profile.config.CooldownPolicy = policy.normalized()
+		profile.mu.Unlock()
+	}
 }
 
 func (r *ProfileRuntime) SetRuleDefaults(defaults RuleDefaults) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.config.RuleDefaults = &defaults
+	config := r.config
+	config.RuleDefaults = &defaults
+	r.updateLocalFailureConfigLocked(&config)
+	r.config = config
 }

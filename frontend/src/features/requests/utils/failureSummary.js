@@ -11,6 +11,9 @@ import { blockageLabel, describeBlockageRecovery, isHealthCooldown, mapBlockage 
 // last_failure_reason may contain provider text or a local failure; provenance
 // and endpoint-chain evidence decide which card owns it.
 export const FAILURE_REASON_DETAILS = Object.freeze({
+  routing_config_unavailable: '调度配置加载失败，请根据下方具体错误修复后重试',
+  routing_profile_missing: '未找到可用的默认调度方案，或调度配置未能加载；请检查调度方案和应用日志',
+  route_unavailable: '当前规则与默认编排没有可发送的目标，请检查候选状态和恢复时间',
   no_healthy_endpoints: '当前渠道没有可用端点，请求未转发到提供商',
   no_supported_model_endpoint: '当前渠道没有支持该模型的端点，请求未转发到提供商',
   daily_cost_limit_exceeded: '凭证分组已达每日成本限额，请求未转发到提供商',
@@ -224,6 +227,9 @@ const MANUAL_INTERVENTION_REASONS = new Set(['max_loops_exceeded', 'max_restarts
 // 只对「整条链路都失败」或「Relay 本地拒绝」的终态弹提示；
 // 单端点失败会被故障转移接住，弹出来只会淹没真正需要处理的提示。
 const NOTIFY_REASONS = new Set([
+  'routing_config_unavailable',
+  'routing_profile_missing',
+  'route_unavailable',
   'all_channels_unavailable',
   'endpoint_exhausted',
   'route_exhausted',

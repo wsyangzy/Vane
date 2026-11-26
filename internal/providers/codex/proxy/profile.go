@@ -318,8 +318,13 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 		if h.trySearchFallback(w, r, body, requestID, start, chain) {
 			return
 		}
-		h.recordFailure(requestID, start, plan.Error, plan.Error, nil, plan.Model)
-		h.writeError(w, http.StatusServiceUnavailable, plan.Error)
+		rejection := plan.RejectLocal(plan.Error)
+		h.recordFailure(requestID, start, plan.Error, plan.FailureDetail(), nil, plan.Model)
+		if rejection != nil {
+			rejection.Write(w)
+		} else {
+			h.writeError(w, http.StatusBadRequest, plan.Error)
+		}
 		return
 	}
 	var lastResponse *http.Response
@@ -716,6 +721,11 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 	detail := lastUpstreamError
 	if detail == "" {
 		detail = lastFailure
+	}
+	if rejection := plan.RejectLocal(lastFailure); rejection != nil {
+		h.recordFailure(requestID, start, lastFailure, detail, nil, plan.Model)
+		rejection.Write(w)
+		return
 	}
 	h.recordFailure(requestID, start, lastFailure, detail, nil, plan.Model)
 	h.writeError(w, status, lastFailure)

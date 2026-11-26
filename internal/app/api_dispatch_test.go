@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -208,6 +209,12 @@ func TestClosedRoutingRuntimeCannotFallBackToHistoricalPools(t *testing.T) {
 			plan := runtime.ProfileRuntime().Plan(context.Background(), 0, "test", true, routing.TurnInput{}, false)
 			require.Equal(t, "routing_profile_missing", plan.Error)
 			require.Empty(t, runtime.Config().Pools)
+			a.closePoolRuntime(provider, errors.New("SQL logic error: no such column: intent_id (1)"))
+			failed := a.poolRuntimes[provider].ProfileRuntime().Plan(context.Background(), 0, "test", true, routing.TurnInput{}, false)
+			require.Equal(t, "routing_config_unavailable", failed.Error)
+			require.Contains(t, failed.FailureDetail(), "no such column: intent_id")
+			require.Equal(t, provider, failed.Trace().Provider)
+			require.Empty(t, failed.EligibleCandidates)
 		})
 	}
 }

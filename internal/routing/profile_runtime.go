@@ -13,6 +13,9 @@ import (
 )
 
 type RuntimeConfig struct {
+	LoadError        error
+	CooldownPolicy   CooldownPolicy
+	generation       uint64
 	Provider         string
 	RuleDefaults     *RuleDefaults
 	Profiles         []RoutingProfile
@@ -99,11 +102,14 @@ type DispatchPlan struct {
 	Turn               TurnInput             `json:"-"`
 	Budget             *Budget               `json:"-"`
 	requestedModel     string                // The incoming model can differ from Model after turn reuse.
+	failureDetail      string
 	defaultSource      *DispatchRouteSource
 	state              *dispatchRequestState
 }
 
 type dispatchRequestState struct {
+	localRequest    *localRequest
+	generation      uint64
 	native          *nativeDispatchPolicy
 	mu              sync.Mutex
 	runtime         *ProfileRuntime
@@ -137,6 +143,8 @@ type profileAffinity struct {
 }
 
 type ProfileRuntime struct {
+	localFailures   map[[32]byte]localFailure
+	resourceHash    [32]byte
 	mu              sync.Mutex
 	config          RuntimeConfig
 	healthEndpoints map[string]struct{}
@@ -185,6 +193,7 @@ func (r *ProfileRuntime) Replace(config RuntimeConfig) {
 		}
 	}
 	r.mu.Lock()
+	r.updateLocalFailureConfigLocked(&config)
 	r.config = config
 	r.healthEndpoints = healthEndpoints
 	r.mu.Unlock()
@@ -439,7 +448,17 @@ func (r *ProfileRuntime) plan(ctx context.Context, profileID int64, model string
 	p, exists := runtimeProfile(config, profileID)
 	plan := DispatchPlan{RequestID: fmt.Sprintf("dispatch-%d-%d", now.UnixNano(), dispatchRequestSequence.Add(1)), Profile: p, Model: model, requestedModel: model, Turn: turn, Preview: preview, Stages: []DispatchPlanStage{}, Evaluations: []CandidateEvaluation{}, EligibleCandidates: []DispatchCandidate{}}
 	plan.state = &dispatchRequestState{runtime: r, created: now, publish: config.OnTrace, native: native}
+	plan.state.generation = config.generation
+	if ticket, ok := ctx.Value(localRequestKey{}).(localRequest); ok {
+		plan.state.localRequest = &ticket
+	}
+	if config.LoadError != nil {
+		plan.Profile.Provider = config.Provider
+		plan.Error, plan.failureDetail = "routing_config_unavailable", configurationFailureDetail(config.LoadError)
+		return plan
+	}
 	if !exists {
+		plan.Profile.Provider = config.Provider
 		plan.Error = "routing_profile_missing"
 		return plan
 	}

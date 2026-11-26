@@ -88,7 +88,8 @@ func (a *App) refreshRoutingRuntime(ctx context.Context, provider string, pool *
 	}
 	candidates := a.dispatchCandidates(provider, pool, catalog, accounts, quota)
 	cfg := routing.RuntimeConfig{Provider: provider, Profiles: profiles, Candidates: candidates, Catalog: catalog}
-	_, ruleDefaults := a.settingsService.RoutingPolicy(ctx)
+	cooldown, ruleDefaults := a.settingsService.RoutingPolicy(ctx)
+	cfg.CooldownPolicy = cooldown
 	cfg.RuleDefaults = &ruleDefaults
 	cfg.OnSettlement = func(settlement routing.AttemptSettlement) { a.settleManualBalance(s, settlement) }
 	cfg.DescribeBlockage = func(c routing.DispatchCandidate, reason string) *routing.Blockage {
