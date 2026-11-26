@@ -1,9 +1,52 @@
+import { useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUpRight, GitBranch, Layers, Search, Server } from 'lucide-react';
 import Tooltip from '@/shared/ui/Tooltip.jsx';
 import { ruleKindLabel, ruleTargetLabels } from './dispatchState.js';
 import { searchVendors } from '../../codex/searchPolicy.js';
 
 const fallback = value => value == null ? '跟随全局回退' : value ? '失败后回到默认编排' : '仅尝试指定目标';
+
+function RouteTargetsSummary({ values, labels }) {
+  const containerRef = useRef(null);
+  const measureRef = useRef(null);
+  const moreRef = useRef(null);
+  const [shown, setShown] = useState(labels.length);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const widths = [...measureRef.current.children].map(item => item.getBoundingClientRect().width);
+      const gap = parseFloat(getComputedStyle(containerRef.current).columnGap) || 0;
+      const available = containerRef.current.clientWidth;
+      const total = widths.reduce((sum, width) => sum + width, 0) + Math.max(0, widths.length - 1) * gap;
+      let count = widths.length;
+      if (total > available) {
+        const limit = available - moreRef.current.getBoundingClientRect().width - gap;
+        count = 0;
+        for (let used = 0; count < widths.length; count++) {
+          const next = widths[count] + (count ? gap : 0);
+          if (used + next > limit) break;
+          used += next;
+        }
+      }
+      setShown(previous => previous === count ? previous : count);
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(containerRef.current);
+    observer.observe(measureRef.current);
+    return () => observer.disconnect();
+  }, [labels]);
+  const hidden = Math.max(0, labels.length - shown);
+  const chip = (label, index) => {
+    const Icon = values[index]?.profileId || values[index]?.targetKind === 'profile' ? Layers : Server;
+    return <span key={index} className="dp-route-target"><Icon size={11} aria-hidden="true" /><span>{label}</span></span>;
+  };
+  return <Tooltip asChild disabled={!hidden} content={<ul className="space-y-1 text-left" aria-label="全部路由目标">{labels.map((label, index) => <li key={index} className="break-all">{index + 1}. {label}</li>)}</ul>}>
+    <div ref={containerRef} className="dp-summary-targets" tabIndex={hidden ? 0 : undefined} aria-label="路由目标">
+      <span ref={measureRef} className="dp-target-measure dp-target-list" aria-hidden="true" inert>{labels.map(chip)}</span>
+      <span ref={moreRef} className="dp-target-measure dp-route-more" aria-hidden="true">… +{labels.length}</span>
+      {labels.length ? <>{labels.slice(0, shown).map(chip)}{hidden > 0 && <span className="dp-route-more" aria-label={`${hidden} 个目标已省略`}>… +{hidden}</span>}</> : <span className="dp-target-empty">未配置目标</span>}
+    </div>
+  </Tooltip>;
+}
 
 export default function ProfileRoutingSummary({ profile, profiles, channels, accounts, policy }) {
   const resources = { profiles, channels, accounts };
@@ -12,10 +55,7 @@ export default function ProfileRoutingSummary({ profile, profiles, channels, acc
   const search = profile.search;
   const vendor = searchVendors.find(item => item.value === search?.vendor);
   const metadata = item => <Tooltip asChild content={`${path(item)}；优先级 ${item.priority}`}><span className="dp-summary-meta" tabIndex={0}>{mode(item)}<span>P{item.priority}</span></span></Tooltip>;
-  const targets = values => <ul className="dp-summary-targets" aria-label="路由目标">{values.length ? ruleTargetLabels(values, resources).map((label, index) => {
-    const Icon = values[index].profileId || values[index].targetKind === 'profile' ? Layers : Server;
-    return <li className="dp-route-target" key={index}><Icon size={11} aria-hidden="true" /><span>{label}</span></li>;
-  }) : <li className="dp-target-empty">未配置目标</li>}</ul>;
+  const targets = values => <RouteTargetsSummary values={values} labels={ruleTargetLabels(values, resources)} />;
   return <div className="dp-routing-summary" data-provider={profile.provider}>
     <section className="dp-summary-section" aria-label="匹配规则">
       <div className="dp-section-heading"><h4><GitBranch size={13} />匹配规则</h4><span>{profile.rules.length ? `${profile.rules.filter(rule => rule.enabled).length} / ${profile.rules.length} 条启用` : '未配置 · 使用默认编排'}</span></div>
@@ -23,7 +63,7 @@ export default function ProfileRoutingSummary({ profile, profiles, channels, acc
         const condition = [rule.matchModel, rule.kind === 'non_stream' || rule.requireStream === false ? '仅非流式' : rule.requireStream ? '仅流式' : ''].filter(Boolean).join(' · ');
         return <li key={rule.id || index} className="dp-summary-row">
           <span className="dp-channel-rank">{String(index + 1).padStart(2, '0')}</span>
-          <div className="dp-summary-route"><div className="dp-summary-condition"><Tooltip asChild content={ruleKindLabel(rule.kind)}><span className="dp-summary-kind">{rule.name || ruleKindLabel(rule.kind)}</span></Tooltip><strong>{condition || '无附加条件'}</strong>{!rule.enabled && <span className="dp-badge">已停用</span>}</div><span aria-hidden="true" className="text-slate-300">→</span>{targets(rule.targets)}</div>
+          <div className="dp-summary-route"><Tooltip asChild content={`${rule.name || ruleKindLabel(rule.kind)}（${ruleKindLabel(rule.kind)}）：${condition || '无附加条件'}${!rule.enabled ? '；已停用' : ''}`}><div className="dp-summary-condition" tabIndex={0}><span className="dp-summary-kind">{rule.name || ruleKindLabel(rule.kind)}</span><strong>{condition || '无附加条件'}</strong>{!rule.enabled && <span className="dp-badge">已停用</span>}</div></Tooltip><span aria-hidden="true" className="text-slate-300">→</span>{targets(rule.targets)}</div>
           {metadata(rule)}
         </li>;
       })}</ol> : null}
