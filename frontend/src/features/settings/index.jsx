@@ -24,12 +24,14 @@ import {
 } from 'lucide-react';
 import { Button, ErrorMessage, ConfirmDialog } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
-import { SettingItem, SettingsSection, PortInfo, DispatchSettingsHelp } from './components/index.js';
+import { SettingItem, SettingsSection, PortInfo } from './components/index.js';
 import { buildSettingsUpdates } from './settingsUpdates.js';
 import HistoryStorageSettings from './components/HistoryStorageSettings.jsx';
 import ClientConfigBackupSettings from './components/ClientConfigBackupSettings.jsx';
+import CodexRecoverySettings from './components/CodexRecoverySettings.jsx';
+import SettingsDetails from './components/SettingsDetails.jsx';
+import { settingsCardLayouts, settingsInOrder } from './settingsLayout.js';
 import { isSystemSetting, sharedRuntimeSettingSections, systemSettingCategories } from '@/shared/lib/settingsSections.js';
-import { dispatchSettingGroups } from '@/shared/lib/dispatchPolicy.js';
 import {
   isWailsEnvironment,
   getSettingCategories,
@@ -61,9 +63,9 @@ const CATEGORY_ICONS = {
   backup: Archive
 };
 
-const CATEGORY_ORDER = ['auth', 'request', 'health', 'retry', 'retention', 'backup', 'logging', 'cache'];
+const CATEGORY_ORDER = ['auth', 'request', 'retry', 'health', 'storage', 'logging', 'cache'];
 // Keep the columns independent and stable as descriptions wrap or values change.
-const PRIMARY_COLUMN_CATEGORIES = new Set(['auth', 'request', 'retention', 'backup', 'logging']);
+const PRIMARY_COLUMN_CATEGORIES = new Set(['auth', 'request', 'retry', 'health']);
 
 const getCategoryOrder = (categoryName) => {
   const index = CATEGORY_ORDER.indexOf(categoryName);
@@ -743,8 +745,13 @@ const SettingsPage = () => {
     );
   }
 
-  const orderedSettingCategories = categories
-    .filter(category => category.name !== 'server' && systemSettingCategories.includes(category.name))
+  const storageCategories = categories.filter(category => ['retention', 'backup'].includes(category.name) && settingsByCategory[category.name]?.length)
+    .sort((a, b) => ['retention', 'backup'].indexOf(a.name) - ['retention', 'backup'].indexOf(b.name));
+  const orderedSettingCategories = [
+    ...categories.filter(category => !['server', 'retention', 'backup'].includes(category.name) && systemSettingCategories.includes(category.name)),
+    ...(storageCategories.length ? [{ name: 'storage' }] : []),
+  ]
+    .filter(category => ['storage', 'cache'].includes(category.name) || settingsByCategory[category.name]?.length)
     .sort((a, b) => (
       getCategoryOrder(a.name) - getCategoryOrder(b.name) ||
       (a.order ?? 0) - (b.order ?? 0)
@@ -753,8 +760,27 @@ const SettingsPage = () => {
     orderedSettingCategories.filter(category => PRIMARY_COLUMN_CATEGORIES.has(category.name)),
     orderedSettingCategories.filter(category => !PRIMARY_COLUMN_CATEGORIES.has(category.name))
   ];
-  const renderSettingCategory = (category, className = '') => {
+  const renderSettingCategory = (category, embedded = false) => {
     if (!category) return null;
+    if (category.name === 'storage') {
+      const retention = settingsByCategory.retention?.find(setting => setting.key === 'retention_days');
+      const directorySummary = (name, key) => {
+        const setting = settingsByCategory[name]?.find(item => item.key === key);
+        return setting && getCurrentValue(setting) ? '自定义目录' : '默认目录';
+      };
+      const detailSettings = storageCategories.flatMap(group => settingsByCategory[group.name])
+        .filter(setting => setting.category !== 'retention' || setting.key !== 'retention_days');
+      return <SettingsSection compact fillHeight title="数据与备份" icon={Archive} description="请求历史与客户端配置的保存管理">
+        {retention && <SettingItem setting={retention} value={getCurrentValue(retention)} onChange={handleSettingChange} disabled={saving} hasChange={'global.retention.retention_days' in changes} onRevert={handleRevertSetting} />}
+        <SettingsDetails
+          title="归档与备份配置"
+          summary={`历史归档：${directorySummary('retention', 'archive_directory')} · 配置备份：${directorySummary('backup', 'directory')}`}
+          pages={storageCategories.map(group => ({ key: group.name, label: group.name === 'retention' ? '历史归档' : '配置备份', content: renderSettingCategory(group, true) }))}
+          changedCount={detailSettings.filter(setting => `global.${setting.category}.${setting.key}` in changes).length}
+          disabled={saving}
+        />
+      </SettingsSection>;
+    }
     const categorySettings = settingsByCategory[category.name] || [];
     if (categorySettings.length === 0 && category.name !== 'cache') return null;
     const sharedSection = sharedRuntimeSettingSections.find(section => section.category === category.name);
@@ -778,25 +804,53 @@ const SettingsPage = () => {
         />
       );
     };
-    const settingItems = categorySettings.map(setting => renderSettingItem(setting));
+    const layout = settingsCardLayouts[category.name];
+    const detailKeys = layout?.pages.flatMap(page => page.keys) || [];
+    const primarySettings = layout ? [
+      ...settingsInOrder(categorySettings, layout.primary),
+      ...categorySettings.filter(setting => !layout.primary.includes(setting.key) && !detailKeys.includes(setting.key)),
+    ] : categorySettings;
+    const valueFor = key => {
+      const setting = categorySettings.find(item => item.key === key);
+      return setting ? String(getCurrentValue(setting)) : '';
+    };
+    const summaries = {
+      request: `响应头等待 · Codex 持久化${valueFor('codex_history_persistence') === 'true' ? '开启' : '关闭'} · 降级${valueFor('codex_encrypted_history_recovery') === 'true' ? '开启' : '关闭'}`,
+      retry: `${valueFor('wait_for_recovery') === 'true' ? '冷却后重试' : '冷却时停止'} · ${valueFor('rule_fallback_to_default') === 'true' ? '允许默认回退' : '不默认回退'}`,
+      logging: `${valueFor('format') === 'json' ? 'JSON 格式' : '文本格式'} · ${valueFor('file_enabled') === 'true' ? `保留 ${valueFor('max_files')} 份归档` : '文件日志未启用'}`,
+    };
+    const pages = layout?.pages.filter(page => categorySettings.some(setting => page.keys.includes(setting.key))).map(page => ({
+      ...page,
+      content: category.name === 'request' && page.key !== 'response'
+        ? <CodexRecoverySettings section={page.key} settings={categorySettings} changes={changes} getValue={getCurrentValue} onChange={handleSettingChange} onRevert={handleRevertSetting} disabled={saving} />
+        : settingsInOrder(categorySettings, page.keys).map(renderSettingItem),
+    }));
+    const settingItems = primarySettings.filter(setting => !embedded || setting.category !== 'retention' || setting.key !== 'retention_days').map(renderSettingItem);
+    if (embedded) return <section key={category.name} aria-label={category.label} className="min-w-0 border-b border-slate-100 py-2 last:border-0">
+      <div className="flex items-center justify-between gap-2 pb-1">
+        <h4 className="text-xs font-semibold text-slate-700">{category.label}</h4>
+        <Button size="sm" variant="ghost" icon={RotateCcw} aria-label={`重置${category.label}`} disabled={saving} onClick={() => handleResetCategory(category.name, category.label)}>重置</Button>
+      </div>
+      {settingItems}
+    </section>;
     return (
       <SettingsSection
         key={category.name}
         compact
+        fillHeight={category.name !== 'server'}
         title={sharedSection?.title || category.label}
         icon={CATEGORY_ICONS[category.name] || Settings}
-        description={sharedSection ? `Claude / Codex 共用 · ${sharedSection.description}` : category.name === 'server' ? undefined : category.description}
+        description={category.name === 'request' ? 'Claude / Codex 超时 · Codex 会话恢复' : sharedSection ? `Claude / Codex 共用 · ${sharedSection.description}` : category.name === 'server' ? undefined : category.description}
         onReset={() => handleResetCategory(category.name, category.label)}
         resetDisabled={saving}
-        className={className}
       >
         {category.name === 'server' ? (
           <div className="grid items-center gap-3 py-2 sm:grid-cols-2">
             <PortInfo portInfo={portInfo} loading={loading} />
             <div className="min-w-0 border-slate-100 sm:border-l sm:pl-3">{settingItems}</div>
           </div>
-        ) : category.name === 'retry' ? dispatchSettingGroups.map(group => <div key={group.title} className="min-w-0 py-2 first:pt-1"><h4 className="mb-1 border-b border-slate-100 pb-2 text-[11px] font-semibold text-slate-700">{group.title}</h4>{categorySettings.filter(setting => group.keys.includes(setting.key)).map(renderSettingItem)}</div>) : settingItems}
-        {category.name === 'retry' && <DispatchSettingsHelp />}
+        ) : settingItems}
+        {pages?.length > 0 && <SettingsDetails title={layout.title} summary={summaries[category.name]} pages={pages} changedCount={detailKeys.filter(key => `global.${category.name}.${key}` in changes).length} disabled={saving} />}
         {category.name === 'cache' && isWails && (
           <CacheStatusPanel
             status={cacheStatus}
@@ -949,7 +1003,7 @@ const SettingsPage = () => {
       <div className="settings-categories grid grid-cols-1 items-start gap-3 lg:grid-cols-2 lg:items-stretch">
         {categoryColumns.map((column, index) => (
           <div key={index} className="settings-column flex min-w-0 flex-col gap-3">
-            {column.map(category => renderSettingCategory(category, 'lg:grow'))}
+            {column.map(category => <div key={category.name} className="min-w-0 lg:flex lg:grow">{renderSettingCategory(category)}</div>)}
           </div>
         ))}
       </div>

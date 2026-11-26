@@ -13,9 +13,10 @@ const SettingsSection = ({
   onReset,
   resetDisabled = false,
   compact = false,
+  fillHeight = false,
   className = ''
 }) => (
-  <div className={`settings-category flex min-w-0 flex-col bg-white rounded-xl border border-slate-200/60 shadow-sm overflow-hidden ${className}`.trim()}>
+  <div className={`settings-category flex min-w-0 flex-col bg-white rounded-xl border border-slate-200/60 shadow-sm overflow-hidden ${fillHeight ? 'lg:flex-1' : ''} ${className}`.trim()}>
     <div className={`shrink-0 bg-slate-50/50 border-b border-slate-100 flex items-center justify-between gap-2 ${compact ? 'px-3 py-2' : 'px-6 py-4'}`}>
       <div className="flex min-w-0 items-center">
         {Icon && (
@@ -47,7 +48,7 @@ const SettingsSection = ({
         </button>
       )}
     </div>
-    <div className={`flex flex-1 flex-col justify-center ${compact ? 'px-3 py-1' : 'p-6'}`}>
+    <div className={`min-w-0 ${compact ? 'px-3 py-1' : 'p-6'} ${fillHeight ? 'lg:flex lg:flex-1 lg:flex-col lg:justify-evenly' : ''}`}>
       {children}
     </div>
   </div>
