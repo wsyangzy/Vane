@@ -422,83 +422,6 @@ export const CandidateMode = {
     UnifiedCandidates: "unified_candidates",
 };
 
-export class ClassifierConfig {
-    /**
-     * Creates a new ClassifierConfig instance.
-     * @param {Partial<ClassifierConfig>} [$$source = {}] - The source object to create the ClassifierConfig.
-     */
-    constructor($$source = {}) {
-        if (!("enabled" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["enabled"] = false;
-        }
-        if (!("model" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["model"] = "";
-        }
-        if (!("provider" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["provider"] = "";
-        }
-        if (!("channel_id" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["channel_id"] = 0;
-        }
-        if (!("group_id" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["group_id"] = 0;
-        }
-        if (!("timeout" in $$source)) {
-            /**
-             * @member
-             * @type {time$0.Duration}
-             */
-            this["timeout"] = time$0.Duration.$zero;
-        }
-        if (!("confidence" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["confidence"] = 0;
-        }
-        if (!("failure_mode" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["failure_mode"] = "";
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new ClassifierConfig instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {ClassifierConfig}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new ClassifierConfig(/** @type {Partial<ClassifierConfig>} */($$parsedSource));
-    }
-}
-
 export class DispatchCandidate {
     /**
      * Creates a new DispatchCandidate instance.
@@ -687,13 +610,6 @@ export class DispatchDecision {
              * @member
              * @type {string | undefined}
              */
-            this["intent_id"] = undefined;
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
-             * @type {string | undefined}
-             */
             this["mode"] = undefined;
         }
         if (/** @type {any} */(false)) {
@@ -713,13 +629,6 @@ export class DispatchDecision {
         if (/** @type {any} */(false)) {
             /**
              * @member
-             * @type {IntentRoute[] | undefined}
-             */
-            this["fallback_intents"] = undefined;
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
              * @type {boolean | undefined}
              */
             this["reused_turn"] = undefined;
@@ -734,14 +643,10 @@ export class DispatchDecision {
      * @returns {DispatchDecision}
      */
     static createFrom($$source = {}) {
-        const $$createField4_0 = $$createType9;
-        const $$createField6_0 = $$createType11;
+        const $$createField3_0 = $$createType9;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("targets" in $$parsedSource) {
-            $$parsedSource["targets"] = $$createField4_0($$parsedSource["targets"]);
-        }
-        if ("fallback_intents" in $$parsedSource) {
-            $$parsedSource["fallback_intents"] = $$createField6_0($$parsedSource["fallback_intents"]);
+            $$parsedSource["targets"] = $$createField3_0($$parsedSource["targets"]);
         }
         return new DispatchDecision(/** @type {Partial<DispatchDecision>} */($$parsedSource));
     }
@@ -773,13 +678,6 @@ export class DispatchPlan {
              * @type {DispatchDecision}
              */
             this["decision"] = (new DispatchDecision());
-        }
-        if (!("intent" in $$source)) {
-            /**
-             * @member
-             * @type {IntentResult}
-             */
-            this["intent"] = (new IntentResult());
         }
         if (!("model" in $$source)) {
             /**
@@ -833,12 +731,11 @@ export class DispatchPlan {
      * @returns {DispatchPlan}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType12;
-        const $$createField2_0 = $$createType13;
-        const $$createField3_0 = $$createType14;
-        const $$createField5_0 = $$createType16;
-        const $$createField6_0 = $$createType18;
-        const $$createField7_0 = $$createType19;
+        const $$createField1_0 = $$createType10;
+        const $$createField2_0 = $$createType11;
+        const $$createField4_0 = $$createType13;
+        const $$createField5_0 = $$createType15;
+        const $$createField6_0 = $$createType16;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("profile" in $$parsedSource) {
             $$parsedSource["profile"] = $$createField1_0($$parsedSource["profile"]);
@@ -846,17 +743,14 @@ export class DispatchPlan {
         if ("decision" in $$parsedSource) {
             $$parsedSource["decision"] = $$createField2_0($$parsedSource["decision"]);
         }
-        if ("intent" in $$parsedSource) {
-            $$parsedSource["intent"] = $$createField3_0($$parsedSource["intent"]);
-        }
         if ("stages" in $$parsedSource) {
-            $$parsedSource["stages"] = $$createField5_0($$parsedSource["stages"]);
+            $$parsedSource["stages"] = $$createField4_0($$parsedSource["stages"]);
         }
         if ("evaluations" in $$parsedSource) {
-            $$parsedSource["evaluations"] = $$createField6_0($$parsedSource["evaluations"]);
+            $$parsedSource["evaluations"] = $$createField5_0($$parsedSource["evaluations"]);
         }
         if ("eligible_candidates" in $$parsedSource) {
-            $$parsedSource["eligible_candidates"] = $$createField7_0($$parsedSource["eligible_candidates"]);
+            $$parsedSource["eligible_candidates"] = $$createField6_0($$parsedSource["eligible_candidates"]);
         }
         return new DispatchPlan(/** @type {Partial<DispatchPlan>} */($$parsedSource));
     }
@@ -906,8 +800,8 @@ export class DispatchPlanStage {
      * @returns {DispatchPlanStage}
      */
     static createFrom($$source = {}) {
-        const $$createField2_0 = $$createType18;
-        const $$createField3_0 = $$createType19;
+        const $$createField2_0 = $$createType15;
+        const $$createField3_0 = $$createType16;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("evaluations" in $$parsedSource) {
             $$parsedSource["evaluations"] = $$createField2_0($$parsedSource["evaluations"]);
@@ -1052,13 +946,6 @@ export class DispatchTrace {
              */
             this["decision"] = (new DispatchDecision());
         }
-        if (!("intent" in $$source)) {
-            /**
-             * @member
-             * @type {IntentResult}
-             */
-            this["intent"] = (new IntentResult());
-        }
         if (!("candidates" in $$source)) {
             /**
              * @member
@@ -1146,10 +1033,9 @@ export class DispatchTrace {
      * @returns {DispatchTrace}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType21;
-        const $$createField8_0 = $$createType13;
-        const $$createField9_0 = $$createType14;
-        const $$createField10_0 = $$createType23;
+        const $$createField5_0 = $$createType18;
+        const $$createField8_0 = $$createType11;
+        const $$createField9_0 = $$createType20;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("default_source" in $$parsedSource) {
             $$parsedSource["default_source"] = $$createField5_0($$parsedSource["default_source"]);
@@ -1157,11 +1043,8 @@ export class DispatchTrace {
         if ("decision" in $$parsedSource) {
             $$parsedSource["decision"] = $$createField8_0($$parsedSource["decision"]);
         }
-        if ("intent" in $$parsedSource) {
-            $$parsedSource["intent"] = $$createField9_0($$parsedSource["intent"]);
-        }
         if ("candidates" in $$parsedSource) {
-            $$parsedSource["candidates"] = $$createField10_0($$parsedSource["candidates"]);
+            $$parsedSource["candidates"] = $$createField9_0($$parsedSource["candidates"]);
         }
         return new DispatchTrace(/** @type {Partial<DispatchTrace>} */($$parsedSource));
     }
@@ -1218,7 +1101,7 @@ export class DispatchTraceEvent {
      * @returns {DispatchTraceEvent}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType24;
+        const $$createField0_0 = $$createType21;
         const $$createField4_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("candidate" in $$parsedSource) {
@@ -1294,245 +1177,6 @@ export class HealthState {
     static createFrom($$source = {}) {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new HealthState(/** @type {Partial<HealthState>} */($$parsedSource));
-    }
-}
-
-export class IntentResult {
-    /**
-     * Creates a new IntentResult instance.
-     * @param {Partial<IntentResult>} [$$source = {}] - The source object to create the IntentResult.
-     */
-    constructor($$source = {}) {
-        if (!("intent_id" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["intent_id"] = "";
-        }
-        if (!("confidence" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["confidence"] = 0;
-        }
-        if (!("model" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["model"] = "";
-        }
-        if (!("fallback" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["fallback"] = "";
-        }
-        if (!("reason" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["reason"] = "";
-        }
-        if (!("duration_ms" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["duration_ms"] = 0;
-        }
-        if (!("input_tokens" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["input_tokens"] = 0;
-        }
-        if (!("output_tokens" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["output_tokens"] = 0;
-        }
-        if (!("cost" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["cost"] = 0;
-        }
-        if (!("cached" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["cached"] = false;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new IntentResult instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {IntentResult}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new IntentResult(/** @type {Partial<IntentResult>} */($$parsedSource));
-    }
-}
-
-export class IntentRoute {
-    /**
-     * Creates a new IntentRoute instance.
-     * @param {Partial<IntentRoute>} [$$source = {}] - The source object to create the IntentRoute.
-     */
-    constructor($$source = {}) {
-        if (!("intent_id" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["intent_id"] = "";
-        }
-        if (!("mode" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["mode"] = "";
-        }
-        if (!("targets" in $$source)) {
-            /**
-             * @member
-             * @type {RouteTarget[]}
-             */
-            this["targets"] = [];
-        }
-        if (!("fallback_to_default" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["fallback_to_default"] = false;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new IntentRoute instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {IntentRoute}
-     */
-    static createFrom($$source = {}) {
-        const $$createField2_0 = $$createType9;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("targets" in $$parsedSource) {
-            $$parsedSource["targets"] = $$createField2_0($$parsedSource["targets"]);
-        }
-        return new IntentRoute(/** @type {Partial<IntentRoute>} */($$parsedSource));
-    }
-}
-
-export class IntentRule {
-    /**
-     * Creates a new IntentRule instance.
-     * @param {Partial<IntentRule>} [$$source = {}] - The source object to create the IntentRule.
-     */
-    constructor($$source = {}) {
-        if (!("id" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["id"] = "";
-        }
-        if (!("profile_id" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["profile_id"] = 0;
-        }
-        if (!("name" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["name"] = "";
-        }
-        if (!("description" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["description"] = "";
-        }
-        if (!("enabled" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["enabled"] = false;
-        }
-        if (!("priority" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["priority"] = 0;
-        }
-        if (!("targets" in $$source)) {
-            /**
-             * @member
-             * @type {RouteTarget[]}
-             */
-            this["targets"] = [];
-        }
-        if (!("mode" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["mode"] = "";
-        }
-        if (!("fallback_intent" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["fallback_intent"] = "";
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
-             * @type {boolean | null | undefined}
-             */
-            this["fallback_to_default"] = undefined;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new IntentRule instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {IntentRule}
-     */
-    static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType9;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("targets" in $$parsedSource) {
-            $$parsedSource["targets"] = $$createField6_0($$parsedSource["targets"]);
-        }
-        return new IntentRule(/** @type {Partial<IntentRule>} */($$parsedSource));
     }
 }
 
@@ -1944,7 +1588,7 @@ export class QuotaView {
      * @returns {QuotaView}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType26;
+        const $$createField0_0 = $$createType23;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("windows" in $$parsedSource) {
             $$parsedSource["windows"] = $$createField0_0($$parsedSource["windows"]);
@@ -2053,7 +1697,7 @@ export class RoutingMember {
         if (!("upstream_model" in $$source)) {
             /**
              * Retained for stored-data compatibility; member orchestration no longer
-             * overrides models. Only explicit rule/intent targets may specify one.
+             * overrides models. Only explicit rule targets may specify one.
              * @member
              * @type {string}
              */
@@ -2176,20 +1820,6 @@ export class RoutingProfile {
              */
             this["rules"] = [];
         }
-        if (!("intents" in $$source)) {
-            /**
-             * @member
-             * @type {IntentRule[]}
-             */
-            this["intents"] = [];
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
-             * @type {ClassifierConfig | null | undefined}
-             */
-            this["classifier"] = undefined;
-        }
         if (/** @type {any} */(false)) {
             /**
              * @member
@@ -2214,11 +1844,9 @@ export class RoutingProfile {
      * @returns {RoutingProfile}
      */
     static createFrom($$source = {}) {
-        const $$createField11_0 = $$createType28;
-        const $$createField12_0 = $$createType30;
-        const $$createField13_0 = $$createType32;
-        const $$createField14_0 = $$createType34;
-        const $$createField15_0 = $$createType36;
+        const $$createField11_0 = $$createType25;
+        const $$createField12_0 = $$createType27;
+        const $$createField13_0 = $$createType29;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("members" in $$parsedSource) {
             $$parsedSource["members"] = $$createField11_0($$parsedSource["members"]);
@@ -2226,14 +1854,8 @@ export class RoutingProfile {
         if ("rules" in $$parsedSource) {
             $$parsedSource["rules"] = $$createField12_0($$parsedSource["rules"]);
         }
-        if ("intents" in $$parsedSource) {
-            $$parsedSource["intents"] = $$createField13_0($$parsedSource["intents"]);
-        }
-        if ("classifier" in $$parsedSource) {
-            $$parsedSource["classifier"] = $$createField14_0($$parsedSource["classifier"]);
-        }
         if ("search" in $$parsedSource) {
-            $$parsedSource["search"] = $$createField15_0($$parsedSource["search"]);
+            $$parsedSource["search"] = $$createField13_0($$parsedSource["search"]);
         }
         return new RoutingProfile(/** @type {Partial<RoutingProfile>} */($$parsedSource));
     }
@@ -2301,13 +1923,6 @@ export class RoutingRule {
              */
             this["require_stream"] = undefined;
         }
-        if (!("intent_id" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["intent_id"] = "";
-        }
         if (!("mode" in $$source)) {
             /**
              * @member
@@ -2340,10 +1955,10 @@ export class RoutingRule {
      * @returns {RoutingRule}
      */
     static createFrom($$source = {}) {
-        const $$createField10_0 = $$createType9;
+        const $$createField9_0 = $$createType9;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("targets" in $$parsedSource) {
-            $$parsedSource["targets"] = $$createField10_0($$parsedSource["targets"]);
+            $$parsedSource["targets"] = $$createField9_0($$parsedSource["targets"]);
         }
         return new RoutingRule(/** @type {Partial<RoutingRule>} */($$parsedSource));
     }
@@ -2432,9 +2047,9 @@ export class SearchPolicy {
      * @returns {SearchPolicy}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType37;
-        const $$createField7_0 = $$createType38;
-        const $$createField8_0 = $$createType39;
+        const $$createField6_0 = $$createType30;
+        const $$createField7_0 = $$createType31;
+        const $$createField8_0 = $$createType32;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("service_endpoints" in $$parsedSource) {
             $$parsedSource["service_endpoints"] = $$createField6_0($$parsedSource["service_endpoints"]);
@@ -2514,33 +2129,26 @@ const $$createType6 = HealthState.createFrom;
 const $$createType7 = QuotaView.createFrom;
 const $$createType8 = RouteTarget.createFrom;
 const $$createType9 = $Create.Array($$createType8);
-const $$createType10 = IntentRoute.createFrom;
-const $$createType11 = $Create.Array($$createType10);
-const $$createType12 = RoutingProfile.createFrom;
-const $$createType13 = DispatchDecision.createFrom;
-const $$createType14 = IntentResult.createFrom;
-const $$createType15 = DispatchPlanStage.createFrom;
-const $$createType16 = $Create.Array($$createType15);
-const $$createType17 = CandidateEvaluation.createFrom;
-const $$createType18 = $Create.Array($$createType17);
-const $$createType19 = $Create.Array($$createType2);
-const $$createType20 = DispatchRouteSource.createFrom;
-const $$createType21 = $Create.Nullable($$createType20);
-const $$createType22 = DispatchTraceEvent.createFrom;
+const $$createType10 = RoutingProfile.createFrom;
+const $$createType11 = DispatchDecision.createFrom;
+const $$createType12 = DispatchPlanStage.createFrom;
+const $$createType13 = $Create.Array($$createType12);
+const $$createType14 = CandidateEvaluation.createFrom;
+const $$createType15 = $Create.Array($$createType14);
+const $$createType16 = $Create.Array($$createType2);
+const $$createType17 = DispatchRouteSource.createFrom;
+const $$createType18 = $Create.Nullable($$createType17);
+const $$createType19 = DispatchTraceEvent.createFrom;
+const $$createType20 = $Create.Array($$createType19);
+const $$createType21 = Candidate.createFrom;
+const $$createType22 = QuotaSnapshot.createFrom;
 const $$createType23 = $Create.Array($$createType22);
-const $$createType24 = Candidate.createFrom;
-const $$createType25 = QuotaSnapshot.createFrom;
-const $$createType26 = $Create.Array($$createType25);
-const $$createType27 = RoutingMember.createFrom;
-const $$createType28 = $Create.Array($$createType27);
-const $$createType29 = RoutingRule.createFrom;
-const $$createType30 = $Create.Array($$createType29);
-const $$createType31 = IntentRule.createFrom;
-const $$createType32 = $Create.Array($$createType31);
-const $$createType33 = ClassifierConfig.createFrom;
-const $$createType34 = $Create.Nullable($$createType33);
-const $$createType35 = SearchPolicy.createFrom;
-const $$createType36 = $Create.Nullable($$createType35);
-const $$createType37 = $Create.Map($Create.Any, $Create.Any);
-const $$createType38 = $Create.Array($Create.Any);
-const $$createType39 = $Create.Map($Create.Any, $Create.Any);
+const $$createType24 = RoutingMember.createFrom;
+const $$createType25 = $Create.Array($$createType24);
+const $$createType26 = RoutingRule.createFrom;
+const $$createType27 = $Create.Array($$createType26);
+const $$createType28 = SearchPolicy.createFrom;
+const $$createType29 = $Create.Nullable($$createType28);
+const $$createType30 = $Create.Map($Create.Any, $Create.Any);
+const $$createType31 = $Create.Array($Create.Any);
+const $$createType32 = $Create.Map($Create.Any, $Create.Any);

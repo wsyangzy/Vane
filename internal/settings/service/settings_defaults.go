@@ -66,6 +66,11 @@ func (s *SettingsService) InitDefaults(ctx context.Context) error {
 
 // cleanupDeprecatedSettings 清理废弃的配置项
 func (s *SettingsService) cleanupDeprecatedSettings(ctx context.Context) error {
+	for _, provider := range []SettingsProvider{ProviderGlobal, ProviderClaude, ProviderCodex} {
+		if err := s.store.DeleteScoped(ctx, string(provider), CategoryRetry, "intent_rule_fallback"); err != nil {
+			return err
+		}
+	}
 	deprecatedKeys := []struct {
 		category string
 		key      string

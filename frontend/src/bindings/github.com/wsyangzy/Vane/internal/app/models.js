@@ -3726,27 +3726,6 @@ export class DispatchInput {
              */
             this["new_turn"] = false;
         }
-        if (!("current_user_message" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["current_user_message"] = "";
-        }
-        if (!("previous_user_message" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["previous_user_message"] = "";
-        }
-        if (!("previous_assistant_text" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["previous_assistant_text"] = "";
-        }
 
         Object.assign(this, $$source);
     }

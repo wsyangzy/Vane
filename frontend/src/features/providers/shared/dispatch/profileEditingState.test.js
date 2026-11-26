@@ -6,7 +6,7 @@ import { copyProfileRules, moveListItem, positionProfileChannel, positionProfile
 
 const profile = (provider, id, extra = {}) => ({ ...newRoutingProfile(provider, false, { maxAttempts: 10, maxDurationMs: 60000 }), id, name: `方案 ${id}`, ...extra });
 const target = (channelId = 1, groupId = 0) => ({ channelId, groupId, profileId: 0, upstreamModel: '' });
-const rule = (id, extra = {}) => ({ id, rowKey: `rule-${id}`, enabled: true, kind: 'model', name: '', priority: id, matchModel: 'gpt-*', requireStream: null, intentId: '', mode: 'prefer', fallbackToDefault: null, targets: [target()], ...extra });
+const rule = (id, extra = {}) => ({ id, rowKey: `rule-${id}`, enabled: true, kind: 'model', name: '', priority: id, matchModel: 'gpt-*', requireStream: null, mode: 'prefer', fallbackToDefault: null, targets: [target()], ...extra });
 const resources = (provider, profiles = []) => ({ profiles: profiles.map(item => ({ provider, ...item })), channels: [{ id: 1 }, { id: 2 }, { id: 3 }], accounts: [{ channelId: 1, groupId: 11 }, { channelId: 1, groupId: 12 }, { channelId: 2, groupId: 21 }] });
 const keyFactory = () => { let index = 0; return () => `new-key-${++index}`; };
 
@@ -110,23 +110,6 @@ test('selected rule copies are appended independently with fresh IDs, keys, and 
   }
 });
 
-test('intent copies include the fallback closure and remap collisions without changing the classifier', () => {
-  for (const provider of ['claude', 'codex']) {
-    const classifier = { enabled: false, provider, channelId: 2, groupId: 21, model: 'current', timeoutMs: 8000, confidence: 0.6, failureMode: 'default' };
-    const intent = (id, fallbackIntent = '') => ({ id, name: id, description: 'description', enabled: true, priority: 0, targets: [target()], mode: 'prefer', fallbackIntent, fallbackToDefault: null });
-    const destination = profile(provider, 2, { classifier, intents: [intent('coding'), intent('coding_copy')] });
-    const source = profile(provider, 3, { classifier: { enabled: true }, intents: [intent('coding', 'general'), intent('general', 'coding'), intent('unrelated')], rules: [rule(1, { kind: 'intent', intentId: 'coding' }), rule(2, { kind: 'composite', intentId: 'general' })] });
-    const copied = copyProfileRules(destination, source, [1, 2], resources(provider), keyFactory());
-    assert.deepEqual(copied.intents.map(item => item.id), ['coding', 'coding_copy', 'coding_copy_2', 'general']);
-    assert.deepEqual(copied.rules.map(item => item.intentId), ['coding_copy_2', 'general']);
-    assert.equal(copied.intents[2].fallbackIntent, 'general');
-    assert.equal(copied.intents[3].fallbackIntent, 'coding_copy_2');
-    assert.equal(copied.classifier, classifier);
-    assert.equal(copied.classifier.enabled, false);
-    assert.equal(validateProfileDraft(copied), '');
-  }
-});
-
 test('mapping copies respect the destination participating groups including group zero', () => {
   for (const provider of ['claude', 'codex']) {
     const mapping = rule(1, { kind: 'mapping', targets: [{ ...target(1), upstreamModel: 'actual' }] });
@@ -143,7 +126,7 @@ test('mapping copies respect the destination participating groups including grou
   }
 });
 
-test('copy rejects missing resources, missing intent definitions, cross-provider and empty selections', () => {
+test('copy rejects missing resources, cross-provider and empty selections', () => {
   const destination = profile('codex', 2);
   const source = profile('codex', 3, { rules: [rule(1)] });
   assert.throws(() => copyProfileRules(destination, source, [], resources('codex')), /请选择/);
@@ -151,5 +134,4 @@ test('copy rejects missing resources, missing intent definitions, cross-provider
   assert.match(ruleCopyIssue(destination, source, rule(1, { targets: [target(99)] }), resources('codex')), /不存在/);
   assert.match(ruleCopyIssue(destination, source, rule(1, { targets: [target(1, 99)] }), resources('codex')), /不存在/);
   assert.match(ruleCopyIssue(destination, source, rule(1, { targets: [{ profileId: 99 }] }), resources('codex')), /方案.*不存在/);
-  assert.match(ruleCopyIssue(destination, source, rule(1, { kind: 'composite', intentId: 'missing' }), resources('codex')), /缺少意图/);
 });

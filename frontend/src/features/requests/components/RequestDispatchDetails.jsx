@@ -91,7 +91,6 @@ export default function RequestDispatchDetails({ trace, expanded = false }) {
       {trace.strategy && <span>{optionLabel(strategyOptions, trace.strategy)}</span>}
       {trace.affinityMode && <span>{optionLabel(affinityOptions, trace.affinityMode)}</span>}
       {trace.decision.rule_id > 0 && <span>规则 #{trace.decision.rule_id}</span>}
-      {trace.decision.intent_id && <span>意图 {trace.decision.intent_id}</span>}
       {trace.decision.reused_turn && <span>复用本轮决策</span>}
       {trace.waitMs > 0 && <span>等待 {formatDuration(trace.waitMs)}</span>}
       {trace.nextRecoveryAt && <span>预计恢复 {dateLabel(trace.nextRecoveryAt)}</span>}

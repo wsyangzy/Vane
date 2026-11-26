@@ -3,7 +3,7 @@
 // 2025-12-01 09:30:08
 // ============================================
 
-import { GitBranch, Image, Layers, Replace, Route, Sparkles, Split } from 'lucide-react';
+import { GitBranch, Image, Layers, Replace, Route, Split } from 'lucide-react';
 import { Tooltip } from '@/shared/ui/index.js';
 import { describeRouteSnapshot } from '@/features/providers/shared/routing/routeTargets.js';
 import { CodexLogo } from '@/features/providers/codex/components/CodexLogo.jsx';
@@ -299,9 +299,7 @@ const ModelTag = ({
         ? { label: '模型映射', Icon: Replace, classes: 'text-orange-500' }
         : route?.kind === 'composite'
           ? { label: '条件路由', Icon: GitBranch, classes: 'text-sky-600' }
-          : route?.kind === 'intent'
-            ? { label: '意图路由', Icon: Sparkles, classes: 'text-violet-500' }
-            : route?.kind === 'pool' ? { label: '账号池', Icon: Layers, classes: 'text-slate-500' } : null;
+          : route?.kind === 'pool' ? { label: '账号池', Icon: Layers, classes: 'text-slate-500' } : null;
   const RouteIcon = routeIndicator?.Icon;
   const tag = (
     <span

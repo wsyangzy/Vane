@@ -3,7 +3,7 @@ import Tooltip from '@/shared/ui/Tooltip.jsx';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Activity, AlertCircle, ArrowLeft, ArrowUpRight, Ban, Hash, Layers, ListTree, Plus, RefreshCw, Server, ShieldCheck, Star } from 'lucide-react';
 import { Button } from '@/shared/ui/index.js';
-import { deleteRoutingProfile, checkRoutingConfiguration, listDispatchTraces, listQuotaSnapshots, listManualBalances, updateManualBalance, listRoutingProfiles, refreshQuota, saveRoutingProfile, setDefaultRoutingProfile } from '@/services/wails/dispatch.js';
+import { deleteRoutingProfile, checkRoutingConfiguration, listQuotaSnapshots, listManualBalances, updateManualBalance, listRoutingProfiles, refreshQuota, saveRoutingProfile, setDefaultRoutingProfile } from '@/services/wails/dispatch.js';
 import ProfileEditor from './ProfileEditor.jsx';
 import DeleteProfileConfirmDialog from './DeleteProfileConfirmDialog.jsx';
 import ProfileOverview from './ProfileOverview.jsx';
@@ -11,7 +11,7 @@ import QuotaHealthWorkspace from './QuotaHealthWorkspace.jsx';
 import DispatchTabs from './DispatchTabs.jsx';
 import RuntimeSettings from './RuntimeSettings.jsx';
 import { ClientConnectionButton } from '../subscriptions/SubscriptionManagement.jsx';
-import { dispatchReason, newRoutingProfile, profileChannelIds, profileSwitchBlockReason, summarizeIntentTraces } from './dispatchState.js';
+import { dispatchReason, newRoutingProfile, profileChannelIds, profileSwitchBlockReason } from './dispatchState.js';
 import { getSettingsByCategory } from '@/services/wails/settings.js';
 import { readDispatchPolicy } from '@/shared/lib/dispatchPolicy.js';
 
@@ -45,22 +45,16 @@ export default function DispatchWorkspace({ provider, onError, onSuccess, onMana
   const [runtimeRefreshToken, setRuntimeRefreshToken] = useState(0);
   const [error, setError] = useState('');
   const [loadError, setLoadError] = useState('');
-  const [traces, setTraces] = useState([]);
-  const [statisticsLoaded, setStatisticsLoaded] = useState(false);
-  const [statisticsError, setStatisticsError] = useState('');
   const [quotaModel, setQuotaModel] = useState('');
   const generation = useRef(0);
   const reload = useCallback(async () => {
     const current = ++generation.current;
-    const results = await Promise.allSettled([listRoutingProfiles(provider), checkRoutingConfiguration(provider), listDispatchTraces(provider, 100), getSettingsByCategory('retry').then(readDispatchPolicy)]);
+    const results = await Promise.allSettled([listRoutingProfiles(provider), checkRoutingConfiguration(provider), getSettingsByCategory('retry').then(readDispatchPolicy)]);
     if (current !== generation.current) return;
     if (results[0].status === 'fulfilled') setState(results[0].value);
     if (results[1].status === 'fulfilled') setStatus(results[1].value);
-    setPolicy(results[3].status === 'fulfilled' ? results[3].value : null);
-    setTraces(results[2].status === 'fulfilled' ? results[2].value : []);
-    setStatisticsLoaded(results[2].status === 'fulfilled');
-    setStatisticsError(results[2].status === 'rejected' ? results[2].reason?.message || String(results[2].reason) : '');
-    const failure = [results[0], results[1], results[3]].find((result) => result.status === 'rejected');
+    setPolicy(results[2].status === 'fulfilled' ? results[2].value : null);
+    const failure = [results[0], results[1], results[2]].find((result) => result.status === 'rejected');
     setLoadError(failure ? dispatchReason(getErrorMessage(failure.reason, '读取调度配置失败')) : '');
     setLoading(false);
   }, [provider]);
@@ -74,19 +68,6 @@ export default function DispatchWorkspace({ provider, onError, onSuccess, onMana
   };
   const selected = state.profiles.find((profile) => profile.id === selectedId) || state.profiles.find((profile) => profile.isDefault) || state.profiles[0];
   const inlineError = loadError || (!onError && !confirmDelete ? error : '');
-  const reloadStatistics = () => perform(async () => {
-    const current = generation.current;
-    try {
-      const next = await listDispatchTraces(provider, 100);
-      if (current !== generation.current) return;
-      setTraces(next); setStatisticsLoaded(true); setStatisticsError('');
-    } catch (err) {
-      if (current !== generation.current) return;
-      setStatisticsLoaded(false); setStatisticsError(err?.message || String(err));
-      throw err;
-    }
-  });
-  const intentStatistics = (profileId) => summarizeIntentTraces(traces, provider, profileId);
   const selectTab = (value) => {
     if (value === tab) return;
     setTab(value);
@@ -109,7 +90,7 @@ export default function DispatchWorkspace({ provider, onError, onSuccess, onMana
     {tab === 'profiles' && <p className="text-xs leading-5 text-slate-500">更新调度规则或切换默认方案后，新请求直接生效。客户端接入选项需应用配置并重启客户端。</p>}
     {inlineError && <div role="alert" className="flex min-w-0 items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700"><AlertCircle size={14} className="shrink-0" /><span className="min-w-0 flex-1 wrap-anywhere">{inlineError}</span>{loadError && <Button type="button" size="sm" variant="ghost" icon={RefreshCw} disabled={busy || loading} onClick={() => reload()}>重试</Button>}</div>}
     {loading ? <p className="py-8 text-center text-xs text-slate-400">加载调度配置…</p> : <div key={tab} id={`${tabsId}-${tab}-panel`} role="tabpanel" aria-labelledby={`${tabsId}-${tab}-tab`} className={`dispatch-tab-panel ${tab === 'profiles' ? editing ? 'dispatch-profile-editor-panel' : 'dispatch-profiles-panel' : 'space-y-3'} animate-in fade-in slide-in-from-bottom-2`}>
-      {tab === 'profiles' && <>{editing ? <ProfileEditor key={editing.rowKey} profile={editing} profiles={state.profiles} channels={state.channels} accounts={state.accounts} policy={policy} busy={busy} statistics={intentStatistics(editing.id)} statisticsLoaded={statisticsLoaded} statisticsError={statisticsError} onRefreshStatistics={reloadStatistics} onCancel={() => setEditing(null)} onSave={(profile) => perform(async () => { const saved = await saveRoutingProfile(profile); setSelectedId(saved.id); setEditing(null); await reload(); }, '调度方案已保存')} /> : <><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex min-w-0 items-center gap-2"><Layers size={15} className="shrink-0 text-indigo-500" /><h2 className="text-sm font-semibold text-slate-800">调度方案</h2><span className="text-xs tabular-nums text-slate-400">{state.profiles.length}</span></div><Button type="button" size="sm" variant="secondary" icon={Plus} disabled={busy || !policy} onClick={() => setEditing({ ...newRoutingProfile(provider, !state.profiles.length, policy), rowKey: crypto.randomUUID() })}>新建方案</Button></div>
+      {tab === 'profiles' && <>{editing ? <ProfileEditor key={editing.rowKey} profile={editing} profiles={state.profiles} channels={state.channels} accounts={state.accounts} policy={policy} busy={busy} onCancel={() => setEditing(null)} onSave={(profile) => perform(async () => { const saved = await saveRoutingProfile(profile); setSelectedId(saved.id); setEditing(null); await reload(); }, '调度方案已保存')} /> : <><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex min-w-0 items-center gap-2"><Layers size={15} className="shrink-0 text-indigo-500" /><h2 className="text-sm font-semibold text-slate-800">调度方案</h2><span className="text-xs tabular-nums text-slate-400">{state.profiles.length}</span></div><Button type="button" size="sm" variant="secondary" icon={Plus} disabled={busy || !policy} onClick={() => setEditing({ ...newRoutingProfile(provider, !state.profiles.length, policy), rowKey: crypto.randomUUID() })}>新建方案</Button></div>
         {!state.profiles.length && <div className="dispatch-profile-empty rounded-xl border border-dashed border-slate-300 bg-slate-50/60 px-4 py-8 text-center"><Layers size={22} className="mx-auto mb-2 text-slate-300" /><h3 className="text-sm font-medium text-slate-700">建立首个调度方案</h3><p className="mx-auto mt-2 max-w-lg text-xs leading-5 text-slate-400">渠道、凭证分组和端点继续保留。选择参与渠道、策略和轮次保持方式，首个方案保存后将自动作为当前方案，接管新请求。</p><Button type="button" size="sm" icon={Plus} className="mt-4" disabled={busy || !policy} onClick={() => setEditing({ ...newRoutingProfile(provider, true, policy), rowKey: crypto.randomUUID() })}>建立调度方案</Button></div>}
         {!!state.profiles.length && <div className="dispatch-profiles-grid"><nav aria-label="调度方案列表" className="dispatch-profile-list space-y-1 rounded-xl border border-slate-200 bg-white p-2">{state.profiles.map((profile) => <button type="button" key={profile.id} aria-pressed={selected?.id === profile.id} onClick={() => setSelectedId(profile.id)} className={`w-full rounded-lg px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-inset ${selected?.id === profile.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>
           <span className="flex min-w-0 items-start gap-1.5 text-xs font-medium"><span className="min-w-0 flex-1 wrap-anywhere">{profile.name}</span>{profile.isDefault && <Star size={12} role="img" aria-label="当前调度方案" className="mt-0.5 shrink-0 fill-amber-400 text-amber-500" />}</span>

@@ -33,29 +33,12 @@ export function setProfileRulePriority(profile, rowKey, priority) {
   return { ...profile, rules: profile.rules.map(rule => rule.rowKey === rowKey ? { ...rule, priority } : rule).sort((a, b) => Number(a.priority) - Number(b.priority) || a.id - b.id) };
 }
 
-function dependentIntents(source, rules) {
-  const result = new Map();
-  const visit = id => {
-    if (!id || result.has(id)) return;
-    const intent = source.intents.find(item => item.id === id);
-    if (!intent) throw new Error(`来源方案缺少意图「${id}」`);
-    result.set(id, intent);
-    visit(intent.fallbackIntent);
-  };
-  rules.forEach(rule => visit(rule.intentId));
-  return [...result.values()];
-}
-
 export function ruleCopyIssue(destination, source, rule, resources) {
   if (destination.provider !== source.provider) return '只能复制同一服务的规则';
   if (rule.kind === 'mapping' && rule.enabled && rule.targets.some(target => !mappingTargetAllowed(destination, target))) return '请先在当前方案中参与映射目标的渠道 / 分组';
   const issue = ruleDraftIssue(source, rule);
   if (issue) return `来源规则需先完成：${issue}`;
-  let intents;
-  try { intents = dependentIntents(source, [rule]); }
-  catch (error) { return error.message; }
-  const targets = [...rule.targets, ...intents.flatMap(intent => intent.targets)];
-  for (const target of targets) {
+  for (const target of rule.targets) {
     if (target.profileId) {
       if (!resources.profiles.some(profile => profile.id === target.profileId && profile.provider === source.provider)) return '目标方案已不存在，请先修改来源规则';
     } else if (!resources.channels.some(channel => channel.id === target.channelId) || target.groupId && !resources.accounts.some(account => account.channelId === target.channelId && account.groupId === target.groupId)) return '目标渠道 / 分组已不存在，请先修改来源规则';
@@ -71,22 +54,9 @@ export function copyProfileRules(destination, source, selectedIds, resources, cr
     const issue = ruleCopyIssue(destination, source, rule, resources);
     if (issue) throw new Error(issue);
   }
-  const intents = dependentIntents(source, rules);
-  const usedIds = new Set(destination.intents.map(intent => intent.id));
-  const intentIds = new Map();
-  for (const intent of intents) {
-    let id = intent.id, suffix = 1;
-    while (usedIds.has(id)) {
-      id = `${intent.id}_copy${suffix === 1 ? '' : `_${suffix}`}`;
-      suffix++;
-    }
-    usedIds.add(id);
-    intentIds.set(intent.id, id);
-  }
   const cloneTargets = targets => structuredClone(targets).map(target => ({ ...target, rowKey: createKey() }));
   let ruleId = Math.max(0, ...destination.rules.map(rule => rule.id));
   let priority = destination.rules.length ? Math.max(...destination.rules.map(rule => Number(rule.priority))) : -1;
-  const copiedRules = rules.map(rule => ({ ...structuredClone(rule), id: ++ruleId, profileId: destination.id, rowKey: createKey(), priority: ++priority, intentId: intentIds.get(rule.intentId) || '', targets: cloneTargets(rule.targets) }));
-  const copiedIntents = intents.map(intent => ({ ...structuredClone(intent), id: intentIds.get(intent.id), profileId: destination.id, rowKey: createKey(), fallbackIntent: intentIds.get(intent.fallbackIntent) || '', targets: cloneTargets(intent.targets) }));
-  return { ...destination, rules: [...destination.rules, ...copiedRules], intents: [...destination.intents, ...copiedIntents] };
+  const copiedRules = rules.map(rule => ({ ...structuredClone(rule), id: ++ruleId, profileId: destination.id, rowKey: createKey(), priority: ++priority, targets: cloneTargets(rule.targets) }));
+  return { ...destination, rules: [...destination.rules, ...copiedRules] };
 }

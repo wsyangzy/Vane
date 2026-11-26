@@ -33,21 +33,18 @@ type RoutingProfileState struct {
 }
 
 type DispatchInput struct {
-	Provider              string `json:"provider"`
-	ProfileID             int64  `json:"profile_id"`
-	Model                 string `json:"model"`
-	Streaming             bool   `json:"streaming"`
-	ConversationID        string `json:"conversation_id"`
-	BranchID              string `json:"branch_id"`
-	TurnID                string `json:"turn_id"`
-	NewTurn               bool   `json:"new_turn"`
-	CurrentUserMessage    string `json:"current_user_message"`
-	PreviousUserMessage   string `json:"previous_user_message"`
-	PreviousAssistantText string `json:"previous_assistant_text"`
+	Provider       string `json:"provider"`
+	ProfileID      int64  `json:"profile_id"`
+	Model          string `json:"model"`
+	Streaming      bool   `json:"streaming"`
+	ConversationID string `json:"conversation_id"`
+	BranchID       string `json:"branch_id"`
+	TurnID         string `json:"turn_id"`
+	NewTurn        bool   `json:"new_turn"`
 }
 
 func (i DispatchInput) turn() routing.TurnInput {
-	return routing.TurnInput{ConversationID: i.ConversationID, BranchID: i.BranchID, TurnID: i.TurnID, NewTurn: i.NewTurn, CurrentUserMessage: i.CurrentUserMessage, PreviousUserMessage: i.PreviousUserMessage, PreviousAssistantText: i.PreviousAssistantText}
+	return routing.TurnInput{ConversationID: i.ConversationID, BranchID: i.BranchID, TurnID: i.TurnID, NewTurn: i.NewTurn}
 }
 
 func (a *App) profileStore(ctx context.Context) (*routingstore.ProfileStore, error) {
@@ -90,7 +87,7 @@ func (a *App) refreshRoutingRuntime(ctx context.Context, provider string, pool *
 		return err
 	}
 	candidates := a.dispatchCandidates(provider, pool, catalog, accounts, quota)
-	cfg := routing.RuntimeConfig{Provider: provider, Profiles: profiles, Candidates: candidates, Catalog: catalog, Classify: a.callIntentClassifier}
+	cfg := routing.RuntimeConfig{Provider: provider, Profiles: profiles, Candidates: candidates, Catalog: catalog}
 	_, ruleDefaults := a.settingsService.RoutingPolicy(ctx)
 	cfg.RuleDefaults = &ruleDefaults
 	cfg.OnSettlement = func(settlement routing.AttemptSettlement) { a.settleManualBalance(s, settlement) }
@@ -429,28 +426,6 @@ func (a *App) saveRoutingProfile(input routing.RoutingProfile, beforeCommit func
 			}
 		}
 	}
-	for _, intent := range input.Intents {
-		for _, target := range intent.Targets {
-			if target.ProfileID == 0 {
-				if err := catalog.Validate([]routing.Target{{ChannelID: target.ChannelID, GroupID: target.GroupID}}); err != nil {
-					return input, err
-				}
-			}
-		}
-	}
-	if input.Classifier != nil && input.Classifier.Enabled {
-		classifierProvider := input.Classifier.Provider
-		if classifierProvider == "" {
-			classifierProvider = input.Provider
-		}
-		cc, err := a.poolCatalog(ctx, classifierProvider)
-		if err != nil {
-			return input, err
-		}
-		if err := cc.Validate([]routing.Target{{ChannelID: input.Classifier.ChannelID, GroupID: input.Classifier.GroupID}}); err != nil {
-			return input, err
-		}
-	}
 	s, err := a.profileStore(ctx)
 	if err != nil {
 		return input, err
@@ -529,23 +504,6 @@ func (a *App) PreviewDispatch(input DispatchInput) (routing.DispatchPlan, error)
 		return routing.DispatchPlan{}, err
 	}
 	return runtime.Plan(ctx, input.ProfileID, input.Model, input.Streaming, input.turn(), true), nil
-}
-func (a *App) ClassifyIntent(input DispatchInput) (routing.IntentResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	runtime, err := a.dispatchRuntime(ctx, input.Provider)
-	if err != nil {
-		return routing.IntentResult{}, err
-	}
-	turn := input.turn()
-	turn.NewTurn = true
-	if turn.ConversationID == "" {
-		turn.ConversationID = "preview"
-	}
-	if turn.TurnID == "" {
-		turn.TurnID = fmt.Sprint(time.Now().UnixNano())
-	}
-	return runtime.ClassifyIntent(ctx, input.ProfileID, turn), nil
 }
 func (a *App) ListRoutingQuota(provider string) ([]routing.QuotaSnapshot, error) {
 	ctx, cancel := routeCtx()

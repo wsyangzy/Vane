@@ -61,16 +61,9 @@ CREATE TABLE IF NOT EXISTS routing_profile_members (
 CREATE TABLE IF NOT EXISTS routing_profile_rules (
  id INTEGER NOT NULL, profile_id INTEGER NOT NULL REFERENCES routing_profiles(id) ON DELETE CASCADE,
  kind TEXT NOT NULL, name TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1,
- match_model TEXT NOT NULL DEFAULT '', require_stream INTEGER, intent_id TEXT NOT NULL DEFAULT '',
+ match_model TEXT NOT NULL DEFAULT '', require_stream INTEGER,
  mode TEXT NOT NULL DEFAULT 'prefer', targets_json TEXT NOT NULL DEFAULT '[]', fallback_to_default INTEGER,
  revision INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(profile_id,id));
-CREATE TABLE IF NOT EXISTS routing_profile_intents (
- id TEXT NOT NULL, profile_id INTEGER NOT NULL REFERENCES routing_profiles(id) ON DELETE CASCADE,
- name TEXT NOT NULL, description TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0,
- enabled INTEGER NOT NULL DEFAULT 1, targets_json TEXT NOT NULL DEFAULT '[]', mode TEXT NOT NULL DEFAULT 'prefer',
- fallback_intent TEXT NOT NULL DEFAULT '', fallback_to_default INTEGER, PRIMARY KEY(profile_id,id));
-CREATE TABLE IF NOT EXISTS routing_profile_classifier_config (
- profile_id INTEGER PRIMARY KEY REFERENCES routing_profiles(id) ON DELETE CASCADE, payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS routing_profile_search_config (
  profile_id INTEGER PRIMARY KEY REFERENCES routing_profiles(id) ON DELETE CASCADE, payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS routing_quota_snapshots (
@@ -94,6 +87,9 @@ CREATE TABLE IF NOT EXISTS routing_profile_migrations (
  provider TEXT PRIMARY KEY, state TEXT NOT NULL, started_at TEXT NOT NULL,
  completed_at TEXT, details TEXT NOT NULL DEFAULT '');`)
 	if err != nil {
+		return err
+	}
+	if err = removeIntentRouting(ctx, tx); err != nil {
 		return err
 	}
 	if err = ensureDispatchTraceEnvironment(ctx, tx); err != nil {
@@ -172,7 +168,7 @@ func (s *ProfileStore) Get(ctx context.Context, provider string, id int64) (*rou
 type profileScanner interface{ Scan(...any) error }
 
 func scanProfile(row profileScanner) (*routing.RoutingProfile, error) {
-	p := &routing.RoutingProfile{Members: []routing.RoutingMember{}, Rules: []routing.RoutingRule{}, Intents: []routing.IntentRule{}}
+	p := &routing.RoutingProfile{Members: []routing.RoutingMember{}, Rules: []routing.RoutingRule{}}
 	var durationMS int64
 	err := row.Scan(&p.ID, &p.Provider, &p.Name, &p.Enabled, &p.IsDefault, &p.CandidateMode, &p.Strategy, &p.AffinityMode, &p.MaxAttempts, &durationMS, &p.WaitForRecovery, &p.Revision)
 	p.MaxDuration = time.Duration(durationMS) * time.Millisecond
@@ -197,14 +193,14 @@ func loadProfileChildren(ctx context.Context, tx *sql.Tx, p *routing.RoutingProf
 	if err != nil {
 		return err
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT id,profile_id,kind,name,priority,enabled,match_model,require_stream,intent_id,mode,targets_json,fallback_to_default FROM routing_profile_rules WHERE profile_id=? ORDER BY priority,id`, p.ID)
+	rows, err = tx.QueryContext(ctx, `SELECT id,profile_id,kind,name,priority,enabled,match_model,require_stream,mode,targets_json,fallback_to_default FROM routing_profile_rules WHERE profile_id=? ORDER BY priority,id`, p.ID)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var r routing.RoutingRule
 		var targets string
-		if err = rows.Scan(&r.ID, &r.ProfileID, &r.Kind, &r.Name, &r.Priority, &r.Enabled, &r.MatchModel, &r.RequireStream, &r.IntentID, &r.Mode, &targets, &r.FallbackToDefault); err != nil {
+		if err = rows.Scan(&r.ID, &r.ProfileID, &r.Kind, &r.Name, &r.Priority, &r.Enabled, &r.MatchModel, &r.RequireStream, &r.Mode, &targets, &r.FallbackToDefault); err != nil {
 			rows.Close()
 			return err
 		}
@@ -213,28 +209,6 @@ func loadProfileChildren(ctx context.Context, tx *sql.Tx, p *routing.RoutingProf
 			return err
 		}
 		p.Rules = append(p.Rules, r)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	rows, err = tx.QueryContext(ctx, `SELECT id,profile_id,name,description,priority,enabled,targets_json,mode,fallback_intent,fallback_to_default FROM routing_profile_intents WHERE profile_id=? ORDER BY priority,id`, p.ID)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var in routing.IntentRule
-		var targets string
-		if err = rows.Scan(&in.ID, &in.ProfileID, &in.Name, &in.Description, &in.Priority, &in.Enabled, &targets, &in.Mode, &in.FallbackIntent, &in.FallbackToDefault); err != nil {
-			rows.Close()
-			return err
-		}
-		if err = json.Unmarshal([]byte(targets), &in.Targets); err != nil {
-			rows.Close()
-			return err
-		}
-		p.Intents = append(p.Intents, in)
 	}
 	err = rows.Err()
 	rows.Close()
@@ -251,14 +225,7 @@ func loadProfileChildren(ctx context.Context, tx *sql.Tx, p *routing.RoutingProf
 			return err
 		}
 	}
-	err = tx.QueryRowContext(ctx, `SELECT payload FROM routing_profile_classifier_config WHERE profile_id=?`, p.ID).Scan(&config)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal([]byte(config), &p.Classifier)
+	return nil
 }
 
 // Save updates the caller only after commit, including defaults and child IDs.
@@ -377,27 +344,7 @@ func writeProfileChildren(ctx context.Context, tx *sql.Tx, p *routing.RoutingPro
 		if marshalErr != nil {
 			return marshalErr
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO routing_profile_rules(id,profile_id,kind,name,priority,enabled,match_model,require_stream,intent_id,mode,targets_json,fallback_to_default,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, p.ID, r.Kind, r.Name, r.Priority, r.Enabled, r.MatchModel, r.RequireStream, r.IntentID, r.Mode, string(targets), r.FallbackToDefault, p.Revision); err != nil {
-			return err
-		}
-	}
-	for i := range p.Intents {
-		in := &p.Intents[i]
-		in.ProfileID = p.ID
-		targets, marshalErr := json.Marshal(in.Targets)
-		if marshalErr != nil {
-			return marshalErr
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO routing_profile_intents(id,profile_id,name,description,priority,enabled,targets_json,mode,fallback_intent,fallback_to_default) VALUES(?,?,?,?,?,?,?,?,?,?)`, in.ID, p.ID, in.Name, in.Description, in.Priority, in.Enabled, string(targets), in.Mode, in.FallbackIntent, in.FallbackToDefault); err != nil {
-			return err
-		}
-	}
-	if p.Classifier != nil {
-		config, marshalErr := json.Marshal(p.Classifier)
-		if marshalErr != nil {
-			return marshalErr
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO routing_profile_classifier_config(profile_id,payload) VALUES(?,?)`, p.ID, string(config)); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO routing_profile_rules(id,profile_id,kind,name,priority,enabled,match_model,require_stream,mode,targets_json,fallback_to_default,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, p.ID, r.Kind, r.Name, r.Priority, r.Enabled, r.MatchModel, r.RequireStream, r.Mode, string(targets), r.FallbackToDefault, p.Revision); err != nil {
 			return err
 		}
 	}
@@ -438,16 +385,11 @@ func validateProfileTargets(ctx context.Context, tx *sql.Tx, p *routing.RoutingP
 			return err
 		}
 	}
-	for _, in := range p.Intents {
-		if err := check(in.Targets); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 func deleteProfileChildren(ctx context.Context, tx *sql.Tx, id int64) error {
-	for _, table := range []string{"routing_profile_members", "routing_profile_rules", "routing_profile_intents", "routing_profile_classifier_config", "routing_profile_search_config"} {
+	for _, table := range []string{"routing_profile_members", "routing_profile_rules", "routing_profile_search_config"} {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE profile_id=?`, id); err != nil {
 			return err
 		}
@@ -478,7 +420,7 @@ func (s *ProfileStore) Delete(ctx context.Context, provider string, id int64) er
 	}
 	// Targets contain no recursive policy: references are checked solely to avoid
 	// silently orphaning configured member expansion when a profile is deleted.
-	rows, err := tx.QueryContext(ctx, `SELECT targets_json FROM routing_profile_rules WHERE profile_id<>? UNION ALL SELECT targets_json FROM routing_profile_intents WHERE profile_id<>?`, id, id)
+	rows, err := tx.QueryContext(ctx, `SELECT targets_json FROM routing_profile_rules WHERE profile_id<>?`, id)
 	if err != nil {
 		return err
 	}

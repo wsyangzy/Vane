@@ -40,18 +40,6 @@ type segmentMatcher func(path []pathElem) bool
 // 未覆盖路径仍由 Settings.UnsupportedPathAction 显式暴露给用户，不做静默跳过。
 func walkerForPath(requestPath string) segmentMatcher {
 	switch normalizeScanPath(requestPath) {
-	case "/internal/routing/classify":
-		return func(path []pathElem) bool {
-			if len(path) != 1 || path[0].Index >= 0 {
-				return false
-			}
-			switch path[0].Key {
-			case "current_user_message", "previous_user_message", "previous_assistant_text":
-				return true
-			default:
-				return false
-			}
-		}
 	case "/v1/messages", "/v1/messages/count_tokens":
 		return matchClaudeMessagesTextPath
 	case "/v1/responses", "/v1/responses/compact":

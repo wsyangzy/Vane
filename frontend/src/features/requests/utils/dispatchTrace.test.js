@@ -250,7 +250,7 @@ test('historical model-rule fallback starts at its actual target and keeps the d
 
 test('every rule kind lists only attempted resources and excludes skipped or unvisited targets', () => {
   for (const provider of ['claude', 'codex']) {
-    for (const kind of ['model', 'mapping', 'composite', 'non_stream', 'intent', 'default']) {
+    for (const kind of ['model', 'mapping', 'composite', 'non_stream', 'default']) {
       const a = candidate(provider, 1, 11, 101), b = candidate(provider, 2, 21, 201);
       const request = { provider, model: 'test-model', routeSnapshot: trace([
         { candidate: b, action: 'skipped', reason: 'candidate_busy' },

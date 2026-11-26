@@ -57,11 +57,8 @@ func TestSearchNativeSkipsTextRulesAndPreservesProtocolOnFailover(t *testing.T) 
 	p.ID, p.IsDefault = 1, true
 	p.Members = []routing.RoutingMember{{ChannelID: 1, GroupID: 11, Enabled: true}, {ChannelID: 2, GroupID: 22, Enabled: true}}
 	p.Rules = []routing.RoutingRule{{ID: 1, Enabled: true, Kind: "non_stream", Mode: "strict", Targets: []routing.RouteTarget{{ChannelID: 1, UpstreamModel: "wrong-model"}}}}
-	p.Classifier = &routing.ClassifierConfig{Enabled: true}
-	runtime.Replace(routing.RuntimeConfig{Provider: "codex", Profiles: []routing.RoutingProfile{p}, Candidates: []routing.DispatchCandidate{{Provider: "codex", ChannelID: 1, GroupID: 11, EndpointID: "1", Protocol: "responses", Enabled: true}, {Provider: "codex", ChannelID: 2, GroupID: 22, EndpointID: "2", Protocol: "responses", Enabled: true}}, PrepareCandidate: h.manager.PrepareDispatchCandidate, Supports: h.manager.SupportsDispatchCandidate, Classify: func(context.Context, routing.RoutingProfile, routing.TurnInput) (routing.IntentResult, error) {
-		t.Error("search invoked text classifier")
-		return routing.IntentResult{}, nil
-	}})
+
+	runtime.Replace(routing.RuntimeConfig{Provider: "codex", Profiles: []routing.RoutingProfile{p}, Candidates: []routing.DispatchCandidate{{Provider: "codex", ChannelID: 1, GroupID: 11, EndpointID: "1", Protocol: "responses", Enabled: true}, {Provider: "codex", ChannelID: 2, GroupID: 22, EndpointID: "2", Protocol: "responses", Enabled: true}}, PrepareCandidate: h.manager.PrepareDispatchCandidate, Supports: h.manager.SupportsDispatchCandidate})
 	row := attachSearchTracker(t, h)
 	req := httptest.NewRequest("POST", "/v1/alpha/search/native", strings.NewReader(nativeSearchBody))
 	req.Header.Set("X-Client-Identity", "search-client")

@@ -106,7 +106,7 @@ export const describeRouteSnapshot = (raw) => {
   if (!snapshot.kind && snapshot.profile_id && snapshot.decision?.kind) {
     const decision = snapshot.decision;
     const kind = decision.kind === 'model' ? 'model_rule' : decision.kind;
-    const label = { model_rule: '模型路由', mapping: '模型映射', non_stream: '非流改道', composite: '条件路由', intent: '意图路由', default: '默认编排', explicit: '指定资源' }[kind] || kind;
+    const label = { model_rule: '模型路由', mapping: '模型映射', non_stream: '非流改道', composite: '条件路由', default: '默认编排', explicit: '指定资源' }[kind] || '方案调度';
     return {
       kind,
       title: `${label}（${snapshot.profile_name || `方案 #${snapshot.profile_id}`}${decision.rule_id ? ` · 规则 #${decision.rule_id}` : ''}）`,
@@ -121,7 +121,6 @@ export const describeRouteSnapshot = (raw) => {
   const source = snapshot.pool_name || snapshot.channel || '激活渠道';
   const ruleName = `「${snapshot.name || `#${snapshot.id || '?'}`}」`;
   const titles = {
-    routing_classifier: '路由意图分类',
     // 规则挂在渠道上；早期快照没有 channel 字段
     pool: `账号池（${source}）`,
     model_rule: snapshot.pool_name ? `模型规则${ruleName}（${source}）` : snapshot.channel ? `模型规则${ruleName}（${snapshot.channel}）` : `模型规则${ruleName}`,
@@ -136,7 +135,7 @@ export const describeRouteSnapshot = (raw) => {
   if (snapshot.member) { const member = snapshot.member; stage = `${member.pool_name || source} · ${member.tier === 'backup' ? '备用' : '主要'} · 账号 #${member.group_id}`; }
   return {
     kind,
-    title: titles[kind] || kind,
+    title: titles[kind] || '历史路由',
     mode: routeModeLabel(kind, snapshot.mode),
     stage
   };

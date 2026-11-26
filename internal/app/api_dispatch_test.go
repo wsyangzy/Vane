@@ -3,25 +3,21 @@ package app
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/wsyangzy/Vane/internal/buildinfo"
 	"github.com/wsyangzy/Vane/internal/config"
-	"github.com/wsyangzy/Vane/internal/privacy"
 	claudeendpoint "github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
 	claudestore "github.com/wsyangzy/Vane/internal/providers/claude/store"
 	codexproxy "github.com/wsyangzy/Vane/internal/providers/codex/proxy"
 	"github.com/wsyangzy/Vane/internal/routing"
 	routingstore "github.com/wsyangzy/Vane/internal/routing/store"
-	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 func TestDispatchAndRequestHistoryUseSameBuildEnvironment(t *testing.T) {
@@ -401,108 +397,4 @@ func TestRoutingQuotaLearningValidatesBindingAndRetainsFactsOnFailure(t *testing
 			require.Equal(t, 42.0, *quota[0].UsedPercent)
 		})
 	}
-}
-
-func TestRoutingClassifierProcessesAllContextBeforeNetwork(t *testing.T) {
-	a, _ := dispatchTestApp(t, "claude")
-	ctx := context.Background()
-	store := privacy.NewStore(a.storeDB)
-	require.NoError(t, store.EnsureSchema(ctx))
-	settings := privacy.DefaultSettings()
-	settings.Mode = privacy.ModeRedact
-	require.NoError(t, store.SaveSettings(ctx, settings))
-	_, err := store.CreateRule(ctx, privacy.Rule{Name: "private marker", Enabled: true, MatchType: privacy.MatchTypeLiteral, Pattern: "PRIVATE", Action: privacy.ActionRedact, ReplacementMode: privacy.ReplacementReversible, Source: privacy.SourceCustom})
-	require.NoError(t, err)
-	a.privacyService = privacy.NewService(store)
-	require.NoError(t, a.privacyService.Reload(ctx))
-	p := routing.DefaultProfile("claude")
-	p.Intents = []routing.IntentRule{{ID: "coding", Description: "programming", Enabled: true}}
-	prompt, err := a.classifierPrompt(ctx, p, routing.TurnInput{CurrentUserMessage: "current PRIVATE", PreviousUserMessage: "previous PRIVATE", PreviousAssistantText: "assistant PRIVATE"})
-	require.NoError(t, err)
-	require.NotContains(t, prompt, "PRIVATE")
-	require.Equal(t, 3, strings.Count(prompt, "__REDACTED_"))
-	var decoded map[string]any
-	require.NoError(t, json.Unmarshal([]byte(prompt), &decoded))
-	require.Len(t, decoded["input"], 3)
-	// A match crossing the retained head boundary must be redacted before
-	// truncation can split it into a string the privacy rule no longer matches.
-	longMessage := strings.Repeat("前", 2998) + "PRIVATE" + strings.Repeat("中", 2000) + strings.Repeat("尾", 1000)
-	body, err := json.Marshal(map[string]any{"input": longMessage})
-	require.NoError(t, err)
-	turn := routing.ResolveTurn(ctx, http.Header{"X-Codex-Turn-Id": {"test-turn"}}, body, "codex")
-	prompt, err = a.classifierPrompt(ctx, p, turn)
-	require.NoError(t, err)
-	var limited struct {
-		Input map[string]string `json:"input"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(prompt), &limited))
-	require.NotContains(t, limited.Input["current_user_message"], "PR")
-	require.Contains(t, limited.Input["current_user_message"], "[context truncated]")
-	require.True(t, strings.HasSuffix(limited.Input["current_user_message"], strings.Repeat("尾", 1000)))
-	settings = privacy.DefaultSettings()
-	settings.Mode = privacy.ModeDisabled
-	require.NoError(t, store.SaveSettings(ctx, settings))
-	require.NoError(t, a.privacyService.Reload(ctx))
-	_, err = a.classifierPrompt(ctx, p, routing.TurnInput{CurrentUserMessage: "PRIVATE"})
-	require.ErrorContains(t, err, "classifier_privacy_rejected")
-}
-
-func TestRoutingClassifierSendsRedactedInputWithSelectedMultiKeyCredential(t *testing.T) {
-	a, members := dispatchTestApp(t, "claude")
-	ctx := context.Background()
-	store := privacy.NewStore(a.storeDB)
-	require.NoError(t, store.EnsureSchema(ctx))
-	settings := privacy.DefaultSettings()
-	settings.Mode = privacy.ModeRedact
-	require.NoError(t, store.SaveSettings(ctx, settings))
-	a.privacyService = privacy.NewService(store)
-	_, err := store.CreateRule(ctx, privacy.Rule{Name: "private", Enabled: true, MatchType: privacy.MatchTypeLiteral, Pattern: "PRIVATE", Action: privacy.ActionRedact, ReplacementMode: privacy.ReplacementReversible, Source: privacy.SourceCustom})
-	require.NoError(t, err)
-	require.NoError(t, a.privacyService.Reload(ctx))
-	sends := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sends++
-		require.Equal(t, "selected-key", r.Header.Get("X-Api-Key"))
-		require.Empty(t, r.Header.Get("X-Relay-Key"))
-		body, _ := io.ReadAll(r.Body)
-		require.NotContains(t, string(body), "PRIVATE")
-		require.Contains(t, string(body), "__REDACTED_")
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"type":"message","stop_reason":"end_turn","content":[{"type":"text","text":"{\"intent_id\":\"coding\",\"confidence\":0.95}"}],"usage":{"input_tokens":12,"output_tokens":4,"cache_read_input_tokens":3}}`)
-	}))
-	defer server.Close()
-	cfg := config.NewDefaultConfig()
-	cfg.Endpoints = []config.EndpointConfig{{Name: "first", Channel: "first", CredentialGroupID: members[0].GroupID, URL: server.URL, SupportedModels: []string{"router"}, ApiKeys: []config.ApiKeyConfig{{Name: "multi", Value: "selected-key"}}, Headers: map[string]string{"X-Relay-Key": "local-key-must-not-leak"}}}
-	a.endpointManager = claudeendpoint.NewManager(cfg)
-	p := routing.DefaultProfile("claude")
-	p.Name = "classifier"
-	p.Classifier = &routing.ClassifierConfig{Enabled: true, Model: "router", Provider: "claude", ChannelID: members[0].ChannelID, GroupID: members[0].GroupID}
-	p.Intents = []routing.IntentRule{{ID: "coding", Name: "coding", Description: "programming", Enabled: true}}
-	a.usageTracker = &tracking.UsageTracker{}
-	a.usageTracker.UpdatePricing(map[string]tracking.ModelPricing{tracking.ModelPricingKey("claude", "router", ""): {Input: 10, Output: 20, CacheRead: 1}})
-	balanceInput := routing.ManualBalanceUpdate{Provider: "claude", ChannelID: members[0].ChannelID, GroupID: members[0].GroupID, Action: "calibrate", AmountUSD: "1", StopWhenExhausted: true, OperationID: "classifier-initial-balance"}
-	_, err = a.UpdateManualBalance(balanceInput)
-	require.NoError(t, err)
-	result, err := a.callIntentClassifier(ctx, p, routing.TurnInput{CurrentUserMessage: "PRIVATE request", PreviousUserMessage: "PRIVATE context", PreviousAssistantText: "PRIVATE summary"})
-	require.NoError(t, err)
-	require.Equal(t, "coding", result.IntentID)
-	require.EqualValues(t, 12, result.InputTokens)
-	require.EqualValues(t, 4, result.OutputTokens)
-	require.Equal(t, 1, sends)
-
-	p.Classifier.Model = "unsupported"
-	_, err = a.callIntentClassifier(ctx, p, routing.TurnInput{CurrentUserMessage: "request"})
-	require.ErrorContains(t, err, "classifier_candidate_unavailable")
-	require.Equal(t, 1, sends, "unsupported classifier models must be rejected before sending")
-	p.Classifier.Model = "router"
-	balances, err := a.ListManualBalances("claude")
-	require.NoError(t, err)
-	require.Len(t, balances, 1)
-	require.Equal(t, "0.000203", balances[0].SpentUSD)
-	balanceInput.AmountUSD, balanceInput.Revision, balanceInput.OperationID = "0", balances[0].Revision, "classifier-empty-balance"
-	_, err = a.UpdateManualBalance(balanceInput)
-	require.NoError(t, err)
-	_, err = a.callIntentClassifier(ctx, p, routing.TurnInput{CurrentUserMessage: "request"})
-	require.ErrorContains(t, err, "classifier_candidate_unavailable")
-	require.Equal(t, 1, sends, "exhausted classifier balance must be rejected before sending")
 }

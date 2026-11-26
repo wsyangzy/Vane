@@ -41,9 +41,6 @@ func (s *RoutingService) SetDefaultRoutingProfile(provider string, id int64) err
 func (s *RoutingService) PreviewDispatch(input app.DispatchInput) (routing.DispatchPlan, error) {
 	return s.app.PreviewDispatch(input)
 }
-func (s *RoutingService) ClassifyIntent(input app.DispatchInput) (routing.IntentResult, error) {
-	return s.app.ClassifyIntent(input)
-}
 func (s *RoutingService) ListRoutingQuota(provider string) ([]routing.QuotaSnapshot, error) {
 	return s.app.ListRoutingQuota(provider)
 }

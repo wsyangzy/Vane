@@ -3,7 +3,7 @@ package routing
 import "time"
 
 // SessionAffinity contains only a hashed lookup key and configuration identity.
-// Classification results and in-progress turns are never restored after restart.
+// In-progress turns and rule decisions are never restored after restart.
 type SessionAffinity struct {
 	Provider     string    `json:"provider"`
 	ProfileID    int64     `json:"profile_id"`

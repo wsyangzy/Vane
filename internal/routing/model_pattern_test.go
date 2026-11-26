@@ -68,7 +68,7 @@ func TestRegexpModelRulePriority(t *testing.T) {
 		{ID: 5, Kind: "model", Enabled: true, MatchModel: "gpt-test", Priority: 1000, Targets: targets},
 	}
 	for _, want := range []int64{5, 4, 3, 2, 1} {
-		if got := ResolveDecision(p, "gpt-test", false, ""); got.RuleID != want {
+		if got := ResolveDecision(p, "gpt-test", false); got.RuleID != want {
 			t.Fatalf("selected rule %d, want %d", got.RuleID, want)
 		}
 		p.Rules = p.Rules[:len(p.Rules)-1]

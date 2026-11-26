@@ -436,7 +436,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
   const modelRewriteLabel = modelRewriteLabelMap[modelRewriteSource] || (modelRewriteSource ? '模型改写' : '');
   const hasModelRewrite = Boolean(modelRewriteLabel && modelRewriteTarget);
   const route = describeRouteSnapshot(request.routeSnapshot || request.route_snapshot);
-  const isRoutingClassifier = request.path === '/internal/routing/classify' || route?.kind === 'routing_classifier';
   const routeExecution = describeRouteExecution(request.routeSnapshot || request.route_snapshot);
   const reasoningRaw = request.reasoningEffort || request.reasoning_effort || '';
   const reasoning = parseReasoningConfig(reasoningRaw);
@@ -543,7 +542,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 <div className="flex items-center justify-between gap-3 rounded-xl border border-orange-100 bg-orange-50/70 p-3.5">
                   <div className="flex items-center gap-2">
                     <DollarSign className="w-4 h-4 text-orange-500" />
-                    <span className="text-sm font-medium text-slate-600">{isRoutingClassifier ? '路由分类成本' : estimatedCost ? '当前估算成本' : '总成本'}</span>
+                    <span className="text-sm font-medium text-slate-600">{estimatedCost ? '当前估算成本' : '总成本'}</span>
                   </div>
                   <div className="text-2xl font-bold text-orange-600 font-mono">
                     {estimatedCost && '≈ '}{formatCost(request.cost)}

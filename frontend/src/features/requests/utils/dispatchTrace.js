@@ -9,7 +9,7 @@ const parseSnapshot = (value) => {
 };
 const identity = (candidate) => JSON.stringify([candidate.provider, candidate.channel, candidate.credential, candidate.endpoint, candidate.model, candidate.protocol, candidate.state_version ?? candidate.stateVersion]);
 
-export const dispatchDecisionLabel = (kind) => ({ default: '默认编排', model: '模型路由', mapping: '模型映射', non_stream: '非流改道', composite: '条件路由', intent: '意图路由', explicit: '指定资源' }[kind] || '方案调度');
+export const dispatchDecisionLabel = (kind) => ({ default: '默认编排', model: '模型路由', mapping: '模型映射', non_stream: '非流改道', composite: '条件路由', explicit: '指定资源' }[kind] || '方案调度');
 
 // Current resources resolve names only. Historical decisions and counts always
 // come from the request snapshot, even when a profile is edited or deleted.

@@ -81,40 +81,15 @@ func TestRuleDefaultsUpdateInheritedRulesAndReusedTurnsWithoutOverridingExplicit
 	}
 }
 
-func TestIntentDefaultsReachFallbackChainAndPreserveExplicitOverrides(t *testing.T) {
-	deny := false
-	profile := RoutingProfile{Intents: []IntentRule{{ID: "first"}, {ID: "second", FallbackToDefault: &deny}}}
-	decision := DispatchDecision{Kind: "intent", IntentID: "first", FallbackIntents: []IntentRoute{{IntentID: "second"}}}
-	got := applyRuleDefaults(profile, decision, &RuleDefaults{FallbackToDefault: true})
-	if !got.FallbackToDefault || got.FallbackIntents[0].FallbackToDefault {
-		t.Fatal("intent defaults or explicit fallback override lost")
-	}
-	got.FallbackIntents[0].Mode = ModeFallback
-	if decision.FallbackIntents[0].Mode != "" {
-		t.Fatal("resolving defaults changed a cached decision")
-	}
-}
-
 func TestEachRuleKindResolvesItsSavedDefaultInActualAndPreviewPlans(t *testing.T) {
-	for _, kind := range []string{"model", "composite", "mapping", "non_stream", "intent"} {
+	for _, kind := range []string{"model", "composite", "mapping", "non_stream"} {
 		for _, enabled := range []bool{false, true} {
 			config := runtimeTestConfig()
 			config.RuleDefaults = &RuleDefaults{FallbackToDefault: enabled}
 			profile := &config.Profiles[0]
-			profile.Classifier = &ClassifierConfig{Enabled: true}
-			profile.Intents = []IntentRule{{ID: "coding", Enabled: true}}
 			profile.Rules = []RoutingRule{{ID: 1, Enabled: true, Kind: kind, MatchModel: "*", Targets: []RouteTarget{{ChannelID: 1, GroupID: 1, UpstreamModel: "mapped"}}}}
-			if kind == "intent" {
-				profile.Rules[0].IntentID = "coding"
-				config.Classify = func(context.Context, RoutingProfile, TurnInput) (IntentResult, error) {
-					return IntentResult{IntentID: "coding", Confidence: 1}, nil
-				}
-			}
 			runtime := NewProfileRuntime(config)
 			for _, preview := range []bool{false, true} {
-				if preview && kind == "intent" {
-					continue // Preview deliberately does not invoke the classifier.
-				}
 				plan := runtime.Plan(context.Background(), 1, "gpt-test", false, runtimeTestTurn("rule"), preview)
 				if plan.Decision.Kind != kind || plan.Decision.FallbackToDefault != enabled || len(plan.Stages) != 1+btoi(enabled) {
 					t.Fatalf("kind=%s enabled=%t preview=%t decision=%+v stages=%d", kind, enabled, preview, plan.Decision, len(plan.Stages))

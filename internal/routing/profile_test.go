@@ -2,7 +2,6 @@ package routing
 
 import (
 	"encoding/json"
-	"math"
 	"strings"
 	"testing"
 	"time"
@@ -25,22 +24,17 @@ func TestProfileDefaultsAndPersistentRuleIDs(t *testing.T) {
 	}
 }
 
-func TestProfileRejectsCyclesAmbiguousTargetsAndInvalidClassifier(t *testing.T) {
+func TestProfileRejectsAmbiguousTargetsAndInvalidPolicy(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		change func(*RoutingProfile)
 	}{
-		{"intent_cycle", func(p *RoutingProfile) {
-			p.Intents = []IntentRule{{ID: "a", FallbackIntent: "b"}, {ID: "b", FallbackIntent: "a"}}
-		}},
-		{"missing_fallback", func(p *RoutingProfile) { p.Intents = []IntentRule{{ID: "a", FallbackIntent: "missing"}} }},
 		{"ambiguous_target", func(p *RoutingProfile) {
 			p.Rules = []RoutingRule{{Kind: "non_stream", Targets: []RouteTarget{{ProfileID: 2, ChannelID: 3}}}}
 		}},
 		{"budget", func(p *RoutingProfile) { p.MaxAttempts = 101 }},
 		{"disabled_default", func(p *RoutingProfile) { p.Enabled = false; p.IsDefault = true }},
 		{"duplicate_member", func(p *RoutingProfile) { p.Members = []RoutingMember{{ChannelID: 1}, {ChannelID: 1}} }},
-		{"non_finite_confidence", func(p *RoutingProfile) { p.Classifier = &ClassifierConfig{Confidence: math.NaN()} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := DefaultProfile("claude")

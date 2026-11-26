@@ -56,6 +56,7 @@ type SettingsStore interface {
 	Get(ctx context.Context, category, key string) (*SettingRecord, error)
 	Set(ctx context.Context, category, key, value string) error
 	Delete(ctx context.Context, category, key string) error
+	DeleteScoped(ctx context.Context, provider, category, key string) error
 
 	// 批量操作
 	GetByCategoryScoped(ctx context.Context, provider, category string) ([]*SettingRecord, error)

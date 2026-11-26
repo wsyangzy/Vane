@@ -14,14 +14,15 @@ import {
   validateRouteTargets
 } from './routeTargets.js';
 
-test('classifier snapshots have a distinct route title for recorded classification costs', () => {
-  const route = describeRouteSnapshot('{"kind":"routing_classifier","profile_id":12}');
-  assert.equal(route.kind, 'routing_classifier');
-  assert.equal(route.title, '路由意图分类');
+test('retired route snapshots retain generic historical context without an active feature label', () => {
+  const historical = describeRouteSnapshot({ kind: 'routing_classifier', profile_id: 1 });
+  assert.equal(historical.title, '历史路由');
+  const decision = describeRouteSnapshot({ profile_id: 1, profile_name: '原方案', decision: { kind: 'intent' } });
+  assert.equal(decision.title, '方案调度（原方案）');
 });
 
 test('unified provider traces preserve route and mapping markers without depending on a model rewrite', () => {
-  for (const [decisionKind, kind, label] of [['model', 'model_rule', '模型路由'], ['mapping', 'mapping', '模型映射'], ['non_stream', 'non_stream', '非流改道'], ['composite', 'composite', '条件路由'], ['intent', 'intent', '意图路由']]) {
+  for (const [decisionKind, kind, label] of [['model', 'model_rule', '模型路由'], ['mapping', 'mapping', '模型映射'], ['non_stream', 'non_stream', '非流改道'], ['composite', 'composite', '条件路由']]) {
     const snapshot = { profile_id: 12, profile_name: '日常中转', decision: { kind: decisionKind, rule_id: 3, mode: 'prefer', reused_turn: true } };
     for (const raw of [snapshot, JSON.stringify(snapshot)]) {
       assert.deepEqual(describeRouteSnapshot(raw), { kind, title: `${label}（日常中转 · 规则 #3）`, mode: '优先规则目标', stage: '复用本轮决策' });

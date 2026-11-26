@@ -29,23 +29,21 @@ const (
 // Durations use Go's nanosecond representation at the API boundary. The UI
 // bridge must explicitly convert them to milliseconds; secrets never belong here.
 type RoutingProfile struct {
-	ID              int64             `json:"id"`
-	Provider        string            `json:"provider"`
-	Name            string            `json:"name"`
-	Enabled         bool              `json:"enabled"`
-	IsDefault       bool              `json:"is_default"`
-	CandidateMode   CandidateMode     `json:"candidate_mode"`
-	Strategy        string            `json:"strategy"`
-	AffinityMode    AffinityMode      `json:"affinity_mode"`
-	MaxAttempts     int               `json:"max_attempts"`
-	MaxDuration     time.Duration     `json:"max_duration"`
-	WaitForRecovery bool              `json:"wait_for_recovery"` // Legacy storage/API field; request adapters apply the global policy.
-	Members         []RoutingMember   `json:"members"`
-	Rules           []RoutingRule     `json:"rules"`
-	Intents         []IntentRule      `json:"intents"`
-	Classifier      *ClassifierConfig `json:"classifier,omitempty"`
-	Search          *SearchPolicy     `json:"search,omitempty"`
-	Revision        int64             `json:"revision"`
+	ID              int64           `json:"id"`
+	Provider        string          `json:"provider"`
+	Name            string          `json:"name"`
+	Enabled         bool            `json:"enabled"`
+	IsDefault       bool            `json:"is_default"`
+	CandidateMode   CandidateMode   `json:"candidate_mode"`
+	Strategy        string          `json:"strategy"`
+	AffinityMode    AffinityMode    `json:"affinity_mode"`
+	MaxAttempts     int             `json:"max_attempts"`
+	MaxDuration     time.Duration   `json:"max_duration"`
+	WaitForRecovery bool            `json:"wait_for_recovery"` // Legacy storage/API field; request adapters apply the global policy.
+	Members         []RoutingMember `json:"members"`
+	Rules           []RoutingRule   `json:"rules"`
+	Search          *SearchPolicy   `json:"search,omitempty"`
+	Revision        int64           `json:"revision"`
 }
 
 type RoutingMember struct {
@@ -56,7 +54,7 @@ type RoutingMember struct {
 	Weight    int   `json:"weight"`
 	Enabled   bool  `json:"enabled"`
 	// Retained for stored-data compatibility; member orchestration no longer
-	// overrides models. Only explicit rule/intent targets may specify one.
+	// overrides models. Only explicit rule targets may specify one.
 	UpstreamModel string `json:"upstream_model"`
 }
 
@@ -76,35 +74,10 @@ type RoutingRule struct {
 	Priority      int           `json:"priority"`
 	MatchModel    string        `json:"match_model"`
 	RequireStream *bool         `json:"require_stream,omitempty"`
-	IntentID      string        `json:"intent_id"`
 	Mode          string        `json:"mode"`
 	Targets       []RouteTarget `json:"targets"`
 	// nil uses the documented model=true, non_stream=false default.
 	FallbackToDefault *bool `json:"fallback_to_default,omitempty"`
-}
-
-type IntentRule struct {
-	ID                string        `json:"id"`
-	ProfileID         int64         `json:"profile_id"`
-	Name              string        `json:"name"`
-	Description       string        `json:"description"`
-	Enabled           bool          `json:"enabled"`
-	Priority          int           `json:"priority"`
-	Targets           []RouteTarget `json:"targets"`
-	Mode              string        `json:"mode"`
-	FallbackIntent    string        `json:"fallback_intent"`
-	FallbackToDefault *bool         `json:"fallback_to_default,omitempty"`
-}
-
-type ClassifierConfig struct {
-	Enabled     bool          `json:"enabled"`
-	Model       string        `json:"model"`
-	Provider    string        `json:"provider"`
-	ChannelID   int64         `json:"channel_id"`
-	GroupID     int64         `json:"group_id"`
-	Timeout     time.Duration `json:"timeout"`
-	Confidence  float64       `json:"confidence"`
-	FailureMode string        `json:"failure_mode"`
 }
 
 type QuotaSnapshot struct {
@@ -175,7 +148,7 @@ func (c DispatchCandidate) Identity() Candidate {
 }
 
 func DefaultProfile(provider string) RoutingProfile {
-	return RoutingProfile{Provider: provider, Enabled: true, CandidateMode: OrderedChannels, Strategy: StrategySmart, AffinityMode: AffinityTurn, MaxAttempts: 10, MaxDuration: time.Minute, Members: []RoutingMember{}, Rules: []RoutingRule{}, Intents: []IntentRule{}}
+	return RoutingProfile{Provider: provider, Enabled: true, CandidateMode: OrderedChannels, Strategy: StrategySmart, AffinityMode: AffinityTurn, MaxAttempts: 10, MaxDuration: time.Minute, Members: []RoutingMember{}, Rules: []RoutingRule{}}
 }
 
 func mappingTargetAllowed(p RoutingProfile, target RouteTarget) bool {
@@ -256,19 +229,6 @@ func ValidateProfile(p *RoutingProfile) error {
 		}
 		m.UpstreamModel = strings.TrimSpace(m.UpstreamModel)
 	}
-	intents := map[string]bool{}
-	for i := range p.Intents {
-		in := &p.Intents[i]
-		in.ID = strings.TrimSpace(in.ID)
-		if in.ID == "" || intents[in.ID] {
-			return errors.New("intent_id_invalid")
-		}
-		intents[in.ID] = true
-		in.ProfileID = p.ID
-		if in.Mode == "" {
-			in.Mode = ModePrefer
-		}
-	}
 	validateTargets := func(ts []RouteTarget) error {
 		for _, t := range ts {
 			if (t.ProfileID > 0) == (t.ChannelID > 0) || t.GroupID < 0 || t.ProfileID < 0 || t.ChannelID < 0 {
@@ -313,10 +273,6 @@ func ValidateProfile(p *RoutingProfile) error {
 				return err
 			}
 		case "non_stream":
-		case "intent":
-			if !intents[r.IntentID] {
-				return errors.New("rule_intent_missing")
-			}
 		default:
 			return errors.New("rule_kind_invalid")
 		}
@@ -332,50 +288,6 @@ func ValidateProfile(p *RoutingProfile) error {
 					return errors.New("mapping_target_invalid")
 				}
 			}
-		}
-	}
-	for _, in := range p.Intents {
-		if NormalizeMode(in.Mode) == "" {
-			return errors.New("intent_mode_invalid")
-		}
-		if err := validateTargets(in.Targets); err != nil {
-			return err
-		}
-		if in.FallbackIntent != "" && !intents[in.FallbackIntent] {
-			return errors.New("fallback_intent_missing")
-		}
-		visited := map[string]bool{in.ID: true}
-		next := in.FallbackIntent
-		for next != "" {
-			if visited[next] {
-				return errors.New("fallback_intent_cycle")
-			}
-			visited[next] = true
-			for _, other := range p.Intents {
-				if other.ID == next {
-					next = other.FallbackIntent
-					break
-				}
-			}
-		}
-	}
-	if c := p.Classifier; c != nil {
-		if c.Timeout == 0 {
-			c.Timeout = 8 * time.Second
-		}
-		if c.FailureMode == "" {
-			c.FailureMode = "default"
-		}
-		if c.Timeout < time.Millisecond || c.Timeout > 30*time.Second || math.IsNaN(c.Confidence) || math.IsInf(c.Confidence, 0) || c.Confidence < 0 || c.Confidence > 1 {
-			return errors.New("classifier_config_invalid")
-		}
-		switch c.FailureMode {
-		case "previous", "default", "no_intent":
-		default:
-			return errors.New("classifier_failure_mode_invalid")
-		}
-		if c.Enabled && (c.Model == "" || c.ChannelID <= 0 || c.GroupID <= 0 || (c.Provider != "claude" && c.Provider != "codex")) {
-			return errors.New("classifier_candidate_missing")
 		}
 	}
 	return nil

@@ -267,12 +267,10 @@ func TestProfileRoundTripFallbackAndProviderIsolation(t *testing.T) {
 	yes, no := true, false
 	p.IsDefault = true
 	p.Rules = []routing.RoutingRule{{ID: 11, Enabled: true, Kind: "model", Name: "model-rule", MatchModel: "claude-*", Priority: 2, Targets: []routing.RouteTarget{{ChannelID: 2, GroupID: 4}}, FallbackToDefault: &yes}, {ID: 12, Enabled: true, Kind: "non_stream", Name: "nonstream", Priority: 3, RequireStream: &no, Targets: []routing.RouteTarget{{ChannelID: 1}}, FallbackToDefault: &no}}
-	p.Intents = []routing.IntentRule{{ID: "coding", Name: "编程", Description: "代码任务", Enabled: true, Targets: []routing.RouteTarget{{ChannelID: 2}}, FallbackIntent: "general", FallbackToDefault: &yes}, {ID: "general", Name: "常规", Enabled: true}}
-	p.Classifier = &routing.ClassifierConfig{Enabled: true, Provider: "codex", ChannelID: 3, GroupID: 5, Model: "gpt-test", FailureMode: "previous"}
 	if err := s.Save(ctx, &p); err != nil {
 		t.Fatal(err)
 	}
-	if p.ID == 0 || p.Revision != 1 || p.Rules[0].ProfileID != p.ID || p.Classifier.Timeout != 8*time.Second {
+	if p.ID == 0 || p.Revision != 1 || p.Rules[0].ProfileID != p.ID {
 		t.Fatalf("missing committed defaults: %+v", p)
 	}
 	got, err := s.Get(ctx, "claude", p.ID)
@@ -306,15 +304,13 @@ func TestProfileRoundTripFallbackAndProviderIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	p = *previous
-	p.Classifier = nil
 	p.Rules = nil
-	p.Intents = nil
 	p.Members = nil
 	if err = s.Save(ctx, &p); err != nil {
 		t.Fatal(err)
 	}
 	got, err = s.Get(ctx, "claude", p.ID)
-	if err != nil || got.Classifier != nil || len(got.Rules) != 0 || len(got.Intents) != 0 || len(got.Members) != 0 {
+	if err != nil || len(got.Rules) != 0 || len(got.Members) != 0 {
 		t.Fatalf("children not removed: %+v %v", got, err)
 	}
 }
@@ -416,7 +412,7 @@ func TestProfileTargetsMustShareProviderAndReferencedDeleteBlocked(t *testing.T)
 		t.Fatal(err)
 	}
 	wrong := testRoutingProfile("claude", "cross-provider")
-	wrong.Intents = []routing.IntentRule{{ID: "coding", Enabled: true, Targets: []routing.RouteTarget{{ProfileID: target.ID}}}}
+	wrong.Rules = []routing.RoutingRule{{Kind: "model", MatchModel: "*", Enabled: true, Targets: []routing.RouteTarget{{ProfileID: target.ID}}}}
 	if err := s.Save(ctx, &wrong); err == nil {
 		t.Fatal("cross-provider profile target accepted")
 	}
