@@ -168,6 +168,33 @@ func validateSettingValue(provider SettingsProvider, category, key, value string
 	if err := validateSettingsProvider(provider); err != nil {
 		return err
 	}
+	if category == CategoryRequest && strings.HasPrefix(key, "codex_history_") {
+		if provider != ProviderGlobal {
+			return fmt.Errorf("Codex 会话恢复设置使用 global 作用域")
+		}
+		switch key {
+		case "codex_history_directory":
+			if value != "" && (!filepath.IsAbs(value) || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\r\n\x00")) {
+				return fmt.Errorf("恢复状态目录必须为绝对路径，或留空使用默认目录")
+			}
+		case "codex_history_persistence", "codex_history_client_lookup":
+			if value != "true" && value != "false" {
+				return fmt.Errorf("恢复设置必须选择开启或关闭")
+			}
+		case "codex_history_retention_days", "codex_history_max_mib":
+			n, err := strconv.Atoi(value)
+			low, high := 1, 90
+			if key == "codex_history_max_mib" {
+				low, high = 8, 1024
+			}
+			if err != nil || n < low || n > high {
+				return fmt.Errorf("恢复设置必须为 %d–%d 的整数", low, high)
+			}
+		default:
+			return fmt.Errorf("未知的 Codex 恢复设置")
+		}
+		return nil
+	}
 	if category == CategoryTimezone {
 		return fmt.Errorf("时区固定为北京时间（UTC+8），不支持修改")
 	}
@@ -200,7 +227,7 @@ func validateSettingValue(provider SettingsProvider, category, key, value string
 	current := category == CategoryServer || category == CategoryHealth || category == CategoryAuth ||
 		category == CategoryTokenCounting || category == CategoryCache || category == CategoryLogging ||
 		category == CategoryRetry && IsCurrentRetrySetting(key) ||
-		category == CategoryRequest && (key == "global_timeout" || key == "response_header_timeout" || key == "default_response_header_timeout") ||
+		category == CategoryRequest && (key == "global_timeout" || key == "response_header_timeout" || key == "default_response_header_timeout" || key == "codex_encrypted_history_recovery") ||
 		category == CategoryRetention && key == "retention_days"
 	if current {
 		if provider != ProviderGlobal {

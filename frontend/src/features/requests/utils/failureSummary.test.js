@@ -7,8 +7,53 @@ import {
   extractFailureCode,
   failureNeedsManualIntervention,
   getRequestFailureDetails,
+  getEncryptedHistoryRecovery,
+  getCompletedReasoningRecovery,
   shouldNotifyFailure
 } from './failureSummary.js';
+
+test('encrypted history errors remain primary while the budget is a separate stop reason', () => {
+  assert.equal(shouldNotifyFailure('invalid_encrypted_content'), true);
+  const raw = JSON.stringify({ error: { code: 'invalid_encrypted_content', type: 'invalid_request_error', message: 'bad response status code 400' } });
+  for (const reason of ['retry_deadline_exceeded', 'invalid_encrypted_content']) {
+    const request = { provider: 'codex', failure_reason: reason, last_failure_reason: raw,
+      http_status_is_upstream: true, http_status_code: 400,
+      route_snapshot: { attempts: 2, stop_reason: 'retry_deadline_exceeded', max_duration_ms: 60000 },
+      endpoint_chain: [{ attempts: 1, status_code: 400, error: raw }, { attempts: 1, status_code: 400, error: raw }] };
+    const details = getRequestFailureDetails(request);
+    assert.equal(details.upstreamExplanation.code, 'invalid_encrypted_content');
+    assert.match(details.upstreamExplanation.advice, /会话降级恢复/);
+    assert.equal(details.upstreamDetail, raw);
+    assert.equal(details.localTitle, '重试已停止');
+    assert.match(details.localSummary, /总时长/);
+    assert.ok(details.stopContext.includes('实际向上游发送 2 次'));
+    assert.equal(buildFailureToast(request).message[0], '上游拒绝了会话中的加密历史内容');
+  }
+});
+
+test('history fallback evidence survives serialization and does not claim recovery succeeded', () => {
+  const chain = [{ status_code: 400 }, { status_code: 200, removed_reasoning_items: 140 }];
+  assert.equal(getEncryptedHistoryRecovery({ endpoint_chain: JSON.stringify(chain) }), 140);
+  assert.equal(getEncryptedHistoryRecovery({ endpointChain: chain }), 140);
+  assert.equal(getEncryptedHistoryRecovery({ endpointChain: [{ removed_reasoning_items: -1 }, { removed_reasoning_items: 'oops' }] }), 0);
+  const details = getRequestFailureDetails({ http_status_is_upstream: true, http_status_code: 400, failure_reason: 'invalid_encrypted_content',
+    endpoint_chain: [{ status_code: 400, removed_reasoning_items: 140, error: '{"error":{"code":"invalid_encrypted_content"}}' }] });
+  assert.match(details.upstreamExplanation.advice, /已尝试.*仍未恢复/);
+});
+
+test('complete state restoration is distinct from lossy fallback and does not imply success', () => {
+  const chain = [{ status_code: 400 }, { status_code: 400, restored_reasoning_items: 2 }];
+  assert.equal(getCompletedReasoningRecovery({ endpoint_chain: JSON.stringify(chain) }), 2);
+  assert.equal(getCompletedReasoningRecovery({ endpointChain: [{ restoredReasoningItems: 1 }] }), 1);
+  assert.equal(getCompletedReasoningRecovery({ endpointChain: [{ restored_reasoning_items: -1 }, { restored_reasoning_items: 'bad' }] }), 0);
+  assert.equal(getEncryptedHistoryRecovery({ endpointChain: chain }), 0);
+  const request = { http_status_is_upstream: true, http_status_code: 400, failure_reason: 'invalid_encrypted_content',
+    endpoint_chain: [...chain, { status_code: 400, error: '{"error":{"code":"invalid_encrypted_content"}}' }] };
+  assert.match(getRequestFailureDetails(request).upstreamExplanation.advice, /已补回.*仍未接受/);
+  request.endpoint_chain.push({ removed_reasoning_items: 3 });
+  assert.match(getRequestFailureDetails(request).upstreamExplanation.advice, /已尝试移除.*仍未恢复/);
+  assert.equal(getCompletedReasoningRecovery(request), 2);
+});
 
 test('configuration load failures keep the actual cause and explain legacy missing-profile records', () => {
   const legacy = getRequestFailureDetails({ failure_reason: 'routing_profile_missing', last_failure_reason: 'routing_profile_missing', http_status_is_upstream: false, route_snapshot: { attempts: 0, candidates: [] } });

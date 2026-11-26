@@ -18,6 +18,9 @@ type chainNode struct {
 	Endpoint        string `json:"endpoint"`
 	// Attempts 本跳内实际发出的请求次数（含同端点重试）；整请求累计 = retry_count + 1
 	Attempts int `json:"attempts,omitempty"`
+	// Nonzero only on the send that used the explicitly enabled fallback.
+	RemovedReasoningItems  int `json:"removed_reasoning_items,omitempty"`
+	RestoredReasoningItems int `json:"restored_reasoning_items,omitempty"`
 	// StartMs / DurationMs 与 Claude 端 ChainNode 同口径：距请求开始的毫秒数与本跳耗时
 	StartMs      int64  `json:"start_ms"`
 	DurationMs   *int64 `json:"duration_ms,omitempty"`

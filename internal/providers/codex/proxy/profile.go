@@ -196,7 +196,7 @@ func (b *codexProfileStream) Read(data []byte) (int, error) {
 		if ch == '\n' {
 			b.frame(bytes.TrimSpace(b.line))
 			b.line = b.line[:0]
-		} else if len(b.line) < 256*1024 {
+		} else if len(b.line) < maxCodexStreamEventBytes {
 			b.line = append(b.line, ch)
 		} else {
 			b.failed = true
@@ -425,7 +425,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			}
 			recordSend := func() {
 				sent = true
-				chain = append(chain, chainNode{Hop: len(chain) + 1, Channel: channel.Name, CredentialGroup: ep.CredentialGroupName, Endpoint: ep.Name, Attempts: 1, StartMs: time.Since(start).Milliseconds()})
+				chain = append(chain, chainNode{Hop: len(chain) + 1, Channel: channel.Name, CredentialGroup: ep.CredentialGroupName, Endpoint: ep.Name, Attempts: 1, StartMs: time.Since(start).Milliseconds(), RemovedReasoningItems: recovery.removedReasoningItems, RestoredReasoningItems: recovery.restoredReasoningItems})
 				h.recordForwarding(requestID, ep.Name, channel.Name, candidate.Identity().Model, chain)
 				publishProgress()
 			}

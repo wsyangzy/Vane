@@ -125,6 +125,11 @@ func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response,
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	w.Write(respBody)
+	n, writeErr := w.Write(respBody)
+	if writeErr == nil && n == len(respBody) && resp.Request != nil && resp.Request.Context().Err() == nil {
+		if recovery := responseRecoveryStateFromContext(resp.Request.Context()); recovery != nil && recovery.cfg.Enabled {
+			recovery.completedHistory.rememberNonStreaming(recovery.historyScope, respBody)
+		}
+	}
 	return true
 }

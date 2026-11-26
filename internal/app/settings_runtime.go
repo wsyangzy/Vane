@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/buildinfo"
 	"github.com/wsyangzy/Vane/internal/config"
 	"github.com/wsyangzy/Vane/internal/platform/netutil"
 	"github.com/wsyangzy/Vane/internal/privacy"
+	codexproxy "github.com/wsyangzy/Vane/internal/providers/codex/proxy"
 	codexstore "github.com/wsyangzy/Vane/internal/providers/codex/store"
 	settingsservice "github.com/wsyangzy/Vane/internal/settings/service"
 	settingsstore "github.com/wsyangzy/Vane/internal/settings/store"
@@ -397,6 +399,26 @@ func (a *App) applySettingsToConfig(runRetentionMaintenance bool) error {
 	if runRetentionMaintenance {
 		if err := a.applyHistoryArchiveDirectory(ctx); err != nil {
 			return err
+		}
+	}
+	return a.applyCodexHistoryRecovery(ctx)
+}
+
+func (a *App) applyCodexHistoryRecovery(ctx context.Context) error {
+	if a.codexHTTPHandler != nil && a.settingsService != nil {
+		// The fallback policy remains available even if recovery storage cannot open.
+		a.codexHTTPHandler.SetEncryptedHistoryRecovery(a.settingsService.GetBool(ctx, settingsservice.CategoryRequest, "codex_encrypted_history_recovery", false))
+		cfg := codexproxy.HistoryStorageConfig{
+			Enabled:            a.settingsService.GetBool(ctx, settingsservice.CategoryRequest, "codex_history_persistence", false),
+			ReadClientSessions: a.settingsService.GetBool(ctx, settingsservice.CategoryRequest, "codex_history_client_lookup", true),
+			Directory:          a.getSettingString(ctx, settingsservice.CategoryRequest, "codex_history_directory", codexstore.DefaultRecoveryDirectory()),
+			RetentionDays:      a.settingsService.GetInt(ctx, settingsservice.CategoryRequest, "codex_history_retention_days", 7),
+			MaxMiB:             a.settingsService.GetInt(ctx, settingsservice.CategoryRequest, "codex_history_max_mib", 64),
+		}
+		cfg.Directory = filepath.Join(cfg.Directory, historyEnvironment())
+		cfg.Namespace = historyEnvironment() + ":" + a.getEffectiveUsageDBPath()
+		if err := a.codexHTTPHandler.ConfigureHistoryStorage(ctx, cfg); err != nil {
+			return fmt.Errorf("应用 Codex 会话恢复存储失败: %w", err)
 		}
 	}
 	return nil

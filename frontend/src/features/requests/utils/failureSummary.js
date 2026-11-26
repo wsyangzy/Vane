@@ -40,6 +40,7 @@ export const FAILURE_REASON_DETAILS = Object.freeze({
   endpoint_unavailable: '上游端点暂不可用',
   model_not_found: '上游未提供此模型',
   context_length_exceeded: '会话内容太长，超出了当前模型一次能处理的范围',
+  invalid_encrypted_content: '上游拒绝了会话中的加密历史内容',
   input_too_long: '会话内容太长，超出了当前模型一次能处理的范围',
   upstream_unavailable: '上游服务暂不可用',
   response_read_error: '上游响应正文读取失败',
@@ -180,7 +181,9 @@ export const getRequestFailureDetails = (request = {}) => {
   const reasonCode = extractFailureCode(reason);
   const blockingCandidates = groupedBlockers(request);
   const hasSkippedCandidates = blockingCandidates.some(item => item.hasSkipped);
-  const retryStop = RETRY_STOP_REASONS.has(extractFailureCode(reason));
+  const savedStop = routeSnapshot(request).stop_reason || routeSnapshot(request).stopReason || request.dispatchTrace?.stopReason || '';
+  const stopReason = RETRY_STOP_REASONS.has(extractFailureCode(reason)) ? reason : savedStop;
+  const retryStop = RETRY_STOP_REASONS.has(extractFailureCode(stopReason));
   const retry = retryContext(request);
   const processingFailure = ['response_read_error', 'response_write_error', 'privacy_filter_failed'].includes(reason);
   const upstreamHops = nodes.filter(node => !node.local && node.statusCode > 0 && (!processingFailure || node.statusCode >= 400)).reverse();
@@ -202,7 +205,7 @@ export const getRequestFailureDetails = (request = {}) => {
     upstreamStatus: hasUpstream ? status : 0,
     upstreamDetail: hasUpstream ? processingFailure ? upstreamHops[0]?.error || '' : detail : '',
     showLocal: retryStop || processingFailure || localHops.length > 0 || blockingCandidates.length > 0 || !hasUpstream,
-    localTitle: unsent ? '请求未发送' : processingFailure ? '本地响应处理失败'
+    localTitle: unsent ? '请求未发送' : retryStop && hasUpstream ? '重试已停止' : processingFailure ? '本地响应处理失败'
       : hasUpstream && (localHops.some(hop => hop.skipReason) || hasSkippedCandidates) ? '部分目标未发送'
         : hasUpstream && blockingCandidates.length ? '调用失败后的恢复条件' : '未收到上游响应',
     localSummary: reasonCode === 'recovery_outside_budget'
@@ -212,7 +215,7 @@ export const getRequestFailureDetails = (request = {}) => {
         ? hasSkippedCandidates ? '部分候选未发送；下方列出调度记录中的跳过原因。' : '本次上游调用失败后，以下候选进入阻塞状态。'
       : ['endpoint_exhausted', 'route_exhausted', 'non_stream_route_exhausted', 'all_channels_unavailable'].includes(reason) && !skipReason
       ? localHops.some(hop => hop.error) || detail ? '连接或响应传输未完成' : '未记录具体的本地失败原因'
-      : describeFailureReason(retryStop ? reason : skipReason || reason) || (unsent ? '本地调度未选出可发送的目标' : '本次请求没有可用的上游响应记录'),
+      : describeFailureReason(retryStop ? stopReason : skipReason || reason) || (unsent ? '本地调度未选出可发送的目标' : '本次请求没有可用的上游响应记录'),
     localDetail: processingFailure || !hasUpstream ? detail : '',
     stopContext: retryStop || cooldownBlocked ? retryContextLines(request) : [],
     blockingCandidates,
@@ -227,6 +230,7 @@ const MANUAL_INTERVENTION_REASONS = new Set(['max_loops_exceeded', 'max_restarts
 // 只对「整条链路都失败」或「Relay 本地拒绝」的终态弹提示；
 // 单端点失败会被故障转移接住，弹出来只会淹没真正需要处理的提示。
 const NOTIFY_REASONS = new Set([
+  'invalid_encrypted_content',
   'routing_config_unavailable',
   'routing_profile_missing',
   'route_unavailable',
@@ -304,6 +308,15 @@ export const explainUpstreamFailure = (raw, request = {}) => {
   const error = envelope?.error || envelope?.response?.error || envelope;
   const code = String(error?.code || error?.type || '').toLowerCase();
   const message = String(error?.message || text).toLowerCase();
+  if (code === 'invalid_encrypted_content' || /\binvalid_encrypted_content\b/.test(message)) {
+    const recovery = getEncryptedHistoryRecovery(request);
+    const restored = getCompletedReasoningRecovery(request);
+    return { code: 'invalid_encrypted_content', summary: FAILURE_REASON_DETAILS.invalid_encrypted_content,
+      advice: recovery
+        ? '本次已尝试移除加密推理历史，仍未恢复。请检查上游的会话状态兼容性；压缩历史和工具记录未被清除。'
+        : (restored ? '本次已补回观察到的完整推理状态，上游仍未接受。' : '完整状态恢复需要同一会话和来源的完成项记录，且受剩余预算限制。')
+          + '可在请求控制中开启“Codex 会话降级恢复”作为最后兜底；它会舍弃隐藏推理，且不处理压缩历史或服务端会话引用。' };
+  }
   if (['context_length_exceeded', 'input_too_long'].includes(code)
     || /\b(context_length_exceeded|input_too_long)\b/.test(message)
     || /maximum context length|exceeds? (?:the |this model's )?context (?:window|length)/.test(message)) {
@@ -330,6 +343,18 @@ export const explainUpstreamFailure = (raw, request = {}) => {
         : '请检查上游是否支持当前客户端使用的工具格式。') };
   }
   return null;
+};
+
+export const getEncryptedHistoryRecovery = (request = {}) => {
+  const counts = getEndpointChainItems(request).map(item => Number(item?.removed_reasoning_items ?? item?.removedReasoningItems ?? 0));
+  const removed = counts.filter(count => Number.isSafeInteger(count) && count > 0);
+  return removed.length ? Math.max(...removed) : 0;
+};
+
+export const getCompletedReasoningRecovery = (request = {}) => {
+  const counts = getEndpointChainItems(request).map(item => Number(item?.restored_reasoning_items ?? item?.restoredReasoningItems ?? 0));
+  const restored = counts.filter(count => Number.isSafeInteger(count) && count > 0);
+  return restored.length ? Math.max(...restored) : 0;
 };
 
 export const describeFailureReason = (failureReason) => {

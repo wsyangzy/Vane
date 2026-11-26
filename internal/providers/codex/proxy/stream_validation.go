@@ -7,6 +7,10 @@ import (
 	"strings"
 )
 
+// Completed reasoning items can exceed the pre-output heartbeat budget. Bound
+// individual events independently so a valid final encrypted state is forwarded.
+const maxCodexStreamEventBytes = 16 << 20
+
 // codexSSEDecoder waits for a whole SSE event before interpreting JSON. In
 // particular, event names and words inside output text are not protocol proof.
 type codexSSEDecoder struct {
@@ -31,7 +35,7 @@ func (d *codexSSEDecoder) line(line []byte) *codexSSEEvent {
 }
 
 func (d *codexSSEDecoder) wireLine(line []byte) *codexSSEEvent {
-	if len(d.raw)+len(line) > maxPreOutputStreamBufferBytes {
+	if len(d.raw)+len(line) > maxCodexStreamEventBytes {
 		e := &codexSSEEvent{raw: d.raw, err: invalidCodexStream("stream_event_too_large", "上游 SSE 事件超过缓冲上限")}
 		d.event, d.raw, d.data = "", nil, nil
 		return e
@@ -100,6 +104,7 @@ func parseCodexSSEEvent(event string, data []byte) *codexSSEEvent {
 	typ, _ := e.frame["type"].(string)
 	if typ == "" {
 		typ = event
+		e.frame["type"] = typ
 	}
 	response := e.frame
 	if nested, ok := e.frame["response"].(map[string]any); ok {

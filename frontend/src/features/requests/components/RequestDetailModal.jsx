@@ -74,7 +74,7 @@ import {
   parseReasoningConfig,
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
-import { describeFailureReason, getRequestFailureDetails, getRequestProtocolDiagnostics } from '../utils/failureSummary.js';
+import { describeFailureReason, getCompletedReasoningRecovery, getEncryptedHistoryRecovery, getRequestFailureDetails, getRequestProtocolDiagnostics } from '../utils/failureSummary.js';
 import { getRequestOutcome } from '../utils/requestOutcome.js';
 import { describeRouteSnapshot, describeRouteExecution } from '@/features/providers/shared/routing/routeTargets.js';
 
@@ -398,6 +398,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
     return '中转';
   };
   const failureDetails = getRequestFailureDetails(request);
+  const removedReasoningItems = getEncryptedHistoryRecovery(request);
+  const restoredReasoningItems = getCompletedReasoningRecovery(request);
   const protocolDiagnostics = getRequestProtocolDiagnostics(request);
   const failureDetail = failureDetails.upstreamDetail;
   // 失败跳（最后一跳在前）：新链路逐跳记录了上游状态码、原文与诊断头
@@ -1059,7 +1061,14 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 </div>
               )}
 
-              {isFailure && failureDetails.showLocal && <LocalRequestFailure key={request.requestId} details={failureDetails} provider={request.provider} />}
+              {restoredReasoningItems > 0 && <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm leading-6 text-indigo-900 [overflow-wrap:anywhere]">
+                <p className="font-medium">已尝试完整状态恢复</p>
+                <p>本次重试补回了 {restoredReasoningItems} 项已观察到的完整推理状态，未删减历史项目。恢复是否成功以本次请求结果为准。</p>
+              </div>}
+              {removedReasoningItems > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900 [overflow-wrap:anywhere]">
+                <p className="font-medium">已尝试会话降级恢复</p>
+                <p>本次重试移除了 {removedReasoningItems} 项加密推理历史，保留了可见消息和工具调用记录。客户端保存的原会话未被修改。</p>
+              </div>}
               {/* Only actual provider responses belong in the upstream error card. */}
               {isFailure && failureDetails.hasUpstream && (
                 <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-rose-200 bg-rose-50">
@@ -1135,6 +1144,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                   </div>
                 </div>
               )}
+              {isFailure && failureDetails.showLocal && <LocalRequestFailure key={request.requestId} details={failureDetails} provider={request.provider} />}
             </div>
           )}
 

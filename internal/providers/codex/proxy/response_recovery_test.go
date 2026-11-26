@@ -214,6 +214,7 @@ func TestEncryptedContentRecoveryDoesNotReplayAfterStreamOutput(t *testing.T) {
 				fmt.Fprintf(w, "data: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"invalid_encrypted_content\",\"message\":\"late-failure\"}}\n\n")
 			})
 			w := httptest.NewRecorder()
+			h.SetEncryptedHistoryRecovery(true)
 			h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"original","stream":true,"input":"continue"}`)))
 			if sends.Load() != 1 || !strings.Contains(w.Body.String(), "already-sent") {
 				t.Fatalf("output stream was replayed: sends=%d body=%s", sends.Load(), w.Body.String())

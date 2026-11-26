@@ -1,7 +1,9 @@
 import { dispatchSettingGroups } from './dispatchPolicy.js';
 
+export const codexRecoverySettingKeys = ['codex_history_persistence', 'codex_encrypted_history_recovery', 'codex_history_directory', 'codex_history_retention_days', 'codex_history_max_mib', 'codex_history_client_lookup'];
+
 export const sharedRuntimeSettingSections = [
-  { category: 'request', title: '请求控制', description: '流式与非流式请求的等待时限', keys: ['global_timeout', 'response_header_timeout', 'default_response_header_timeout'] },
+  { category: 'request', title: '请求控制', description: '请求时限与会话恢复', keys: ['global_timeout', 'response_header_timeout', 'default_response_header_timeout', ...codexRecoverySettingKeys] },
   { category: 'health', title: '健康检查', description: '默认方案内端点的连通性检测', keys: ['active_probes_enabled', 'check_interval', 'timeout', 'health_path'] },
   { category: 'retry', title: '调度保护', description: '请求尝试、故障冷却与规则回退', keys: dispatchSettingGroups.flatMap(group => group.keys) },
 ];

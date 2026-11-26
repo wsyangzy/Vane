@@ -3,10 +3,13 @@ package app
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/buildinfo"
 	"github.com/wsyangzy/Vane/internal/platform/netutil"
+	codexstore "github.com/wsyangzy/Vane/internal/providers/codex/store"
 	settingsservice "github.com/wsyangzy/Vane/internal/settings/service"
 	settingsstore "github.com/wsyangzy/Vane/internal/settings/store"
 )
@@ -85,7 +88,7 @@ func isVisibleSetting(category, key string) bool {
 	case settingsservice.CategoryRetry:
 		return settingsservice.IsCurrentRetrySetting(key)
 	case settingsservice.CategoryRequest:
-		return key == "global_timeout" || key == "response_header_timeout" || key == "default_response_header_timeout"
+		return key == "global_timeout" || key == "response_header_timeout" || key == "default_response_header_timeout" || key == "codex_encrypted_history_recovery" || strings.HasPrefix(key, "codex_history_")
 	default:
 		return true
 	}
@@ -519,6 +522,13 @@ func (a *App) settingRecordToInfo(r *settingsstore.SettingRecord) SettingInfo {
 		DisplayOrder:    r.DisplayOrder,
 		EnumOptions:     r.EnumOptions, // 传递枚举选项
 		RequiresRestart: r.RequiresRestart,
+	}
+	if r.Category == settingsservice.CategoryRequest && r.Key == "codex_history_directory" {
+		dir := r.Value
+		if dir == "" {
+			dir = codexstore.DefaultRecoveryDirectory()
+		}
+		info.Description += " 当前保存文件：" + filepath.Join(dir, historyEnvironment(), "recovery.db")
 	}
 
 	if !r.CreatedAt.IsZero() {
