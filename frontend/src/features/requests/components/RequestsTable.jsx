@@ -108,8 +108,8 @@ const FirstByteBadge = ({ ms, status, live, compact }) => {
     );
   }
 
-  return <DurationBadge ms={ms} status={status} live={live} size="xs"
-    className={compact ? `border-transparent! bg-transparent! px-0! py-0! text-[10px]! ${live ? 'text-blue-600!' : 'text-emerald-600!'}` : ''}>
+  return <DurationBadge ms={ms} status={status} size="xs"
+    className={compact ? 'border-transparent! bg-transparent! px-0! py-0! text-[10px]!' : ''}>
     <AnimatedMetric value={ms} live={live} format="duration" className="block min-w-0 max-w-full truncate tabular-nums" />
   </DurationBadge>;
 };
@@ -122,8 +122,8 @@ const LatencyCell = ({ request, compact }) => {
 
   return <Tooltip asChild content={tooltip}>
     <span className="inline-flex min-w-0 max-w-full items-center justify-center gap-1 whitespace-nowrap" aria-live="off">
-      <DurationBadge ms={latency.durationMs} status={request.status} live={latency.durationLive} size="xs"
-        className={compact ? 'border-transparent! bg-transparent! px-0! py-0! text-[10px]! text-slate-600!' : ''}>
+      <DurationBadge ms={latency.durationMs} status={request.status} size="xs"
+        className={compact ? 'border-transparent! bg-transparent! px-0! py-0! text-[10px]!' : ''}>
         <AnimatedMetric value={latency.durationMs} live={latency.durationLive} format="duration" className="block min-w-0 max-w-full truncate tabular-nums" />
       </DurationBadge>
       <span className={`shrink-0 text-slate-300 ${compact ? '' : 'hidden'}`} aria-hidden="true">/</span>
