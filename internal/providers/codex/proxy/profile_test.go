@@ -271,6 +271,48 @@ func newProfileCodexFixture(t *testing.T, upstream http.HandlerFunc, settlements
 	return handler, profiles, &trace
 }
 
+func TestCodexProfileModelSwitchPreservesCurrentRequest(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprint(streaming), func(t *testing.T) {
+			var received []map[string]any
+			var mu sync.Mutex
+			h, _, trace := newProfileCodexFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				mu.Lock()
+				received = append(received, body)
+				mu.Unlock()
+				response := `{"id":"response-model-switch","status":"completed","output":[],"usage":{"input_tokens":10,"output_tokens":2}}`
+				if streaming {
+					w.Header().Set("Content-Type", "text/event-stream")
+					io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":"+response+"}\n\n")
+				} else {
+					io.WriteString(w, response)
+				}
+			})
+			for i, model := range []string{"gpt-6.1-sol", "gpt-6-astra", "gpt-6-astra", "gpt-6.1-sol"} {
+				payload := map[string]any{"model": model, "stream": streaming, "input": "continue", "tools": []any{}, "reasoning": map[string]any{"effort": "high"}, "max_output_tokens": float64(123)}
+				raw, _ := json.Marshal(payload)
+				req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(string(raw)))
+				req.Header.Set("X-Codex-Session-Id", "same-session")
+				req.Header.Set("X-Codex-Turn-Id", "same-turn")
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, req)
+				mu.Lock()
+				if len(received) != i+1 || !reflect.DeepEqual(received[i], payload) {
+					t.Errorf("request model or other fields changed: got %+v want %+v", received, payload)
+				}
+				mu.Unlock()
+				if rec.Code != http.StatusOK || trace.RequestedModel != model || trace.Decision.ReusedTurn != (i == 2) {
+					t.Fatalf("incorrect model-switch result: status=%d trace=%+v", rec.Code, trace)
+				}
+			}
+		})
+	}
+}
+
 func TestCodexProfileRespectsGlobalAttemptCeiling(t *testing.T) {
 	sends := 0
 	h, _, trace := newProfileCodexFixture(t, func(w http.ResponseWriter, r *http.Request) {
@@ -721,6 +763,7 @@ func TestCodexLocalFailureCooldownRecordsOnlyFirstIdenticalRequest(t *testing.T)
 }
 
 func TestCodexUnsentHealthCooldownStopsIdenticalRetriesUntilRecovery(t *testing.T) {
+	const body = `{"model":"test","input":"hello"}`
 	tracker, err := tracking.NewUsageTracker(&tracking.Config{Enabled: true, DatabasePath: filepath.Join(t.TempDir(), "usage.db"), BufferSize: 50, BatchSize: 5, FlushInterval: time.Hour, CleanupInterval: time.Hour, MaxRetry: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -729,26 +772,35 @@ func TestCodexUnsentHealthCooldownStopsIdenticalRetriesUntilRecovery(t *testing.
 	sends := 0
 	h, runtime, _ := newProfileCodexFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		sends++
+		if raw, err := io.ReadAll(r.Body); err != nil || string(raw) != body {
+			t.Errorf("recovered request changed its body: %s %v", raw, err)
+		}
 		io.WriteString(w, `{"status":"completed","output":[]}`)
 	})
 	h.usageTracker = tracker
 	h.UpdateConfig(config.RetryConfig{DisableRecoveryWait: true}, config.FailoverConfig{})
 	profile, _ := runtime.Profile(1)
 	profile.Members = profile.Members[:1]
-	blocked := true
 	until := time.Now().Add(time.Minute)
+	pool := h.manager.PoolRuntime()
+	if err := pool.Fail(1, 11, "1", "test", routing.Failure{Scope: routing.ScopeEndpoint, Reason: "endpoint_unavailable"}, until); err != nil {
+		t.Fatal(err)
+	}
 	runtime.Replace(routing.RuntimeConfig{Provider: "codex", Profiles: []routing.RoutingProfile{profile}, Candidates: []routing.DispatchCandidate{{Provider: "codex", ChannelID: 1, GroupID: 11, EndpointID: "1", Protocol: "responses", Enabled: true}}, PrepareCandidate: func(c routing.DispatchCandidate, model, override string) routing.DispatchCandidate {
-		c = routing.CopyCandidateForModel(c, model, override)
-		c.Health = routing.HealthState{CoolingDown: blocked, Until: until}
+		c = h.manager.PrepareDispatchCandidate(c, model, override)
+		if allowed, reason := pool.HealthAllowed(c.ChannelID, c.GroupID, c.EndpointID, c.Identity().Model); !allowed {
+			ready, _ := pool.HealthReadyAt(c.ChannelID, c.GroupID, c.EndpointID, c.Identity().Model)
+			c.Health = routing.HealthState{CoolingDown: true, Reason: reason, Until: ready}
+		}
 		return c
 	}})
 	call := func() *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"test","input":"hello"}`)))
+		h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(body)))
 		return rec
 	}
 	for i := 0; i < 3; i++ {
-		if rec := call(); rec.Code != 400 || !strings.Contains(rec.Body.String(), "route_unavailable") {
+		if rec := call(); rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" || !strings.Contains(rec.Body.String(), "route_unavailable") {
 			t.Fatalf("cooldown response: %d %s", rec.Code, rec.Body.String())
 		}
 	}
@@ -756,7 +808,9 @@ func TestCodexUnsentHealthCooldownStopsIdenticalRetriesUntilRecovery(t *testing.
 	if err != nil || len(rows) != 1 || sends != 0 {
 		t.Fatalf("cooldown retries escaped: rows=%d sends=%d err=%v", len(rows), sends, err)
 	}
-	blocked = false
+	if err := pool.RequestRetry(1, 11, "1", "test"); err != nil {
+		t.Fatal(err)
+	}
 	if rec := call(); rec.Code != 200 || sends != 1 {
 		t.Fatalf("recovery stayed blocked: %d %s", rec.Code, rec.Body.String())
 	}

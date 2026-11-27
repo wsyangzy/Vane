@@ -28,15 +28,20 @@ type LocalRejection struct {
 	RequestID string
 	RetryAt   time.Time
 	Repeated  bool
+	Retryable bool
 }
 
 func (f *LocalRejection) Write(w http.ResponseWriter) {
 	seconds := max(1, int(time.Until(f.RetryAt).Seconds()+0.999))
 	w.Header().Set("Retry-After", strconv.Itoa(seconds))
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	// A new SDK retry cannot repair local configuration or a closed gate.
-	// Keep this consistent with Claude's existing pre-send rejection contract.
-	w.WriteHeader(http.StatusBadRequest)
+	// A timed gate is a temporary service failure, not an invalid request.
+	// Clients can retry it while the local gate still prevents upstream sends.
+	status := http.StatusBadRequest
+	if f.Retryable {
+		status = http.StatusServiceUnavailable
+	}
+	w.WriteHeader(status)
 	message := f.Reason
 	if f.Detail != "" && f.Detail != f.Reason {
 		message += ": " + f.Detail
@@ -198,19 +203,24 @@ func (p *DispatchPlan) RejectLocal(reason string) *LocalRejection {
 	until := now.Add(config.CooldownPolicy.normalized().Initial)
 	var recovery time.Time
 	for _, evaluation := range p.Evaluations {
+		candidate := evaluation.Candidate
+		if !candidate.Enabled || candidate.Health.RepairRequired || evaluation.Reason == "candidate_duplicate" || strings.HasPrefix(evaluation.Reason, "state_") {
+			continue
+		}
 		if blockage := evaluation.Blockage; blockage != nil && blockage.Recovery == "automatic" && blockage.RecoverAt != nil && blockage.RecoverAt.After(now) {
 			if recovery.IsZero() || blockage.RecoverAt.Before(recovery) {
 				recovery = *blockage.RecoverAt
 			}
 		}
-		if at := evaluation.Candidate.Health.Until; evaluation.Candidate.Health.CoolingDown && at.After(now) && (recovery.IsZero() || at.Before(recovery)) {
+		if at := candidate.Health.Until; candidate.Health.CoolingDown && (evaluation.Reason == "cooldown" || evaluation.Reason == "account_cooling_down") && at.After(now) && (recovery.IsZero() || at.Before(recovery)) {
 			recovery = at
 		}
 	}
 	if !recovery.IsZero() {
 		until = recovery
 	}
-	rejection := LocalRejection{Reason: reason, Detail: p.FailureDetail(), RequestID: p.RequestID, RetryAt: until}
+	retryable := !recovery.IsZero() && (reason == "route_unavailable" || reason == StopRecoveryOutsideBudget)
+	rejection := LocalRejection{Reason: reason, Detail: p.FailureDetail(), RequestID: p.RequestID, RetryAt: until, Retryable: retryable}
 	p.state.mu.Lock()
 	if p.state.successful || p.state.responseStarted {
 		p.state.mu.Unlock()

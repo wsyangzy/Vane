@@ -118,9 +118,7 @@ func claudeRouteFailure(err error) routing.Failure {
 	if response.StatusCode == http.StatusUnauthorized {
 		return routing.Failure{Scope: routing.ScopeCredential, Reason: "credential_rejected"}
 	}
-	code, kind, _ := routing.ErrorIdentity(response.Body)
-	code = strings.ToLower(code)
-	kind = strings.ToLower(kind)
+	code, kind, message := claudeFailureIdentity(response.Body)
 	switch code {
 	case "model_not_found", "model_not_available", "model_not_supported", "unsupported_model", "model_access_denied", "context_length_exceeded", "input_too_long", "streaming_not_supported", "unsupported_stream":
 		return routing.Failure{Scope: routing.ScopeModel, Reason: code}
@@ -131,10 +129,16 @@ func claudeRouteFailure(err error) routing.Failure {
 	if response.StatusCode == 400 || (response.StatusCode == 0 || response.StatusCode == 200) && kind == "invalid_request_error" {
 		return routing.Failure{Scope: routing.ScopeRequest, Reason: "invalid_request", Terminal: true}
 	}
+	if failure, known := claudeStructuredFailure(response.StatusCode, code, kind, message); known {
+		return failure
+	}
 	if response.StatusCode == 403 {
 		return routing.Failure{Scope: routing.ScopeCandidate, Reason: "permission_scope_unknown"}
 	}
-	if response.StatusCode == 429 || response.StatusCode == 200 {
+	if response.StatusCode == 429 {
+		return routing.Failure{Scope: routing.ScopeCandidate, Reason: "rate_limited"}
+	}
+	if response.StatusCode == 200 {
 		return routing.Failure{Scope: routing.ScopeCandidate, Reason: "upstream_unavailable"}
 	}
 	return routing.Failure{Scope: routing.ScopeEndpoint, Reason: "endpoint_unavailable"}

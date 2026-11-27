@@ -136,6 +136,9 @@ func TestClaudeProfileActualSendsUseExactCandidatesAndSharedBudget(t *testing.T)
 		{"all_candidates", 503, 10, `{"error":{"type":"api_error"}}`, []string{"/a/v1/messages", "/b/v1/messages", "/c/v1/messages"}},
 		{"model_scope", 404, 10, `{"error":{"code":"model_not_found"}}`, []string{"/a/v1/messages", "/c/v1/messages"}},
 		{"credential_scope", 401, 10, `{"error":{"type":"authentication_error"}}`, []string{"/a/v1/messages", "/c/v1/messages"}},
+		{"rate_limit_scope", 429, 10, `{"error":{"type":"too_many_requests","code":"rate_limit_exceeded"}}`, []string{"/a/v1/messages", "/c/v1/messages"}},
+		{"debt_scope", 403, 10, `{"Code":"AccessDenied","Message":"Current user is in debt."}`, []string{"/a/v1/messages", "/c/v1/messages"}},
+		{"quota_scope", 429, 10, `{"error":{"code":"quota_exceeded"}}`, []string{"/a/v1/messages", "/c/v1/messages"}},
 		{"request_scope", 400, 10, `{"error":{"type":"invalid_request_error"}}`, []string{"/a/v1/messages"}},
 		{"shared_budget", 503, 1, `{"error":{"type":"api_error"}}`, []string{"/a/v1/messages"}},
 		{"global_budget", 503, 10, `{"error":{"type":"api_error"}}`, []string{"/a/v1/messages"}},
@@ -547,7 +550,7 @@ func TestClaudeUnsentHealthCooldownStopsIdenticalRetriesUntilRecovery(t *testing
 		return rec
 	}
 	for i := 0; i < 3; i++ {
-		if rec := call(); rec.Code != 400 || !strings.Contains(rec.Body.String(), "route_unavailable") {
+		if rec := call(); rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" || !strings.Contains(rec.Body.String(), "route_unavailable") {
 			t.Fatalf("cooldown response: %d %s", rec.Code, rec.Body.String())
 		}
 	}

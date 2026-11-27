@@ -57,6 +57,12 @@ func (ep *Endpoint) RouteStateVersion() uint64 {
 	return routing.StateVersion(&ep.stateVersion)
 }
 
+func (ep *Endpoint) configSnapshot() config.EndpointConfig {
+	ep.mutex.RLock()
+	defer ep.mutex.RUnlock()
+	return ep.Config
+}
+
 // Manager manages endpoints and their health status
 type Manager struct {
 	healthProbesPaused atomic.Bool
@@ -345,22 +351,23 @@ func (m *Manager) SetFailoverEnabled(enabled bool) {
 // If not, find the first endpoint in the same group that has a token
 // 支持多 Token 配置：优先使用 tokens 数组中当前激活的 Token
 func (m *Manager) GetTokenForEndpoint(ep *Endpoint) string {
+	cfg := ep.configSnapshot()
 	// 1. 优先使用多 Tokens 配置（端点独立管理）
-	if len(ep.Config.Tokens) > 0 {
-		activeIndex := m.keyManager.GetActiveTokenIndex(endpointKeyFromConfig(ep.Config))
-		if activeIndex >= 0 && activeIndex < len(ep.Config.Tokens) {
-			return sanitizeCredential(ep.Config.Tokens[activeIndex].Value)
+	if len(cfg.Tokens) > 0 {
+		activeIndex := m.keyManager.GetActiveTokenIndex(endpointKeyFromConfig(cfg))
+		if activeIndex >= 0 && activeIndex < len(cfg.Tokens) {
+			return sanitizeCredential(cfg.Tokens[activeIndex].Value)
 		}
-		return sanitizeCredential(ep.Config.Tokens[0].Value) // 回退到第一个
+		return sanitizeCredential(cfg.Tokens[0].Value) // 回退到第一个
 	}
 
 	// 2. 使用单 Token 配置
-	if ep.Config.Token != "" {
-		return sanitizeCredential(ep.Config.Token)
+	if cfg.Token != "" {
+		return sanitizeCredential(cfg.Token)
 	}
 
 	// 3. 组内继承（仅对单 Token 保持原有行为，多 Token 不继承）
-	groupName := ep.Config.Group
+	groupName := cfg.Group
 	if groupName == "" {
 		groupName = "Default"
 	}
@@ -371,14 +378,15 @@ func (m *Manager) GetTokenForEndpoint(ep *Endpoint) string {
 
 	// Search through all endpoints for the same group
 	for _, endpoint := range m.endpoints {
-		endpointGroup := endpoint.Config.Group
+		candidate := endpoint.configSnapshot()
+		endpointGroup := candidate.Group
 		if endpointGroup == "" {
 			endpointGroup = "Default"
 		}
 
 		// If same group and has token (only single token inheritance)
-		if endpointGroup == groupName && endpoint.Config.Token != "" {
-			return sanitizeCredential(endpoint.Config.Token)
+		if endpointGroup == groupName && candidate.Token != "" {
+			return sanitizeCredential(candidate.Token)
 		}
 	}
 
@@ -391,22 +399,23 @@ func (m *Manager) GetTokenForEndpoint(ep *Endpoint) string {
 // If not, find the first endpoint in the same group that has an api-key
 // 支持多 API Key 配置：优先使用 api-keys 数组中当前激活的 API Key
 func (m *Manager) GetApiKeyForEndpoint(ep *Endpoint) string {
+	cfg := ep.configSnapshot()
 	// 1. 优先使用多 ApiKeys 配置（端点独立管理）
-	if len(ep.Config.ApiKeys) > 0 {
-		activeIndex := m.keyManager.GetActiveApiKeyIndex(endpointKeyFromConfig(ep.Config))
-		if activeIndex >= 0 && activeIndex < len(ep.Config.ApiKeys) {
-			return sanitizeCredential(ep.Config.ApiKeys[activeIndex].Value)
+	if len(cfg.ApiKeys) > 0 {
+		activeIndex := m.keyManager.GetActiveApiKeyIndex(endpointKeyFromConfig(cfg))
+		if activeIndex >= 0 && activeIndex < len(cfg.ApiKeys) {
+			return sanitizeCredential(cfg.ApiKeys[activeIndex].Value)
 		}
-		return sanitizeCredential(ep.Config.ApiKeys[0].Value) // 回退到第一个
+		return sanitizeCredential(cfg.ApiKeys[0].Value) // 回退到第一个
 	}
 
 	// 2. 使用单 ApiKey 配置
-	if ep.Config.ApiKey != "" {
-		return sanitizeCredential(ep.Config.ApiKey)
+	if cfg.ApiKey != "" {
+		return sanitizeCredential(cfg.ApiKey)
 	}
 
 	// 3. 组内继承（仅对单 ApiKey 保持原有行为，多 ApiKey 不继承）
-	groupName := ep.Config.Group
+	groupName := cfg.Group
 	if groupName == "" {
 		groupName = "Default"
 	}
@@ -417,14 +426,15 @@ func (m *Manager) GetApiKeyForEndpoint(ep *Endpoint) string {
 
 	// Search through all endpoints for the same group
 	for _, endpoint := range m.endpoints {
-		endpointGroup := endpoint.Config.Group
+		candidate := endpoint.configSnapshot()
+		endpointGroup := candidate.Group
 		if endpointGroup == "" {
 			endpointGroup = "Default"
 		}
 
 		// If same group and has api-key (only single api-key inheritance)
-		if endpointGroup == groupName && endpoint.Config.ApiKey != "" {
-			return sanitizeCredential(endpoint.Config.ApiKey)
+		if endpointGroup == groupName && candidate.ApiKey != "" {
+			return sanitizeCredential(candidate.ApiKey)
 		}
 	}
 

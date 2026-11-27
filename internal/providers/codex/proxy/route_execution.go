@@ -43,12 +43,7 @@ func codexRouteFailure(status int, body []byte, err error) routing.Failure {
 	if status == http.StatusUnauthorized {
 		return routing.Failure{Scope: routing.ScopeCredential, Reason: "credential_rejected"}
 	}
-	code, kind, _ := routing.ErrorIdentity(body)
-	if streamErr, ok := err.(*UpstreamStreamError); ok {
-		code, kind = streamErr.Code, streamErr.Type
-	}
-	code = strings.ToLower(code)
-	kind = strings.ToLower(kind)
+	code, kind, message := codexFailureIdentity(body, err)
 	switch code {
 	case "invalid_encrypted_content":
 		return routing.Failure{Scope: routing.ScopeRequest, Reason: code, Terminal: true}
@@ -61,14 +56,23 @@ func codexRouteFailure(status int, body []byte, err error) routing.Failure {
 	if status == 400 || (status == 0 || status == 200) && (kind == "invalid_request_error" || kind == "bad_request") {
 		return routing.Failure{Scope: routing.ScopeRequest, Reason: "invalid_request", Terminal: true}
 	}
+	if failure, known := codexStructuredFailure(status, code, kind, message); known {
+		return failure
+	}
 	if status == 403 {
 		return routing.Failure{Scope: routing.ScopeCandidate, Reason: "permission_scope_unknown"}
 	}
-	if status == 429 || status == 200 {
+	if status == 429 {
+		return routing.Failure{Scope: routing.ScopeCandidate, Reason: "rate_limited"}
+	}
+	if status == 200 {
 		return routing.Failure{Scope: routing.ScopeCandidate, Reason: "upstream_unavailable"}
 	}
 	if status == 0 && err != nil && strings.Contains(err.Error(), "timeout awaiting response headers") {
 		return routing.Failure{Scope: routing.ScopeRequest, Reason: "response_header_timeout", Terminal: true}
+	}
+	if status == 0 && err != nil {
+		return routing.Failure{Scope: routing.ScopeEndpoint, Reason: "network_error"}
 	}
 	return routing.Failure{Scope: routing.ScopeEndpoint, Reason: "endpoint_unavailable"}
 }

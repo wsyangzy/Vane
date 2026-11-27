@@ -503,10 +503,12 @@ func (r *ProfileRuntime) plan(ctx context.Context, profileID int64, model string
 		hasSession = false
 	}
 	var preferred *Candidate
-	if hasTurn && (p.AffinityMode != AffinityNone || fromState) {
+	// A turn or response-state hint may retain a decision only for the same
+	// requested model. Explicit model switches must re-evaluate rules and must
+	// never inherit the model from a previous successful request.
+	if hasTurn && sameTurn.model == model && (p.AffinityMode != AffinityNone || fromState) {
 		plan.Decision = sameTurn.decision
 		plan.Decision.ReusedTurn = true
-		plan.Model = sameTurn.model
 		preferred = &sameTurn.candidate
 	} else {
 		plan.Decision = ResolveDecision(p, model, streaming)

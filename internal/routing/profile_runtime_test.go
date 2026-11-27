@@ -511,8 +511,8 @@ func TestProfileRuntimeToolsReuseDecisionWithoutRotation(t *testing.T) {
 		t.Fatal("first selection")
 	}
 	turn.NewTurn, turn.Continuation = false, true
-	tool := r.Plan(context.Background(), 1, "changed-client-alias", true, turn, false)
-	if tool.Trace().RequestedModel != "changed-client-alias" {
+	tool := r.Plan(context.Background(), 1, "gpt-test", true, turn, false)
+	if tool.Trace().RequestedModel != "gpt-test" {
 		t.Fatal("turn reuse overwrote the current request's original model")
 	}
 	if !tool.Decision.ReusedTurn || tool.Model != "gpt-test" || runtimeTestSend(t, r, &tool, 0).GroupID != 1 {
@@ -521,6 +521,70 @@ func TestProfileRuntimeToolsReuseDecisionWithoutRotation(t *testing.T) {
 	next := r.Plan(context.Background(), 1, "gpt-test", true, runtimeTestTurn("t2"), false)
 	if runtimeTestSend(t, r, &next, 0).GroupID != 2 {
 		t.Fatal("tool request advanced rotation")
+	}
+}
+
+func TestProfileRuntimeModelSwitchReevaluatesRememberedDecision(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		for _, continuation := range []string{"turn", "response_state", "response_state_no_affinity"} {
+			for _, scenario := range []struct {
+				name, from, to, kind, upstream string
+				group                          int64
+			}{
+				{"default", "old-model", "new-model", "default", "new-model", 1},
+				{"enter_rule", "old-model", "rule-model", "model", "rule-upstream", 3},
+				{"leave_rule", "rule-model", "new-model", "default", "new-model", 1},
+				{"mapping", "rule-model", "mapped-model", "mapping", "mapped-upstream", 2},
+			} {
+				t.Run(provider+"/"+continuation+"/"+scenario.name, func(t *testing.T) {
+					cfg := runtimeTestConfig()
+					cfg.Provider, cfg.Profiles[0].Provider = provider, provider
+					for i := range cfg.Candidates {
+						cfg.Candidates[i].Provider = provider
+					}
+					if continuation == "response_state_no_affinity" {
+						cfg.Profiles[0].AffinityMode = AffinityNone
+					}
+					cfg.Profiles[0].Rules = []RoutingRule{
+						{ID: 1, Enabled: true, Kind: "model", MatchModel: "rule-model", Targets: []RouteTarget{{ChannelID: 2, GroupID: 3, UpstreamModel: "rule-upstream"}}},
+						{ID: 2, Enabled: true, Kind: "mapping", MatchModel: "mapped-model", Targets: []RouteTarget{{ChannelID: 1, GroupID: 2, UpstreamModel: "mapped-upstream"}}},
+					}
+					r := NewProfileRuntime(cfg)
+					ctx := context.Background()
+					turn := runtimeTestTurn("same-turn")
+					first := r.Plan(ctx, 1, scenario.from, true, turn, false)
+					selected := runtimeTestSend(t, r, &first, 0)
+					r.RememberResponseStates(&first, selected, []string{"response-state"})
+					turn.NewTurn, turn.Continuation = false, true
+					if continuation != "turn" {
+						turn = TurnInput{Continuation: true}
+						ctx = WithProfileStateKeys(ctx, []string{"response-state"})
+						tracker := NewStateTracker()
+						tracker.Observe([]string{"response-state"}, "", selected.Identity())
+						ctx = WithStatePreference(ctx, tracker, []string{"response-state"}, "")
+					}
+					same := r.Plan(ctx, 1, scenario.from, true, turn, false)
+					if !same.Decision.ReusedTurn || same.Decision.RuleID != first.Decision.RuleID || same.EligibleCandidates[0].Identity() != selected.Identity() {
+						t.Fatalf("same-model continuation lost its decision: %+v", same)
+					}
+					next := r.Plan(ctx, 1, scenario.to, true, turn, false)
+					if next.Decision.ReusedTurn || next.Decision.Kind != scenario.kind || next.Model != scenario.to || next.Trace().RequestedModel != scenario.to {
+						t.Fatalf("model switch inherited the old decision: %+v", next)
+					}
+					actual := runtimeTestSend(t, r, &next, 0)
+					if actual.GroupID != scenario.group || actual.Identity().Model != scenario.upstream {
+						t.Fatalf("wrong send after model switch: %+v", actual)
+					}
+					// Switching back must also resolve the original request model;
+					// the newly remembered decision must not leak in the other direction.
+					r.RememberResponseStates(&next, actual, []string{"response-state"})
+					back := r.Plan(ctx, 1, scenario.from, true, turn, false)
+					if back.Decision.ReusedTurn || back.Model != scenario.from || back.Decision.Kind != first.Decision.Kind {
+						t.Fatalf("switching back retained the newer model: %+v", back)
+					}
+				})
+			}
+		}
 	}
 }
 

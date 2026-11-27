@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -131,6 +133,75 @@ func TestLocalFailureRecoveryAndUnchangedRefresh(t *testing.T) {
 	r.Replace(cfg)
 	if _, gate := r.AdmitLocalRequest(httptest.NewRequest("POST", "/v1/responses", nil), []byte(body)); gate != nil {
 		t.Fatal("configuration change remained blocked")
+	}
+}
+
+func TestLocalRejectionOnlyTimedGatesAreRetryable(t *testing.T) {
+	for _, condition := range []string{"cooldown", "budget", "configuration", "missing-profile", "unknown-recovery", "manual-repair", "disabled", "model-unsupported"} {
+		t.Run(condition, func(t *testing.T) {
+			cfg := runtimeTestConfig()
+			until := time.Now().Add(2 * time.Minute)
+			cfg.PrepareCandidate = func(c DispatchCandidate, model, override string) DispatchCandidate {
+				c = CopyCandidateForModel(c, model, override)
+				c.Health = HealthState{CoolingDown: true, Until: until}
+				if condition == "unknown-recovery" {
+					c.Health.Until = time.Time{}
+				}
+				if condition == "manual-repair" {
+					c.Health.RepairRequired = true
+				}
+				if condition == "disabled" {
+					c.Enabled = false
+				}
+				return c
+			}
+			if condition == "configuration" {
+				cfg.LoadError = errors.New("no such column: intent_id")
+			}
+			if condition == "missing-profile" {
+				cfg.Profiles = nil
+			}
+			if condition == "model-unsupported" {
+				cfg.Supports = func(DispatchCandidate, string) bool { return false }
+			}
+			r := NewProfileRuntime(cfg)
+			raw := []byte(`{"model":"test","input":"hello"}`)
+			request, gate := r.AdmitLocalRequest(httptest.NewRequest("POST", "/v1/responses", nil), raw)
+			if gate != nil {
+				t.Fatal("first request already blocked")
+			}
+			plan := r.Plan(request.Context(), 0, "test", false, TurnInput{}, false)
+			reason := plan.Error
+			if condition == "budget" {
+				reason = StopRecoveryOutsideBudget
+			}
+			first := plan.RejectLocal(reason)
+			if first == nil {
+				t.Fatal("missing local rejection")
+			}
+			_, repeated := r.AdmitLocalRequest(httptest.NewRequest("POST", "/v1/responses", nil), raw)
+			if repeated == nil || !repeated.Repeated {
+				t.Fatal("identical request did not stay gated")
+			}
+			wantStatus := http.StatusBadRequest
+			if condition == "cooldown" || condition == "budget" {
+				wantStatus = http.StatusServiceUnavailable
+			}
+			for _, gate := range []*LocalRejection{first, repeated} {
+				recorder := httptest.NewRecorder()
+				gate.Write(recorder)
+				seconds, err := strconv.Atoi(recorder.Header().Get("Retry-After"))
+				if recorder.Code != wantStatus || err != nil || seconds <= 0 || !strings.Contains(recorder.Body.String(), reason) {
+					t.Fatalf("status=%d headers=%v body=%s", recorder.Code, recorder.Header(), recorder.Body.String())
+				}
+				if wantStatus == http.StatusServiceUnavailable && !gate.RetryAt.Equal(until) {
+					t.Fatal("timed gate lost its actual recovery deadline")
+				}
+			}
+			if !first.RetryAt.Equal(repeated.RetryAt) {
+				t.Fatal("SDK retry extended the failure window")
+			}
+		})
 	}
 }
 

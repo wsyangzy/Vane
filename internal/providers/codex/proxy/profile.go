@@ -492,13 +492,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 					h.observeProfileResponse(sendRequest.Context(), candidate, resp.StatusCode, resp.Header, diagnosticBody)
 				}
 				failure := codexRequestFailure(sendRequest, resp.StatusCode, diagnosticBody, nil)
-				code, kind, _ := routing.ErrorIdentity(diagnosticBody)
-				for _, identifier := range []string{code, kind} {
-					switch identifier {
-					case "usage_limit_reached", "usage_limit_exceeded", "quota_exceeded", "insufficient_quota", "model_usage_limit_reached":
-						quotaFailure = true
-					}
-				}
+				quotaFailure = codexProfileQuotaFailure(sendRequest.Context(), resp.StatusCode, resp.Header, diagnosticBody, candidate.Identity().Model)
 				failure = finish(0, false, failure, routing.RetryAfter(resp.Header, time.Now()))
 				lastUpstreamError = subscription.Redact(sendRequest.Context(), chainBodyText(diagnosticBody, failure.Reason))
 				annotateLastChainError(&chain, resp.StatusCode, lastUpstreamError, resp.Header, false)
@@ -548,10 +542,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 						} else if streamErr.Type == "response_incomplete" {
 							failure = routing.Failure{Scope: routing.ScopeCandidate, Reason: "incomplete_response"}
 						}
-						switch streamErr.Code {
-						case "usage_limit_reached", "usage_limit_exceeded", "quota_exceeded", "insufficient_quota", "model_usage_limit_reached":
-							quotaFailure = true
-						}
+						quotaFailure = codexProfileQuotaFailure(sendRequest.Context(), resp.StatusCode, resp.Header, observed.errorFrame, candidate.Identity().Model)
 					}
 					attempt.SetUsage(codexAttemptUsage(observed.usage, success, extractServiceTier(body)))
 					failure = finish(tokens, success, failure, routing.RetryAfter(resp.Header, time.Now()))
@@ -606,6 +597,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			attempt.SetCachedTokens(cached)
 			if !success {
 				failure := codexRequestFailure(sendRequest, resp.StatusCode, raw, readErr)
+				quotaFailure = codexProfileQuotaFailure(sendRequest.Context(), resp.StatusCode, resp.Header, raw, candidate.Identity().Model)
 				failure = finish(tokens, false, failure, routing.RetryAfter(resp.Header, time.Now()))
 				if resp.StatusCode >= 400 {
 					lastUpstreamError = subscription.Redact(sendRequest.Context(), chainBodyText(raw, failure.Reason))
