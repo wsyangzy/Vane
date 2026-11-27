@@ -216,8 +216,12 @@ func (ut *UsageTracker) cleanupOldRecords() error {
 	ut.invalidateArchiveTotalsLocked()
 	ut.notifyUsageDataChanged(appcache.Change{End: cutoffTime})
 
-	// 更新汇总统计（异步）
-	go ut.updateUsageSummary()
+	// 关闭时也要等待汇总任务，避免它读取已关闭的写队列和数据库适配器。
+	ut.wg.Add(1)
+	go func() {
+		defer ut.wg.Done()
+		ut.updateUsageSummary()
+	}()
 
 	return nil
 }

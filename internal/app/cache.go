@@ -7,6 +7,7 @@ import (
 	appcache "github.com/wsyangzy/Vane/internal/platform/cache"
 	settingsservice "github.com/wsyangzy/Vane/internal/settings/service"
 	"github.com/wsyangzy/Vane/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/tracking/sessionusage"
 )
 
 const (
@@ -46,20 +47,24 @@ type CacheStatus struct {
 }
 
 type CacheStatusItem struct {
-	Name              string `json:"name"`
-	Enabled           bool   `json:"enabled"`
-	Fixed             bool   `json:"fixed"`
-	TTL               string `json:"ttl"`
-	MaxEntries        int    `json:"max_entries"`
-	Size              int    `json:"size"`
-	Hits              uint64 `json:"hits"`
-	Misses            uint64 `json:"misses"`
-	Expired           uint64 `json:"expired"`
-	Evicted           uint64 `json:"evicted"`
-	Invalidations     uint64 `json:"invalidations"`
-	StaleServed       uint64 `json:"stale_served"`
-	LastUpdatedAt     string `json:"last_updated_at"`
-	LastInvalidatedAt string `json:"last_invalidated_at"`
+	Name              string   `json:"name"`
+	Enabled           bool     `json:"enabled"`
+	Fixed             bool     `json:"fixed"`
+	TTL               string   `json:"ttl"`
+	MaxEntries        int      `json:"max_entries"`
+	Size              int      `json:"size"`
+	EstimatedBytes    *int64   `json:"estimated_bytes"`
+	MaxBytes          int64    `json:"max_bytes"`
+	Loads             uint64   `json:"loads"`
+	LastLoadMs        *float64 `json:"last_load_ms"`
+	Hits              uint64   `json:"hits"`
+	Misses            uint64   `json:"misses"`
+	Expired           uint64   `json:"expired"`
+	Evicted           uint64   `json:"evicted"`
+	Invalidations     uint64   `json:"invalidations"`
+	StaleServed       uint64   `json:"stale_served"`
+	LastUpdatedAt     string   `json:"last_updated_at"`
+	LastInvalidatedAt string   `json:"last_invalidated_at"`
 }
 
 type ClearCacheInput struct {
@@ -119,6 +124,9 @@ func (a *App) setupCacheRegistry() {
 	a.cacheRegistry.Register(a.tokenUsageCache)
 	a.cacheRegistry.Register(a.endpointCostTodayCache)
 	a.cacheRegistry.Register(a.usageReader())
+	for _, cache := range a.ensureReadCaches().managed() {
+		a.cacheRegistry.Register(cache)
+	}
 	a.registerRuntimeStatusCaches()
 }
 
@@ -202,6 +210,10 @@ func (a *App) applyCacheSettings(ctx context.Context) {
 	a.usageSummaryCache.SetOptions(cacheOptions(cacheNameUsageSummary, settings))
 	a.tokenUsageCache.SetOptions(cacheOptions(cacheNameTokenUsage, settings))
 	a.endpointCostTodayCache.SetOptions(cacheOptions(cacheNameEndpointCostToday, settings))
+	readCaches := a.ensureReadCaches().managed()
+	for i, options := range readCacheOptions(settings) {
+		readCaches[i].SetOptions(options)
+	}
 	reader := a.usageReader()
 	reader.SetOptions(cacheOptions(reader.Name(), settings))
 
@@ -222,6 +234,10 @@ func (a *App) invalidateUsageQueryCaches(change appcache.Change) {
 		return
 	}
 	options := appcache.InvalidateOptions{Change: &change}
+	if caches := a.readCaches.Load(); caches != nil {
+		caches.proxy.Invalidate(options)
+		caches.availability.Invalidate(options)
+	}
 	if a.usageSummaryCache != nil {
 		a.usageSummaryCache.Invalidate(options)
 	}
@@ -269,6 +285,17 @@ func (a *App) ClearCache(input ClearCacheInput) (CacheClearResult, error) {
 	}
 	a.registerUsageTrackerCaches()
 	result := a.cacheRegistry.Clear(appcache.ClearOptions{Names: input.Names})
+	caches := a.ensureReadCaches()
+	for _, name := range input.Names {
+		switch name {
+		case cacheNameDashboardLocal:
+			a.usageReader().InvalidateRefresh()
+		case sessionusage.CacheName:
+			caches.local.Invalidate(appcache.InvalidateOptions{All: true})
+		case cacheNameDashboardPricing:
+			caches.local.Invalidate(appcache.InvalidateOptions{All: true})
+		}
+	}
 	return CacheClearResult{
 		ClearedCaches:  result.ClearedCaches,
 		ClearedEntries: result.ClearedEntries,
@@ -277,6 +304,16 @@ func (a *App) ClearCache(input ClearCacheInput) (CacheClearResult, error) {
 }
 
 func cacheStatusItem(stat appcache.Stats) CacheStatusItem {
+	var estimatedBytes *int64
+	if stat.HasByteEstimate {
+		value := stat.EstimatedBytes
+		estimatedBytes = &value
+	}
+	var lastLoadMs *float64
+	if stat.Loads > 0 {
+		value := float64(stat.LastLoadDuration) / float64(time.Millisecond)
+		lastLoadMs = &value
+	}
 	return CacheStatusItem{
 		Name:              stat.Name,
 		Enabled:           stat.Enabled,
@@ -284,6 +321,10 @@ func cacheStatusItem(stat appcache.Stats) CacheStatusItem {
 		TTL:               stat.TTL.String(),
 		MaxEntries:        stat.MaxEntries,
 		Size:              stat.Size,
+		EstimatedBytes:    estimatedBytes,
+		MaxBytes:          stat.MaxBytes,
+		Loads:             stat.Loads,
+		LastLoadMs:        lastLoadMs,
 		Hits:              stat.Hits,
 		Misses:            stat.Misses,
 		Expired:           stat.Expired,

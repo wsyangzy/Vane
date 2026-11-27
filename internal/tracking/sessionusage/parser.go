@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unsafe"
 )
 
 type observation struct {
@@ -31,10 +32,65 @@ type parser struct {
 	checkpoints                    map[string]bool
 	pending                        string
 	pendingNamed                   bool
+	trackChanges                   bool
+	changedCalls                   map[string]struct{}
+	changedActivity                map[string]struct{}
 }
 
 func newParser(provider, path string) *parser {
 	return &parser{provider: provider, session: fmt.Sprintf("unidentified-%x", sha256.Sum256([]byte(path))), subagent: strings.Contains(strings.ReplaceAll(path, "\\", "/"), "/subagents/"), calls: make(map[string]Call), activity: make(map[string]Activity), prompts: make(map[string]bool), claude: make(map[string]*observation), checkpoints: make(map[string]bool)}
+}
+
+func (p *parser) setCall(key string, call Call) {
+	p.calls[key] = call
+	p.markCall(key)
+}
+
+func (p *parser) deleteCall(key string) {
+	delete(p.calls, key)
+	p.markCall(key)
+}
+
+func (p *parser) markCall(key string) {
+	if p.trackChanges {
+		if p.changedCalls == nil {
+			p.changedCalls = make(map[string]struct{})
+		}
+		p.changedCalls[key] = struct{}{}
+	}
+}
+
+func (p *parser) markStored() {
+	p.trackChanges = true
+	p.changedCalls, p.changedActivity = nil, nil
+}
+
+// Count strings conservatively even when they share backing storage. The
+// multiplier also leaves headroom for Go map capacity and allocator overhead.
+func (p *parser) memoryBytes() int64 {
+	size := int64(unsafe.Sizeof(*p)) + int64(len(p.provider)+len(p.session)+len(p.model)+len(p.turn)+len(p.project)+len(p.title)+len(p.pending))
+	for key, call := range p.calls {
+		size += int64(unsafe.Sizeof(call)) + 64 + int64(len(key)+len(call.ID)+len(call.Provider)+len(call.Model)+len(call.Session)+len(call.Project)+len(call.Title))
+	}
+	for key, activity := range p.activity {
+		size += int64(unsafe.Sizeof(activity)) + 64 + int64(len(key)+len(activity.Provider)+len(activity.Model)+len(activity.Session)+len(activity.Project)+len(activity.Title))
+	}
+	for key := range p.prompts {
+		size += 64 + int64(len(key))
+	}
+	for key := range p.checkpoints {
+		size += 64 + int64(len(key))
+	}
+	for key, item := range p.claude {
+		size += 96 + int64(len(key)) + int64(len(item.versions))*64
+	}
+	for key := range p.changedCalls {
+		size += 64 + int64(len(key))
+	}
+	for key := range p.changedActivity {
+		size += 64 + int64(len(key))
+	}
+	return 2 * size
 }
 
 func (p *parser) observe(at time.Time, promptID string) {
@@ -67,6 +123,12 @@ func (p *parser) observe(at time.Time, promptID string) {
 	}
 	if item.Milliseconds > 0 || item.Prompts > 0 {
 		p.activity[key] = item
+		if p.trackChanges {
+			if p.changedActivity == nil {
+				p.changedActivity = make(map[string]struct{})
+			}
+			p.changedActivity[key] = struct{}{}
+		}
 	}
 }
 
@@ -181,8 +243,8 @@ func (p *parser) readClaude(line []byte) {
 		delete(p.claude, base)
 		if call, ok := p.calls[base]; ok {
 			call.ID = key
-			p.calls[key] = call
-			delete(p.calls, base)
+			p.setCall(key, call)
+			p.deleteCall(base)
 		}
 	} else if requestID == "" {
 		var known string
@@ -217,9 +279,9 @@ func (p *parser) readClaude(line []byte) {
 	}
 	old.at, old.usage = at, tokens
 	if tokens.Total() > 0 {
-		p.calls[key] = p.call(key, at, tokens, event.Message.Model)
+		p.setCall(key, p.call(key, at, tokens, event.Message.Model))
 	} else {
-		delete(p.calls, key)
+		p.deleteCall(key)
 	}
 }
 
@@ -301,13 +363,13 @@ func (p *parser) readCodex(line []byte) {
 		// RECORD and token_count are two observations of the same response.
 		// Their cumulative counters can be in different compaction domains.
 		if prior, ok := p.calls[p.pending]; ok && !p.pendingNamed && prior.Tokens == tokens {
-			delete(p.calls, p.pending)
+			p.deleteCall(p.pending)
 			p.pending = ""
 		} else if event.Type != "compacted" {
 			p.pending, p.pendingNamed = key, true
 		}
 		if tokens.Total() > 0 {
-			p.calls[key] = p.call(key, at, tokens, p.model)
+			p.setCall(key, p.call(key, at, tokens, p.model))
 		}
 		return
 	}
@@ -344,7 +406,7 @@ func (p *parser) readCodex(line []byte) {
 		return
 	} // Fork history checkpoints often have last=0.
 	key := fmt.Sprintf("codex/%s/count/%s/%d/%v", p.session, p.turn, p.epoch, total)
-	p.calls[key] = p.call(key, at, tokens, p.model)
+	p.setCall(key, p.call(key, at, tokens, p.model))
 	p.pending, p.pendingNamed = key, false
 }
 

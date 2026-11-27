@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sync/atomic"
 
 	pricingstore "github.com/wsyangzy/Vane/internal/pricing/store"
 	"github.com/wsyangzy/Vane/internal/tracking"
@@ -17,8 +18,13 @@ import (
 // 不设读缓存：计费走 UsageTracker 自己的定价表（syncPricingToTracker 同步，key 含 provider 与档位），
 // 这里只服务低频的管理页读写，直接查库即可保证读到最新事实。
 type ModelPricingService struct {
-	store pricingstore.ModelPricingStore
+	store    pricingstore.ModelPricingStore
+	revision atomic.Uint64
 }
+
+// Revision invalidates statistical snapshots even when pricing is changed by
+// an internal caller. The management reads themselves continue to query SQL.
+func (s *ModelPricingService) Revision() uint64 { return s.revision.Load() }
 
 // NewModelPricingService 创建模型定价服务实例
 func NewModelPricingService(st pricingstore.ModelPricingStore) *ModelPricingService {
@@ -27,6 +33,7 @@ func NewModelPricingService(st pricingstore.ModelPricingStore) *ModelPricingServ
 
 // CreatePricing 创建新的模型定价
 func (s *ModelPricingService) CreatePricing(ctx context.Context, record *pricingstore.ModelPricingRecord) (*pricingstore.ModelPricingRecord, error) {
+	defer s.revision.Add(1)
 	// 验证必填字段
 	if err := s.validateRecord(record); err != nil {
 		return nil, err
@@ -128,6 +135,7 @@ func (s *ModelPricingService) ListPricingsByProvider(ctx context.Context, provid
 
 // UpdatePricing 更新模型定价
 func (s *ModelPricingService) UpdatePricing(ctx context.Context, record *pricingstore.ModelPricingRecord) error {
+	defer s.revision.Add(1)
 	// 验证必填字段
 	if err := s.validateRecord(record); err != nil {
 		return err
@@ -160,6 +168,7 @@ func (s *ModelPricingService) UpdatePricing(ctx context.Context, record *pricing
 
 // DeletePricing 删除模型定价（含该模型在该 provider 下的全部档位子行）
 func (s *ModelPricingService) DeletePricing(ctx context.Context, provider, modelName string) error {
+	defer s.revision.Add(1)
 	provider = normalizeProvider(provider)
 
 	// 验证存在（标准档主行）
@@ -187,6 +196,7 @@ func (s *ModelPricingService) DeletePricing(ctx context.Context, provider, model
 
 // DeleteTierPricing 删除单个档位子行，标准档主行不受影响
 func (s *ModelPricingService) DeleteTierPricing(ctx context.Context, provider, modelName, serviceTier string) error {
+	defer s.revision.Add(1)
 	provider = normalizeProvider(provider)
 
 	if err := s.store.DeleteTier(ctx, provider, modelName, serviceTier); err != nil {
@@ -199,6 +209,7 @@ func (s *ModelPricingService) DeleteTierPricing(ctx context.Context, provider, m
 
 // SetDefaultPricing 设置默认定价
 func (s *ModelPricingService) SetDefaultPricing(ctx context.Context, modelName string) error {
+	defer s.revision.Add(1)
 	if err := s.store.SetDefault(ctx, modelName); err != nil {
 		return fmt.Errorf("设置默认定价失败: %w", err)
 	}

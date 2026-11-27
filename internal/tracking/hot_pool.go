@@ -340,6 +340,11 @@ func (hp *HotPool) CompleteAndArchive(requestID string, finalizer func(*ActiveRe
 		ArchivedAt: time.Now(),
 	}
 	callback := hp.archiveCallback
+	hp.stats.mu.Lock()
+	hp.stats.TotalRemoved++
+	hp.stats.TotalArchived++
+	hp.stats.CurrentSize = len(hp.requests)
+	hp.stats.mu.Unlock()
 	hp.mu.Unlock()
 
 	// 应用最终更新
@@ -358,13 +363,6 @@ func (hp *HotPool) CompleteAndArchive(requestID string, finalizer func(*ActiveRe
 	// 同理在此结束最后一跳的计时：各 provider 的退出路径很多，逐一补写容易漏
 	req.EndpointChain = closeOpenChainHop(req.EndpointChain, req.DurationMs)
 	req.mu.Unlock()
-
-	// 更新统计
-	hp.stats.mu.Lock()
-	hp.stats.TotalRemoved++
-	hp.stats.TotalArchived++
-	hp.stats.CurrentSize = len(hp.requests)
-	hp.stats.mu.Unlock()
 
 	// 调用归档回调
 	if callback != nil {

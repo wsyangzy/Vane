@@ -15,6 +15,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const sqliteConnectionCacheKiB = 8 * 1024
+
 // SQLiteAdapter SQLite数据库适配器实现（保持原有逻辑）
 type SQLiteAdapter struct {
 	config   DatabaseConfig
@@ -106,7 +108,8 @@ func (s *SQLiteAdapter) Open() error {
 
 	// 读句柄允许少量并发连接，让查询不要和写事务共用同一连接。
 	readDB.SetMaxOpenConns(4)
-	readDB.SetMaxIdleConns(4)
+	readDB.SetMaxIdleConns(1)
+	readDB.SetConnMaxIdleTime(time.Minute)
 	readDB.SetConnMaxLifetime(0)
 
 	if err := readDB.PingContext(ctx); err != nil {
@@ -210,7 +213,8 @@ func (s *SQLiteAdapter) buildSQLiteDSN(dbPath string) string {
 	// Keep the lock wait below the management APIs' 10-second request budget.
 	// Foreign-key enforcement stays unchanged; enabling it needs a legacy-data
 	// compatibility review independent of this connection-lifecycle fix.
-	return basePath + separator + "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=cache_size(10000)"
+	// Use KiB rather than page counts so the budget is independent of page size.
+	return basePath + separator + fmt.Sprintf("_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-%d)", sqliteConnectionCacheKiB)
 }
 
 // diagnoseTimezoneSettings 诊断SQLite时区设置，帮助调试时区不一致问题

@@ -17,8 +17,13 @@ type DashboardUsageRecord struct {
 }
 
 func (ut *UsageTracker) QueryDashboardUsage(ctx context.Context, opts *QueryOptions) ([]DashboardUsageRecord, error) {
-	opts = ut.scopedQueryOptions(opts)
 	result := make([]DashboardUsageRecord, 0)
+	err := ut.VisitDashboardUsage(ctx, opts, func(item DashboardUsageRecord) { result = append(result, item) })
+	return result, err
+}
+
+func (ut *UsageTracker) VisitDashboardUsage(ctx context.Context, opts *QueryOptions, visit func(DashboardUsageRecord)) error {
+	opts = ut.scopedQueryOptions(opts)
 	seen := make(map[string]bool)
 	err := ut.forEachHistorySource(ctx, opts.StartDate, opts.EndDate, func(source historyQuerySource) error {
 		query := `SELECT request_id, start_time, COALESCE(provider, 'claude'), COALESCE(model_name, ''),
@@ -44,9 +49,9 @@ func (ut *UsageTracker) QueryDashboardUsage(ctx context.Context, opts *QueryOpti
 			return err
 		}
 		defer rows.Close()
+		var item DashboardUsageRecord
+		var stamp sql.NullTime
 		for rows.Next() {
-			var item DashboardUsageRecord
-			var stamp sql.NullTime
 			if err := rows.Scan(&item.ID, &stamp, &item.Provider, &item.Model, &item.Channel, &item.Group, &item.Status, &item.Input, &item.Output, &item.CacheRead, &item.CacheWrite, &item.Cost, &item.DurationMs); err != nil {
 				return err
 			}
@@ -58,9 +63,9 @@ func (ut *UsageTracker) QueryDashboardUsage(ctx context.Context, opts *QueryOpti
 			if item.Provider == "" {
 				item.Provider = "claude"
 			}
-			result = append(result, item)
+			visit(item)
 		}
 		return rows.Err()
 	})
-	return result, err
+	return err
 }

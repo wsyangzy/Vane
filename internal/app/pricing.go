@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	appcache "github.com/wsyangzy/Vane/internal/platform/cache"
 	"strings"
 
 	pricingservice "github.com/wsyangzy/Vane/internal/pricing/service"
@@ -199,6 +200,10 @@ func (a *App) initDefaultModelPricing(ctx context.Context) {
 }
 
 func (a *App) syncPricingToTracker(ctx context.Context) {
+	if caches := a.readCaches.Load(); caches != nil {
+		caches.pricing.Invalidate(appcache.InvalidateOptions{All: true})
+		caches.local.Invalidate(appcache.InvalidateOptions{All: true})
+	}
 	if a.usageTracker == nil || a.modelPricingService == nil {
 		return
 	}

@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -179,9 +180,12 @@ func TestFailedRequestTokensConcurrency(t *testing.T) {
 	// 创建多个RequestLifecycleManager并发记录失败Token
 	numManagers := 5
 	tokensPerManager := 10
+	var writers sync.WaitGroup
 
 	for i := 0; i < numManagers; i++ {
+		writers.Add(1)
 		go func(managerID int) {
+			defer writers.Done()
 			rlm := proxy.NewRequestLifecycleManager(tracker, monitoringMiddleware,
 				"req-concurrent-"+string(rune('A'+managerID)), nil)
 
@@ -198,7 +202,7 @@ func TestFailedRequestTokensConcurrency(t *testing.T) {
 	}
 
 	// 等待所有goroutine完成
-	time.Sleep(1 * time.Second)
+	writers.Wait()
 
 	// 验证并发处理结果
 	metrics := monitoringMiddleware.GetMetrics()

@@ -100,8 +100,8 @@ func TestCodexRenameIndexRefreshesWithoutReparsingSessions(t *testing.T) {
 	if calls := query(t, r, Roots{Codex: root}); calls[0].Title != "更换名称" {
 		t.Fatalf("rewritten=%+v", calls)
 	}
-	if r.Stats().Size != 2 {
-		t.Fatalf("title index not included in managed status: %+v", r.Stats())
+	if memory := r.MemoryStats(); r.Stats().Size != 1 || memory.ResidentParsers != 1 || memory.TitleBytes == 0 || memory.ParserBytes+memory.TitleBytes > memory.BudgetBytes {
+		t.Fatalf("title index not included in the resident memory budget: %+v", memory)
 	}
 	r.Invalidate(appcache.InvalidateOptions{All: true})
 	if r.titles.names != nil || r.Stats().Size != 0 {

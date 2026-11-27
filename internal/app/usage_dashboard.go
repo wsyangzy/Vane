@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
+	appcache "github.com/wsyangzy/Vane/internal/platform/cache"
 	pricingstore "github.com/wsyangzy/Vane/internal/pricing/store"
 	"github.com/wsyangzy/Vane/internal/tracking"
 	"github.com/wsyangzy/Vane/internal/tracking/sessionusage"
@@ -112,6 +114,7 @@ type dashboardRecord struct {
 // GetUsageDashboard reads each source independently. Local sessions are never
 // imported into the proxy ledger or attributed to guessed channels/accounts.
 func (a *App) GetUsageDashboard(query UsageDashboardQuery) (UsageDashboard, error) {
+	defer a.logMemoryDiagnostics()
 	a.mu.RLock()
 	cfg, tracker, pricing := a.config, a.usageTracker, a.modelPricingService
 	a.mu.RUnlock()
@@ -144,46 +147,74 @@ func (a *App) GetUsageDashboard(query UsageDashboardQuery) (UsageDashboard, erro
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	var records []dashboardRecord
-	var activity []sessionusage.Activity
+	caches := a.ensureReadCaches()
+	identity := query
+	identity.Page, identity.PageSize, identity.Sort = 0, 0, ""
+	encoded, _ := json.Marshal(identity)
+	key := dashboardKey(string(encoded), readStart.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano), loc.String())
+	scope := appcache.Scope{Provider: query.Provider, Start: readStart, End: end.Add(-time.Nanosecond)}
 	if query.Source == "local" {
 		roots, err := sessionusage.NativeRoots()
 		if err != nil {
 			return UsageDashboard{}, err
 		}
-		snapshot, err := a.usageReader().Read(ctx, roots, readStart, end, query.Provider, "")
+		reader := a.usageReader()
+		version, err := reader.PrepareVersion(ctx, roots, query.Provider)
 		if err != nil {
 			return UsageDashboard{}, err
 		}
-		var prices []*pricingstore.ModelPricingRecord
+		priceKey := fmt.Sprintf("%p", pricing)
 		if pricing != nil {
-			prices, err = pricing.ListPricings(ctx)
+			priceKey += fmt.Sprintf(":%d", pricing.Revision())
+		}
+		key = dashboardKey(key, roots.Claude, roots.Codex, fmt.Sprint(version), priceKey)
+		snapshot, err := caches.local.GetOrLoadScoped(key, scope, func() (usageDashboardSnapshot, error) {
+			priceMap, err := caches.pricing.GetOrLoad(priceKey, func() (map[string]*pricingstore.ModelPricingRecord, error) {
+				priceMap := make(map[string]*pricingstore.ModelPricingRecord)
+				if pricing == nil {
+					return priceMap, nil
+				}
+				prices, err := pricing.ListPricings(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("读取用量估算定价失败: %w", err)
+				}
+				for _, price := range prices {
+					if price.ServiceTier == "" || price.ServiceTier == "standard" {
+						priceMap[price.Provider+"/"+price.ModelName] = price
+					}
+				}
+				return priceMap, nil
+			})
 			if err != nil {
-				return UsageDashboard{}, fmt.Errorf("读取用量估算定价失败: %w", err)
+				return usageDashboardSnapshot{}, err
 			}
-		}
-		priceMap := make(map[string]*pricingstore.ModelPricingRecord)
-		for _, price := range prices {
-			if price.ServiceTier == "" || price.ServiceTier == "standard" {
-				priceMap[price.Provider+"/"+price.ModelName] = price
-			}
-		}
-		for _, call := range snapshot.Calls {
-			cost, known := dashboardLocalCost(call, priceMap[call.Provider+"/"+call.Model])
-			records = append(records, dashboardRecord{Call: call, cost: cost, priced: known})
-		}
-		activity = snapshot.Activity
-	} else if tracker != nil {
-		last := end.Add(-time.Nanosecond)
-		items, err := tracker.QueryDashboardUsage(ctx, &tracking.QueryOptions{StartDate: &readStart, EndDate: &last, Provider: query.Provider})
+			return buildUsageDashboardSnapshot(query, start, end, now, func(addRecord func(dashboardRecord), addActivity func(sessionusage.Activity)) error {
+				return reader.Visit(ctx, roots, readStart, end, query.Provider, "", func(call sessionusage.Call) {
+					cost, known := dashboardLocalCost(call, priceMap[call.Provider+"/"+call.Model])
+					addRecord(dashboardRecord{Call: call, cost: cost, priced: known})
+				}, addActivity)
+			})
+		})
 		if err != nil {
 			return UsageDashboard{}, err
 		}
-		for _, item := range items {
-			records = append(records, dashboardRecord{Call: sessionusage.Call{ID: item.ID, Provider: item.Provider, Model: item.Model, At: item.At, Tokens: sessionusage.Tokens{Input: item.Input, Output: item.Output, CacheRead: item.CacheRead, CacheWrite: item.CacheWrite}}, channel: item.Channel, group: item.Group, status: item.Status, cost: item.Cost, priced: true, duration: item.DurationMs})
-		}
+		return snapshot.page(query, loc), nil
 	}
-	return buildUsageDashboard(query, start, end, now, records, activity), nil
+	if tracker != nil {
+		last := end.Add(-time.Nanosecond)
+		snapshot, err := caches.proxy.GetOrLoadScoped(dashboardKey(key, fmt.Sprintf("%p", tracker)), scope, func() (usageDashboardSnapshot, error) {
+			return buildUsageDashboardSnapshot(query, start, end, now, func(addRecord func(dashboardRecord), _ func(sessionusage.Activity)) error {
+				return tracker.VisitDashboardUsage(ctx, &tracking.QueryOptions{StartDate: &readStart, EndDate: &last, Provider: query.Provider}, func(item tracking.DashboardUsageRecord) {
+					addRecord(dashboardRecord{Call: sessionusage.Call{ID: item.ID, Provider: item.Provider, Model: item.Model, At: item.At, Tokens: sessionusage.Tokens{Input: item.Input, Output: item.Output, CacheRead: item.CacheRead, CacheWrite: item.CacheWrite}}, channel: item.Channel, group: item.Group, status: item.Status, cost: item.Cost, priced: true, duration: item.DurationMs})
+				})
+			})
+		})
+		if err != nil {
+			return UsageDashboard{}, err
+		}
+		return snapshot.page(query, loc), nil
+	}
+	return buildUsageDashboard(query, start, end, now, nil, nil), nil
 }
 
 func dashboardRange(query UsageDashboardQuery, now time.Time) (UsageDashboardQuery, time.Time, time.Time, error) {

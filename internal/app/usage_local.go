@@ -39,13 +39,9 @@ func (a *App) getLocalTokenUsageHeatmap(provider, model string) ([]TokenUsageHea
 
 func queryLocalHeatmap(ctx context.Context, reader *sessionusage.Reader, roots sessionusage.Roots, now time.Time, provider, model string) ([]TokenUsageHeatmapDay, error) {
 	start, end := heatmapCalendarRange(now)
-	calls, err := reader.Query(ctx, roots, start, end, provider, model)
-	if err != nil {
-		return nil, err
-	}
 	byDate := make(map[string]TokenUsageHeatmapDay)
 	var peak int64
-	for _, call := range calls {
+	err := reader.Visit(ctx, roots, start, end, provider, model, func(call sessionusage.Call) {
 		date := call.At.In(now.Location()).Format(time.DateOnly)
 		day := byDate[date]
 		day.RequestCount++
@@ -56,6 +52,9 @@ func queryLocalHeatmap(ctx context.Context, reader *sessionusage.Reader, roots s
 		day.TotalTokens += call.Total()
 		byDate[date] = day
 		peak = max(peak, day.TotalTokens)
+	}, nil)
+	if err != nil {
+		return nil, err
 	}
 	result := make([]TokenUsageHeatmapDay, 0, 371)
 	for cursor := start; cursor.Before(end); cursor = cursor.AddDate(0, 0, 1) {

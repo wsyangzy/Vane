@@ -225,6 +225,9 @@ func TestUsageDashboardRangeAllPaginationAndErrors(t *testing.T) {
 	if got.From != "2026-08-01" || got.Page != 4 || got.RowCount != 4 || len(got.Rows) != 1 {
 		t.Fatalf("range/page=%+v", got)
 	}
+	if cap(got.Rows) != len(got.Rows) {
+		t.Fatal("requested page retained the other session rows")
+	}
 	empty := buildUsageDashboard(q, start, end, now, nil, nil)
 	if len(empty.Days) != 1 || empty.RowCount != 0 || empty.Page != 1 {
 		t.Fatal("all empty should have today's single bucket")
@@ -323,5 +326,88 @@ func TestUsageDashboardSessionTitlesSearchAndProjectMetadataSurvivePagination(t 
 	unknown := buildUsageDashboard(query, start, end, now, records, nil)
 	if unknown.RowCount != 1 || unknown.Rows[0].Project != "" {
 		t.Fatal("unrecorded project must not select every project")
+	}
+}
+
+func TestUsageDashboardPagedRowsKeepAllSortsAndCompleteTotals(t *testing.T) {
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	for _, source := range []string{"local", "proxy"} {
+		for _, order := range []string{"tokens", "cost", "active", "recent"} {
+			t.Run(source+"/"+order, func(t *testing.T) {
+				query, start, end, err := dashboardRange(UsageDashboardQuery{Source: source, Period: "today", Sort: order, PageSize: 1}, now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var records []dashboardRecord
+				var activity []sessionusage.Activity
+				for i, id := range []string{"a", "b", "c"} {
+					call := sessionusage.Call{ID: id, Provider: "codex", Model: "model", Title: id, At: now.Add(-time.Duration(3-i) * time.Minute), Tokens: sessionusage.Tokens{Input: int64(300 - i*100)}}
+					if source == "local" {
+						call.Session, call.Project = id, "project"
+						activity = append(activity, sessionusage.Activity{Provider: call.Provider, Model: call.Model, Session: id, Project: call.Project, At: call.At, Milliseconds: []int64{1000, 3000, 2000}[i], Prompts: 1})
+					}
+					records = append(records, dashboardRecord{Call: call, channel: "channel", group: "group", status: "completed", priced: true, cost: []float64{1, 3, 2}[i]})
+				}
+				expected := []string{"a", "b", "c"}
+				if order == "cost" || order == "active" {
+					expected = []string{"b", "c", "a"}
+				}
+				if order == "recent" || source == "proxy" && order == "active" {
+					expected = []string{"c", "b", "a"}
+				}
+				for page, title := range expected {
+					query.Page = page + 1
+					got := buildUsageDashboard(query, start, end, now, records, activity)
+					if got.Summary.Requests != 3 || got.Summary.Tokens != 600 || got.Summary.CostUSD != 6 || got.RowCount != 3 || got.Page != page+1 || len(got.Rows) != 1 || cap(got.Rows) != 1 || got.Rows[0].Title != title {
+						t.Fatalf("page %d lost totals or sort order: %+v", page+1, got)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestUsageDashboardStreamDiscardsPartialResultOnFailure(t *testing.T) {
+	query, start, end, now, records, _ := dashboardFixture(t, UsageDashboardQuery{Source: "local"})
+	got, err := buildUsageDashboardStream(query, start, end, now, func(addRecord func(dashboardRecord), _ func(sessionusage.Activity)) error {
+		addRecord(records[0])
+		return context.Canceled
+	})
+	if err != context.Canceled || got.Source != "" || got.Summary.Requests != 0 || len(got.Rows) != 0 {
+		t.Fatal("a partial failed scan was returned as a complete dashboard")
+	}
+}
+
+// This fixture measures aggregation allocations, not desktop process memory.
+func BenchmarkUsageDashboardStreaming(b *testing.B) {
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	for _, source := range []string{"local", "proxy"} {
+		b.Run(source, func(b *testing.B) {
+			query, start, end, err := dashboardRange(UsageDashboardQuery{Source: source, Period: "30d", Sort: "tokens"}, now)
+			if err != nil {
+				b.Fatal(err)
+			}
+			records := make([]dashboardRecord, 20000)
+			for i := range records {
+				provider := "codex"
+				if i%2 != 0 {
+					provider = "claude"
+				}
+				records[i] = dashboardRecord{Call: sessionusage.Call{
+					ID: fmt.Sprintf("call-%d", i), Provider: provider, Model: "fixture-model",
+					Session: fmt.Sprintf("session-%d", i%240), Project: "fixture-project",
+					Title: "会话用量统计测试", At: start.Add(time.Duration(i%720) * time.Hour),
+					Tokens: sessionusage.Tokens{Input: 1000, Output: int64(i%500 + 1), CacheRead: 500},
+				}, channel: "fixture-channel", group: "fixture-group", status: "completed", priced: true, cost: 0.01, duration: 1000}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				got := buildUsageDashboard(query, start, end, now, records, nil)
+				if got.Summary.Requests != int64(len(records)) || len(got.Rows) != query.PageSize {
+					b.Fatal("aggregation lost records or returned an incomplete page")
+				}
+			}
+		})
 	}
 }
