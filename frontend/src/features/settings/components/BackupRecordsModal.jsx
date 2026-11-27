@@ -21,16 +21,23 @@ export default function BackupRecordsModal({ provider: initialProvider = 'codex'
   const generation = useRef(0);
   const dialogRef = useRef(null), closeRef = useRef(null);
   const titleId = useId();
-  const load = useCallback(async () => {
+  const readRecords = useCallback(() => {
     const version = ++generation.current;
-    setBusy('loading'); setError(''); setSelected(null); setEditing(null);
-    try {
-      const result = await manageClientConfigBackups(provider);
-      if (version === generation.current) setData(result);
-    } catch (err) { if (version === generation.current) { setData(null); setError(getErrorMessage(err)); } }
-    finally { if (version === generation.current) setBusy(''); }
+    return manageClientConfigBackups(provider).then((result) => {
+      if (version === generation.current) { setData(result); setError(''); setSelected(null); setEditing(null); }
+    }).catch((err) => { if (version === generation.current) { setData(null); setError(getErrorMessage(err)); } })
+      .finally(() => { if (version === generation.current) setBusy(''); });
   }, [provider]);
-  useEffect(() => { load(); return () => { generation.current += 1; }; }, [load]);
+  const load = useCallback(() => {
+    setBusy('loading'); setError(''); setSelected(null); setEditing(null);
+    return readRecords();
+  }, [readRecords]);
+  const selectProvider = (value) => {
+    if (value === provider) return;
+    setBusy('loading'); setError(''); setSelected(null); setEditing(null);
+    setProvider(value); setNotice(''); setData(null);
+  };
+  useEffect(() => { readRecords(); return () => { generation.current += 1; }; }, [readRecords]);
   useLayoutEffect(() => {
     const previousFocus = triggerRef?.current || document.activeElement;
     const parent = previousFocus?.closest('[role="dialog"]');
@@ -94,7 +101,7 @@ export default function BackupRecordsModal({ provider: initialProvider = 'codex'
         <button ref={closeRef} type="button" aria-label="关闭备份记录" onClick={onClose} disabled={busy === 'restore' || busy === 'rename'} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 focus-visible:ring-2 focus-visible:ring-indigo-300 disabled:opacity-40"><X size={18} /></button>
       </div>
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-4 py-2">
-        <div className="flex gap-1 rounded-lg bg-slate-100 p-1">{['codex', 'claude'].map(value => <button key={value} type="button" aria-pressed={provider === value} disabled={Boolean(busy)} onClick={() => { setProvider(value); setNotice(''); setData(null); }} className={`rounded-md px-3 py-1.5 text-xs font-medium focus-visible:ring-2 focus-visible:ring-indigo-300 disabled:opacity-50 ${provider === value ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>{value === 'codex' ? 'Codex' : 'Claude Code'}</button>)}</div>
+        <div className="flex gap-1 rounded-lg bg-slate-100 p-1">{['codex', 'claude'].map(value => <button key={value} type="button" aria-pressed={provider === value} disabled={Boolean(busy)} onClick={() => selectProvider(value)} className={`rounded-md px-3 py-1.5 text-xs font-medium focus-visible:ring-2 focus-visible:ring-indigo-300 disabled:opacity-50 ${provider === value ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>{value === 'codex' ? 'Codex' : 'Claude Code'}</button>)}</div>
         <div className="flex flex-wrap justify-end gap-2"><Button size="sm" variant="secondary" icon={FolderOpen} className="whitespace-nowrap" disabled={Boolean(busy)} onClick={() => openDirectory()}>打开目录</Button><Button size="sm" variant="secondary" icon={RefreshCw} disabled={Boolean(busy)} onClick={load}>刷新</Button></div>
       </div>
       {data && <dl className="shrink-0 space-y-1.5 border-y border-slate-100 bg-slate-50 px-4 py-2.5 text-[11px] leading-5"><div className="flex min-w-0 gap-3"><dt className="shrink-0 text-slate-400">备份目录</dt><dd className="min-w-0 font-mono text-slate-600 [overflow-wrap:anywhere]">{formatClientConfigPath(data.directory, data)}</dd></div><div className="flex min-w-0 gap-3"><dt className="shrink-0 text-slate-400">恢复目标</dt><dd className="min-w-0 font-mono text-slate-600 [overflow-wrap:anywhere]">{formatClientConfigPath(data.configPath, data)}</dd></div></dl>}

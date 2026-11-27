@@ -74,8 +74,9 @@ import {
   parseReasoningConfig,
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
-import { describeFailureReason, getRequestFailureDetails, getRequestProtocolDiagnostics } from '../utils/failureSummary.js';
+import { describeFailureReason, getCompletedReasoningRecovery, getEncryptedHistoryRecovery, getRequestFailureDetails, getRequestProtocolDiagnostics } from '../utils/failureSummary.js';
 import { getRequestOutcome } from '../utils/requestOutcome.js';
+import { describeRequestRoutePath, summarizeRequestRoute } from '../utils/dispatchTrace.js';
 import { describeRouteSnapshot, describeRouteExecution } from '@/features/providers/shared/routing/routeTargets.js';
 
 // Provider responses, local processing and cancellation each have their own presentation.
@@ -398,6 +399,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
     return '中转';
   };
   const failureDetails = getRequestFailureDetails(request);
+  const removedReasoningItems = getEncryptedHistoryRecovery(request);
+  const restoredReasoningItems = getCompletedReasoningRecovery(request);
   const protocolDiagnostics = getRequestProtocolDiagnostics(request);
   const failureDetail = failureDetails.upstreamDetail;
   // 失败跳（最后一跳在前）：新链路逐跳记录了上游状态码、原文与诊断头
@@ -420,8 +423,9 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
     ].filter(Boolean).join('\n');
   const diagnosticErrorText = protocolDiagnostics.length
     ? `${errorText}\n\n请求格式诊断：\n${protocolDiagnostics.join('\n')}` : errorText;
-  const modelRewriteSource = request.modelRewriteSource || request.model_rewrite_source || '';
-  const originalModelName = request.originalModelName || request.original_model_name || '';
+  const routeSummary = summarizeRequestRoute(request);
+  const modelRewriteSource = request.modelRewriteSource || request.model_rewrite_source || (routeSummary.modelChanged ? 'changed' : '');
+  const originalModelName = routeSummary.sourceModel;
   const modelRewriteTarget = request.modelRewriteTarget || request.model_rewrite_target || request.model || '';
   const modelRewriteLabelMap = {
     mapping: '模型映射',
@@ -434,9 +438,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
     route: 'text-sky-500'
   };
   const modelRewriteLabel = modelRewriteLabelMap[modelRewriteSource] || (modelRewriteSource ? '模型改写' : '');
-  const hasModelRewrite = Boolean(modelRewriteLabel && modelRewriteTarget);
+  const hasModelRewrite = routeSummary.modelChanged;
   const route = describeRouteSnapshot(request.routeSnapshot || request.route_snapshot);
-  const isRoutingClassifier = request.path === '/internal/routing/classify' || route?.kind === 'routing_classifier';
   const routeExecution = describeRouteExecution(request.routeSnapshot || request.route_snapshot);
   const reasoningRaw = request.reasoningEffort || request.reasoning_effort || '';
   const reasoning = parseReasoningConfig(reasoningRaw);
@@ -543,7 +546,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 <div className="flex items-center justify-between gap-3 rounded-xl border border-orange-100 bg-orange-50/70 p-3.5">
                   <div className="flex items-center gap-2">
                     <DollarSign className="w-4 h-4 text-orange-500" />
-                    <span className="text-sm font-medium text-slate-600">{isRoutingClassifier ? '路由分类成本' : estimatedCost ? '当前估算成本' : '总成本'}</span>
+                    <span className="text-sm font-medium text-slate-600">{estimatedCost ? '当前估算成本' : '总成本'}</span>
                   </div>
                   <div className="text-2xl font-bold text-orange-600 font-mono">
                     {estimatedCost && '≈ '}{formatCost(request.cost)}
@@ -613,7 +616,10 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 <div className="px-4">
                   <div className="flex items-center justify-between gap-3 py-2.5">
                     <span className="shrink-0 text-sm font-medium text-slate-500">模型名称</span>
-                    <ModelTag model={request.model} provider={request.provider} method={request.method} path={request.path} compact />
+                    <ModelTag model={request.model} provider={request.provider} method={request.method} path={request.path} compact
+                      rewriteSource={modelRewriteSource} originalModel={originalModelName} rewriteTarget={modelRewriteTarget}
+                      routeSnapshot={request.routeSnapshot || request.route_snapshot} routeSummary={routeSummary}
+                      routePath={describeRequestRoutePath(request, routeSummary)} />
                   </div>
                   {hasReasoning && (
                     <div className="border-t border-slate-100">
@@ -707,7 +713,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                       <div className="flex items-center justify-end gap-2 min-w-0">
                         <Replace className={`h-3.5 w-3.5 shrink-0 -scale-x-100 stroke-[2.4] ${modelRewriteIconClassMap[modelRewriteSource] || 'text-slate-400'}`} />
                         <span className="text-sm font-mono text-slate-900 text-right break-all">
-                          {originalModelName || '-'} -&gt; {modelRewriteTarget}
+                          {routeSummary.paths.length ? [...new Set(routeSummary.paths.map(path => path.model))].join('；') : `${originalModelName || '-'} → ${modelRewriteTarget}`}
                         </span>
                       </div>
                     </div>
@@ -1060,7 +1066,14 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 </div>
               )}
 
-              {isFailure && failureDetails.showLocal && <LocalRequestFailure key={request.requestId} details={failureDetails} provider={request.provider} />}
+              {restoredReasoningItems > 0 && <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm leading-6 text-indigo-900 [overflow-wrap:anywhere]">
+                <p className="font-medium">已尝试完整状态恢复</p>
+                <p>本次重试补回了 {restoredReasoningItems} 项已观察到的完整推理状态，未删减历史项目。恢复是否成功以本次请求结果为准。</p>
+              </div>}
+              {removedReasoningItems > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900 [overflow-wrap:anywhere]">
+                <p className="font-medium">已尝试会话降级恢复</p>
+                <p>本次重试移除了 {removedReasoningItems} 项加密推理历史，保留了可见消息和工具调用记录。客户端保存的原会话未被修改。</p>
+              </div>}
               {/* Only actual provider responses belong in the upstream error card. */}
               {isFailure && failureDetails.hasUpstream && (
                 <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-rose-200 bg-rose-50">
@@ -1136,6 +1149,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                   </div>
                 </div>
               )}
+              {isFailure && failureDetails.showLocal && <LocalRequestFailure key={request.requestId} details={failureDetails} provider={request.provider} />}
             </div>
           )}
 

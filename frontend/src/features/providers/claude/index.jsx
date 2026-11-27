@@ -32,13 +32,15 @@ import { ChannelCard } from './components/ChannelCard.jsx';
 // Channels 页面
 // ============================================
 
+const EMPTY_CHANNELS = [];
+
 const ChannelsPage = ({ clientVersion, onViewRequests }) => {
   const toast = useToast();
 
   // 存储模式状态
   const [storageStatus, setStorageStatus] = useState(null);
   const [storageEndpoints, setStorageEndpoints] = useState([]);
-  const [storageLoading, setStorageLoading] = useState(false);
+  const [storageLoading, setStorageLoading] = useState(true);
 
   // 端点存储统一使用 SQLite；只检查 storageType，不依赖 enabled。
   const isSqliteMode = storageStatus?.storageType === 'sqlite';
@@ -58,8 +60,10 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
   const [channelFailoverEnabled, setChannelFailoverEnabled] = useState(true);
   const [globalTimeoutSeconds, setGlobalTimeoutSeconds] = useState(300);
   // failoverDefaultCooldownSeconds 已移除
-  const [channelsMeta, setChannelsMeta] = useState([]);
-  const [channelsLastUpdate, setChannelsLastUpdate] = useState('');
+  const [storedChannelsMeta, setChannelsMeta] = useState([]);
+  const [storedChannelsLastUpdate, setChannelsLastUpdate] = useState('');
+  const channelsMeta = isSqliteMode ? storedChannelsMeta : EMPTY_CHANNELS;
+  const channelsLastUpdate = isSqliteMode ? storedChannelsLastUpdate : '';
 
   // 挂起请求计数（用于显示等待提示）
   const [suspendedRequestsCount, setSuspendedRequestsCount] = useState(0);
@@ -121,11 +125,9 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
   }, []);
 
   // 加载存储状态
-  const loadStorageStatus = useCallback(async ({ throwOnError = false } = {}) => {
+  const readStorageStatus = useCallback(({ throwOnError = false } = {}) => {
     const seq = ++storageLoadSeqRef.current;
-    setStorageLoading(true);
-    try {
-      const status = await getEndpointStorageStatus();
+    return getEndpointStorageStatus().then(async (status) => {
       if (seq !== storageLoadSeqRef.current) return;
       setStorageStatus(status);
 
@@ -135,77 +137,75 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
         if (seq !== storageLoadSeqRef.current) return;
         setStorageEndpoints(records);
       }
-    } catch (err) {
+    }).catch((err) => {
       console.error('获取存储状态失败:', err);
       if (seq !== storageLoadSeqRef.current) return;
       // 存储后端固定为 SQLite，即使状态接口暂时失败也不要回退到旧模式。
       setStorageStatus({ enabled: false, storageType: 'sqlite' });
       if (throwOnError) throw err;
-    } finally {
+    }).finally(() => {
       if (seq === storageLoadSeqRef.current) {
         setStorageLoading(false);
       }
-    }
+    });
   }, []);
+
+  const loadStorageStatus = useCallback((options) => {
+    setStorageLoading(true);
+    return readStorageStatus(options);
+  }, [readStorageStatus]);
 
   // 初始化加载存储状态
   useEffect(() => {
-    loadStorageStatus();
-  }, [loadStorageStatus]);
+    readStorageStatus();
+  }, [readStorageStatus]);
 
   // 加载渠道（组）状态
-  const loadGroups = useCallback(async ({ throwOnError = false } = {}) => {
+  const loadGroups = useCallback(({ throwOnError = false } = {}) => {
     const seq = ++groupsLoadSeqRef.current;
-    try {
-      const data = await getGroupsRaw();
+    return getGroupsRaw().then((data) => {
       if (seq !== groupsLoadSeqRef.current) return;
       setGroups(Array.isArray(data) ? data : []);
-    } catch (err) {
+    }).catch((err) => {
       console.error('获取渠道状态失败:', err);
       if (seq !== groupsLoadSeqRef.current) return;
       setGroups([]);
       if (throwOnError) throw err;
-    }
+    });
   }, []);
 
-  const loadChannelsMeta = useCallback(async ({ throwOnError = false } = {}) => {
+  const loadChannelsMeta = useCallback(({ throwOnError = false } = {}) => {
     const seq = ++channelsMetaLoadSeqRef.current;
     // 只检查 storageType
     const sqliteEnabled = storageStatus?.storageType === 'sqlite';
     if (!sqliteEnabled) {
-      if (seq === channelsMetaLoadSeqRef.current) {
-        setChannelsMeta([]);
-        setChannelsLastUpdate('');
-      }
       if (throwOnError) {
-        throw new Error('SQLite 渠道存储尚未就绪');
+        return Promise.reject(new Error('SQLite 渠道存储尚未就绪'));
       }
-      return [];
+      return Promise.resolve([]);
     }
-    try {
-      const list = await getChannels();
+    return getChannels().then((list) => {
       const normalizedList = Array.isArray(list) ? list : [];
       if (seq === channelsMetaLoadSeqRef.current) {
         setChannelsMeta(normalizedList);
         setChannelsLastUpdate(new Date().toLocaleTimeString());
       }
       return normalizedList;
-    } catch (err) {
+    }).catch((err) => {
       console.error('获取渠道列表失败:', err);
       // 避免瞬时失败导致 UI “清空”，保留上一次结果
       if (throwOnError) throw err;
       return [];
-    }
+    });
   }, [storageStatus]);
 
-  const loadConfig = useCallback(async () => {
+  const loadConfig = useCallback(() => {
     const seq = ++configLoadSeqRef.current;
-    try {
-      const [cfg, interChannelEnabled, failoverSettings] = await Promise.all([
+    return Promise.all([
         getConfig(),
         isInterChannelFailoverEnabled().catch(() => undefined),
         getSettingsByCategory('failover').catch(() => [])
-      ]);
+      ]).then(([cfg, interChannelEnabled, failoverSettings]) => {
       if (seq !== configLoadSeqRef.current) return;
       const settingsFailoverEnabled = parseSettingsBool(
         (failoverSettings || []).find(setting => setting?.key === 'enabled')?.value
@@ -219,23 +219,22 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
       setChannelFailoverEnabled(resolvedFailoverEnabled);
       setGlobalTimeoutSeconds(Number(cfg?.global_timeout_seconds ?? cfg?.globalTimeoutSeconds ?? 300) || 300);
       // cooldownSeconds 加载已移除
-    } catch (err) {
+    }).catch((err) => {
       console.error('获取配置失败:', err);
       if (seq !== configLoadSeqRef.current) return;
       setChannelFailoverEnabled(false);
       setGlobalTimeoutSeconds(300);
-    }
+    });
   }, []);
 
   // 加载挂起请求计数
-  const loadSuspendedCount = useCallback(async () => {
-    try {
-      const [count, endpointCounts, manualCount, manualChannelCounts] = await Promise.all([
+  const loadSuspendedCount = useCallback(() => {
+    return Promise.all([
         getSuspendedRequestsCount(),
         getSuspendedEndpointCounts(),
         getManualRetryRequestsCount(),
         getManualRetryChannelCounts()
-      ]);
+      ]).then(([count, endpointCounts, manualCount, manualChannelCounts]) => {
       setSuspendedRequestsCount(count || 0);
       setSuspendedEndpointCounts(
         endpointCounts && !Array.isArray(endpointCounts) ? endpointCounts : {}
@@ -244,10 +243,10 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
       setManualRetryChannelCounts(
         manualChannelCounts && !Array.isArray(manualChannelCounts) ? manualChannelCounts : {}
       );
-    } catch (err) {
+    }).catch((err) => {
       // 静默处理错误，不影响页面正常使用
       console.debug('获取挂起请求数量失败:', err);
-    }
+    });
   }, []);
 
   const handleToggleEndpointFailover = useCallback(async (endpoint, enabled) => {
@@ -364,12 +363,6 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
   useEffect(() => {
     loadChannelsMeta();
   }, [loadChannelsMeta]);
-
-  useEffect(() => {
-    if (showEditChannel) {
-      setEditChannelError('');
-    }
-  }, [showEditChannel]);
 
   // SQLite 模式下监听 Wails 事件，实时刷新端点数据
   const isSqliteModeRef = useRef(false);
@@ -600,10 +593,12 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
     return buildClaudeEndpointCopyOptions(sourceGroups, sourceEndpoints);
   }, [channelSections, credentialGroupFormChannel, credentialGroupFormMode, credentialGroupsByChannel]);
 
-  // 渠道列表变化时重置展开状态，避免展开指向已不存在的渠道
-  useEffect(() => {
+  // 在渠道数量改变的同一轮渲染重置，避免先展示失效的展开区域。
+  const [previousChannelCount, setPreviousChannelCount] = useState(channelSections.length);
+  if (previousChannelCount !== channelSections.length) {
+    setPreviousChannelCount(channelSections.length);
     setExpandedChannelName('');
-  }, [channelSections.length]);
+  }
 
   // ============================================
   // CRUD 操作处理
@@ -632,6 +627,7 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
       modelMapping: meta?.modelMapping || {},
       nonStreamRoute: meta?.nonStreamRoute || null
     });
+    setEditChannelError('');
     setShowEditChannel(true);
   }, [channelsMeta]);
 

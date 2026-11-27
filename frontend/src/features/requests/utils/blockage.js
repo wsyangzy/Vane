@@ -15,6 +15,9 @@ const labels = {
   manual_balance_exhausted: '本地记录的余额已耗尽', manual_balance_unavailable: '本地余额读取失败',
   account_disabled: '分组已停用', candidate_disabled: '候选配置不可用', account_missing: '分组已不存在',
   account_probe_in_progress: '正在验证恢复', quota_exhausted: '供应商额度已耗尽',
+  rate_limited: '上游限流', balance_exhausted: '上游账号余额已耗尽', permission_denied: '上游拒绝访问权限',
+  permission_scope_unknown: '上游拒绝访问，原因待核对', network_error: '网络连接失败',
+  endpoint_unavailable: '端点暂不可用', upstream_unavailable: '上游暂不可用',
   concurrency_limit: '达到并发上限', candidate_busy: '候选正在处理请求', model_unsupported: '不支持此模型', model_unavailable: '模型不可用',
   credential_missing: '分组缺少凭证', protocol_incompatible: '接口协议不兼容', profile_disabled: '调度方案已停用',
   subscription_state_unavailable: '订阅账号状态读取失败', subscription_account_disabled: '订阅账号已停用',
@@ -44,6 +47,9 @@ export function describeBlockageRecovery(value, now = Date.now()) {
   let action = '';
   if (state.reason === 'daily_cost_limit_exceeded') action = '前往渠道资源编辑此凭证分组的每日成本限额，或等待下一自然日重置；调整后重新发起请求。';
   else if (state.reason === 'manual_balance_exhausted') action = '在“额度与健康”中核对平台余额，并记录充值或校准本地余额。';
+  else if (state.reason === 'balance_exhausted' || state.cause === 'balance_exhausted') action = '核对上游账号余额并充值；处理后允许此分组重新尝试，或在调度方案中选择其他凭证分组。';
+  else if (state.reason === 'permission_denied' || state.cause === 'permission_denied') action = '核对此凭证的模型与接口访问权限，或选择有权限的凭证分组。';
+  else if (state.reason === 'rate_limited' || state.cause === 'rate_limited') action = '按上游要求等待后重试，或在调度方案中选择其他可用凭证分组。';
   else if (state.reason === 'account_disabled' || state.reason === 'candidate_disabled') action = '检查此分组的凭证与端点配置，并在调度方案中启用需要参与的成员。';
   else if (state.reason?.startsWith('state_')) action = '使用原分组继续会话，或在当前分组新建会话后重试。';
   else if (state.reason?.includes('repair') || state.reason === 'credential_rejected') action = '核对并更新此分组的凭证；修复后允许同一分组重新尝试。';

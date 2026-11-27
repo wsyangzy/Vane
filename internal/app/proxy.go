@@ -294,6 +294,10 @@ func (a *App) registerCodexRoutes(mux *http.ServeMux) {
 		a.observeRoutingQuota(c, status, headers, body)
 	})
 	a.codexHTTPHandler = baseHandler
+	if err := a.applyCodexHistoryRecovery(context.Background()); err != nil {
+		a.logger.Error("初始化 Codex 会话恢复存储失败", "error", err)
+		a.emitNotification("warning", "会话恢复存储未启用", err.Error())
+	}
 
 	// 公用 Claude 代理的鉴权中间件 + 日志中间件
 	var handler http.Handler = baseHandler

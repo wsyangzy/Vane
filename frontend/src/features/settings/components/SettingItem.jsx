@@ -2,7 +2,7 @@
 // SettingItem - 可编辑的设置项组件
 // ============================================
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { AlertTriangle, Eye, EyeOff, RotateCcw } from 'lucide-react';
 import { CustomSelect, Tooltip } from '../../../shared/ui/index.js';
 import DurationInput from './DurationInput.jsx';
@@ -57,13 +57,8 @@ const SettingItem = ({
   hasChange = false,
   onRevert = null
 }) => {
-  const [localValue, setLocalValue] = useState(value);
+  const localValue = value;
   const [showSecret, setShowSecret] = useState(false);
-
-  // 同步外部 value 变化
-  useEffect(() => {
-    setLocalValue(value);
-  }, [value]);
 
   // 检测值类型（优先使用 setting.value_type）
   // CRITICAL: 必须严格检查 value_type 是否存在且非空
@@ -84,7 +79,6 @@ const SettingItem = ({
     } else {
       newValue = e.target.value;
     }
-    setLocalValue(newValue);
     onChange(setting.category, setting.key, newValue);
   };
 
@@ -150,7 +144,6 @@ const SettingItem = ({
 
   if (shouldRenderAsEnum) {
     const handleEnumChange = (newValue) => {
-      setLocalValue(newValue);
       onChange(setting.category, setting.key, newValue);
     };
 
@@ -217,7 +210,6 @@ const SettingItem = ({
   // duration 类型使用数字+单位选择器
   if (valueType === 'duration') {
     const handleDurationChange = (newValue) => {
-      setLocalValue(newValue);
       onChange(setting.category, setting.key, newValue);
     };
 

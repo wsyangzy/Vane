@@ -13,7 +13,9 @@ export default function RuntimeSettings({ provider, refreshToken, onBusyChange, 
   const sections = useMemo(() => runtimeSettingSections(provider), [provider]);
   const [settings, setSettings] = useState([]);
   const [changes, setChanges] = useState({});
-  const [loading, setLoading] = useState(true);
+  const loadKey = `${provider}:${refreshToken ?? ''}`;
+  const [loadedKey, setLoadedKey] = useState(null);
+  const loading = loadedKey !== loadKey;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -22,19 +24,17 @@ export default function RuntimeSettings({ provider, refreshToken, onBusyChange, 
   const busy = loading || saving;
   const changeCount = Object.keys(changes).length;
 
-  const load = useCallback(async () => {
+  const load = useCallback(() => {
     const request = ++generation.current;
-    setLoading(true); setError(''); setNotice('');
-    try {
-      const batches = await Promise.all(sections.map(section => getSettingsByScope('global', section.category)));
+    return Promise.all(sections.map(section => getSettingsByScope('global', section.category))).then((batches) => {
       if (request !== generation.current) return;
-      setSettings(batches.flat()); setChanges({});
-    } catch (error) {
+      setSettings(batches.flat()); setChanges({}); setError(''); setNotice('');
+    }).catch((error) => {
       if (request === generation.current) setError(getErrorMessage(error, '读取 Token 预估设置失败，请刷新重试'));
-    } finally {
-      if (request === generation.current) setLoading(false);
-    }
-  }, [sections]);
+    }).finally(() => {
+      if (request === generation.current) setLoadedKey(loadKey);
+    });
+  }, [sections, loadKey]);
   useEffect(() => {
     const pending = generation;
     load();

@@ -7,7 +7,7 @@
 // 代价是没有流量的小时没有数据，这些格子渲染为灰色空档而不是省略：
 // 省略会让时间轴不再等距，读起来像是那段时间一切正常。
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Tooltip } from '@/shared/ui/index.js';
 import { getEndpointAvailability } from '@/services/wails/index.js';
 
@@ -30,29 +30,21 @@ const formatPercent = (value) => `${Number(value || 0).toFixed(1)}%`;
 const formatMs = (value) => `${Math.max(0, Math.round(Number(value || 0)))}ms`;
 
 const EndpointAvailabilityBar = ({ provider = '', channel = '', endpointName = '', hours = 24 }) => {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  const loadData = useCallback(async () => {
-    if (!endpointName) {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError('');
-    try {
-      setData(await getEndpointAvailability({ provider, channel, endpointName, hours }));
-    } catch (err) {
-      setError(err?.message || '加载可用性数据失败');
-    } finally {
-      setLoading(false);
-    }
-  }, [provider, channel, endpointName, hours]);
+  const [snapshot, setSnapshot] = useState(null);
+  const queryKey = JSON.stringify([provider, channel, endpointName, hours]);
+  const current = snapshot?.key === queryKey ? snapshot : null;
+  const data = current?.data;
+  const loading = Boolean(endpointName && !current);
+  const error = current?.error || '';
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    if (!endpointName) return;
+    let active = true;
+    getEndpointAvailability({ provider, channel, endpointName, hours })
+      .then(data => { if (active) setSnapshot({ key: queryKey, data }); })
+      .catch(error => { if (active) setSnapshot({ key: queryKey, error: error?.message || '加载可用性数据失败' }); });
+    return () => { active = false; };
+  }, [provider, channel, endpointName, hours, queryKey]);
 
   const slices = data?.slices || [];
   // 汇总同时作为无障碍替代：时间片本身只有几像素宽，达不到最小点击目标，

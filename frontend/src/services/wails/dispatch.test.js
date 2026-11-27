@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildDispatchInput, buildIntentClassificationInput, buildRoutingProfilePayload, buildManualBalanceUpdate, buildDispatchRecoveryInput, mapDispatchRecovery, listManualBalances, mapManualBalance, mapDispatchPreview, mapDispatchTrace, mapDispatchWorkspace, mapQuotaSnapshot, mapRoutingConfigurationStatus, mapRoutingProfile } from './dispatch.js';
+import { buildDispatchInput, buildRoutingProfilePayload, buildManualBalanceUpdate, buildDispatchRecoveryInput, mapDispatchRecovery, listManualBalances, mapManualBalance, mapDispatchPreview, mapDispatchTrace, mapDispatchWorkspace, mapQuotaSnapshot, mapRoutingConfigurationStatus, mapRoutingProfile } from './dispatch.js';
 
 test('dispatch reports the desktop requirement when no Wails runtime is present', async () => {
   await assert.rejects(listManualBalances('codex'), /需要在 Vane 桌面应用中使用/);
@@ -18,18 +18,16 @@ test('manual balance bridge preserves money strings and explicitly maps update f
 test('routing profile contract preserves nullable fallbacks, strings and duration units', () => {
   const dto = { id: 12, provider: 'codex', name: '编程方案', enabled: true, is_default: true, candidate_mode: 'unified_candidates', strategy: 'weighted', affinity_mode: 'adaptive', max_attempts: 7, max_duration: 31000000000, wait_for_recovery: true, revision: 4,
     members: [{ profile_id: 12, channel_id: 3, group_id: 8, position: 0, weight: 5, enabled: false, upstream_model: 'gpt-mapped' }],
-    rules: [{ id: 1, profile_id: 12, enabled: true, kind: 'model', name: '模型', priority: 10, match_model: 'gpt-*', require_stream: false, intent_id: '', mode: 'prefer', targets: [{ profile_id: 7, channel_id: 0, group_id: 0, upstream_model: '' }], fallback_to_default: false }, { id: 2, profile_id: 12, enabled: true, kind: 'non_stream', name: '', priority: 20, match_model: '', intent_id: '', mode: 'fallback', targets: [], require_stream: null, fallback_to_default: null }],
-    intents: [{ id: 'coding-v2', profile_id: 12, name: '编程', description: '代码修改', enabled: true, priority: 3, targets: [{ profile_id: 0, channel_id: 3, group_id: 8, upstream_model: 'gpt-mapped' }], mode: 'prefer', fallback_intent: '', fallback_to_default: true }],
-    classifier: { enabled: true, provider: 'claude', channel_id: 9, group_id: 10, model: 'claude-fast', timeout: 8000000000, confidence: 0.75, failure_mode: 'previous' },
+    rules: [{ id: 1, profile_id: 12, enabled: true, kind: 'model', name: '模型', priority: 10, match_model: 'gpt-*', require_stream: false, mode: 'prefer', targets: [{ profile_id: 7, channel_id: 0, group_id: 0, upstream_model: '' }], fallback_to_default: false }, { id: 2, profile_id: 12, enabled: true, kind: 'non_stream', name: '', priority: 20, match_model: '', mode: 'fallback', targets: [], require_stream: null, fallback_to_default: null }],
     search: { mode: 'auto', vendor: 'brave', endpoint: 'https://api.search.brave.com/res/v1/web/search', timeout: 12000000000, max_results: 4, has_api_key: false }
   };
   const model = mapRoutingProfile(dto);
   assert.equal(model.search.timeoutMs, 12000);
   model.search.apiKey = 'search-secret-never-in-profile';
-  assert.equal(model.maxDurationMs, 31000); assert.equal(model.classifier.timeoutMs, 8000);
+  assert.equal(model.maxDurationMs, 31000);
   assert.equal(model.rules[0].requireStream, false); assert.equal(model.rules[1].requireStream, null);
-  assert.equal(model.intents[0].id, 'coding-v2'); assert.equal(model.revision, 4);
-  model.intents[0].rowKey = 'ui-only-row-key'; model.apiKey = 'never-forward-this';
+  assert.equal(model.revision, 4);
+  model.rules[0].rowKey = 'ui-only-row-key'; model.apiKey = 'never-forward-this';
   const payload = buildRoutingProfilePayload(model);
   assert.deepEqual(payload, dto);
   assert.equal(JSON.stringify(payload).includes('ui-only-row-key'), false);
@@ -61,7 +59,7 @@ test('preview and completed trace map distinct candidate shapes without treating
   const trace = mapDispatchTrace({ profile_id: 1, attempts: 2, response_started: true, successful: false, stop_reason: 'stream_incomplete', candidates: [{ candidate: { provider: 'codex', channel: '2', credential: '2/3', endpoint: 'ep-1', model: 'gpt-a', state_version: 4 }, action: 'failed', reason: 'network_error', failure_scope: 'endpoint' }], intent: { intent_id: 'coding', cost: 0.002, input_tokens: 100, output_tokens: 10 } });
   assert.equal(trace.attempts, 2); assert.equal(trace.responseStarted, true); assert.equal(trace.successful, false);
   assert.equal(trace.candidates[0].failureScope, 'endpoint'); assert.equal(trace.candidates[0].candidate.credential, '2/3');
-  assert.equal(trace.intent.cost, 0.002); assert.equal(trace.intent.inputTokens, 100);
+  assert.equal(Object.hasOwn(trace, 'intent'), false);
 });
 
 test('dispatch input explicitly allowlists fields and configuration checks preserve failed conditions', () => {
@@ -101,10 +99,8 @@ test('dispatch bridge resolves actual generated methods and DispatchPlan fields'
   for (const [, method] of bridge.matchAll(/invoke\('([A-Za-z]+)'/g)) assert.ok(service.includes(`export function ${method}(`), `${method} missing from actual generated routing service`);
   const appModels = readFileSync(new URL('../../bindings/github.com/wsyangzy/Vane/internal/app/models.js', import.meta.url), 'utf8');
   const routingModels = readFileSync(new URL('../../bindings/github.com/wsyangzy/Vane/internal/routing/models.js', import.meta.url), 'utf8');
-  for (const field of ['current_user_message', 'previous_user_message', 'previous_assistant_text', 'quota', 'ready', 'checks']) assert.ok(appModels.includes(`this["${field}"]`), `app DTO missing ${field}`);
+  for (const field of ['quota', 'ready', 'checks']) assert.ok(appModels.includes(`this["${field}"]`), `app DTO missing ${field}`);
   for (const field of ['profile', 'evaluations', 'stages', 'eligible_candidates', 'response_started', 'successful', 'max_duration', 'fallback_to_default']) assert.ok(routingModels.includes(`this["${field}"]`) || routingModels.includes(`"${field}" in`), `routing DTO missing ${field}`);
   const plan = mapDispatchPreview({ profile: { id: 8, name: '实际方案', strategy: 'pace', affinity_mode: 'turn' }, evaluations: [{ candidate: { channel_id: 2, group_id: 3 }, eligible: true }], stages: [{ index: 0, kind: 'rule', evaluations: [], eligible_candidates: [] }], error: 'budget_exhausted' });
   assert.equal(plan.profileId, 8); assert.equal(plan.strategy, 'pace'); assert.equal(plan.candidates.length, 1); assert.equal(plan.stages[0].kind, 'rule'); assert.equal(plan.stopReason, 'budget_exhausted');
-  const classification = buildIntentClassificationInput({ provider: 'codex', text: 'current', previousUserMessage: 'previous', previousAssistantText: 'summary', apiKey: 'never-include' });
-  assert.equal(classification.current_user_message, 'current'); assert.equal(classification.previous_assistant_text, 'summary'); assert.equal(Object.hasOwn(classification, 'text'), false); assert.equal(Object.hasOwn(classification, 'apiKey'), false);
 });

@@ -15,5 +15,4 @@ test('retention UI exposes the archive path alongside retention days', () => {
 test('conditional settings do not change category cards to full-width rows', () => {
   assert.doesNotMatch(settingsSource, /categorySettings\.length > 4/);
   assert.doesNotMatch(settingsSource, /isWideCategory \? 'lg:col-span-2'/);
-  assert.match(settingsSource, /categorySettings\.map\(setting =>/);
 });

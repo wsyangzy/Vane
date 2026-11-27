@@ -11,6 +11,59 @@ const resources = [
 ];
 const trace = (events, extra = {}) => ({ profile_id: 7, profile_name: '请求当时的方案', strategy: 'order', affinity_mode: 'turn', decision: { kind: 'default' }, candidates: events, ...extra });
 
+test('model changes remain visible without legacy rewrite fields, including default turn reuse', () => {
+  for (const provider of ['claude', 'codex']) {
+    const request = { provider, model: 'gpt-6.1-sol', routeSnapshot: trace([
+      { action: 'attempt', candidate: { ...candidate(provider, 1, 11, 101), model: 'gpt-6.1-sol' } },
+    ], { requested_model: 'gpt-6-astra', decision: { kind: 'default', reused_turn: true } }) };
+    const route = summarizeRequestRoute(request);
+    assert.equal(route.modelChanged, true);
+    assert.equal(route.resourceChanged, false);
+    assert.match(describeRequestRoutePath(request, route), /^gpt-6-astra → gpt-6.1-sol\n/);
+    const unsent = summarizeRequestRoute({ ...request, originalModelName: 'gpt-6-astra', modelRewriteSource: 'route',
+      routeSnapshot: { ...request.routeSnapshot, candidates: [], attempts: 0 } });
+    assert.equal(unsent.modelChanged, false);
+    assert.equal(unsent.ruleExecuted, false);
+  }
+});
+
+test('route indicators and arrows follow actual sends for direct rules and both fallback directions', () => {
+  for (const provider of ['claude', 'codex']) {
+    const a = candidate(provider, 1, 11, 101), b = candidate(provider, 2, 21, 201);
+    for (const [mode, sends] of [['prefer', [b]], ['fallback', [a, b]], ['prefer', [b, a]]]) {
+      const request = { provider, model: 'test-model', routeSnapshot: trace(sends.map(c => ({ action: 'attempt', candidate: c })), {
+        requested_model: 'test-model', default_source: { unavailable: true },
+        decision: { kind: 'model', mode, targets: [{ channel_id: 2, group_id: 21 }] },
+      }) };
+      request.dispatchTrace = readRequestDispatchTrace(request, resources);
+      const route = summarizeRequestRoute(request);
+      assert.equal(route.modelChanged, false);
+      assert.equal(route.resourceChanged, sends.length > 1);
+      assert.equal(route.ruleExecuted, true);
+      assert.equal(route.defaultSourceLabel, '不可用');
+      assert.deepEqual(route.resources, request.dispatchTrace.attempts.map(a => `${a.channel} / ${a.credentialGroup}`));
+      assert.deepEqual(request.dispatchTrace.attempts.map(a => a.ruleExecuted), sends.map(c => c.channel === '2'));
+    }
+  }
+});
+
+test('skipped mappings never imply execution, but actual default resource and model changes remain visible', () => {
+  const a = candidate('codex', 1, 11, 101), b = candidate('codex', 2, 21, 201);
+  const request = { provider: 'codex', model: 'test-model', routeSnapshot: trace([
+    { action: 'skipped', candidate: { ...b, model: 'unused-model' } },
+    { action: 'attempt', candidate: a },
+    { action: 'attempt', candidate: b },
+  ], { requested_model: 'test-model', decision: { kind: 'mapping', targets: [{ channel_id: 2, group_id: 21, upstream_model: 'unused-model' }] } }) };
+  let route = summarizeRequestRoute(request);
+  assert.equal(route.ruleExecuted, false);
+  assert.equal(route.modelChanged, false);
+  assert.equal(route.resourceChanged, true);
+  request.routeSnapshot.candidates.splice(1, 0, { action: 'attempt', candidate: { ...a, model: 'different-model' } });
+  route = summarizeRequestRoute(request);
+  assert.equal(route.modelChanged, true, 'an earlier model change is visible even if the final model matches the request');
+  assert.equal(route.ruleExecuted, false);
+});
+
 test('request trace retains stop budgets and recovery time when no upstream sends occurred', () => {
   const value = readRequestDispatchTrace({ provider: 'codex', routeSnapshot: trace([], { stop_reason: 'recovery_outside_budget', max_attempts: 5,
     max_duration_ms: 30000, next_recovery_at: '2026-11-17T01:00:00Z' }) });
@@ -250,7 +303,7 @@ test('historical model-rule fallback starts at its actual target and keeps the d
 
 test('every rule kind lists only attempted resources and excludes skipped or unvisited targets', () => {
   for (const provider of ['claude', 'codex']) {
-    for (const kind of ['model', 'mapping', 'composite', 'non_stream', 'intent', 'default']) {
+    for (const kind of ['model', 'mapping', 'composite', 'non_stream', 'default']) {
       const a = candidate(provider, 1, 11, 101), b = candidate(provider, 2, 21, 201);
       const request = { provider, model: 'test-model', routeSnapshot: trace([
         { candidate: b, action: 'skipped', reason: 'candidate_busy' },

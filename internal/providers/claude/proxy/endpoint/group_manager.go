@@ -207,7 +207,8 @@ func buildGroupsFromEndpoints(endpoints []*Endpoint, activeGroups map[string]boo
 	newGroups := make(map[string]*GroupInfo)
 	// 以"渠道(channel)"作为路由与故障转移单位；未配置 channel 则回退为端点名（兼容旧逻辑）
 	for _, ep := range endpoints {
-		groupName := ChannelKey(ep)
+		cfg := ep.configSnapshot()
+		groupName := ChannelKeyFromConfig(cfg)
 
 		group, exists := newGroups[groupName]
 		if !exists {
@@ -215,7 +216,7 @@ func buildGroupsFromEndpoints(endpoints []*Endpoint, activeGroups map[string]boo
 				Name:      groupName,
 				Endpoints: make([]*Endpoint, 0, 2),
 				IsActive:  activeGroups[groupName],
-				Priority:  ep.Config.Priority,
+				Priority:  cfg.Priority,
 			}
 			newGroups[groupName] = group
 		}
@@ -223,8 +224,8 @@ func buildGroupsFromEndpoints(endpoints []*Endpoint, activeGroups map[string]boo
 		group.Endpoints = append(group.Endpoints, ep)
 
 		// 组优先级：取组内最小 endpoint priority（越小越优先）
-		if ep.Config.Priority < group.Priority {
-			group.Priority = ep.Config.Priority
+		if cfg.Priority < group.Priority {
+			group.Priority = cfg.Priority
 		}
 	}
 	return newGroups
@@ -268,8 +269,12 @@ func allEndpointsFailoverDisabled(endpoints []*Endpoint) bool {
 	allDisabled := true
 	for _, ep := range endpoints {
 		failoverEnabled := true
-		if ep != nil && ep.Config.FailoverEnabled != nil {
-			failoverEnabled = *ep.Config.FailoverEnabled
+		if ep != nil {
+			ep.mutex.RLock()
+			if ep.Config.FailoverEnabled != nil {
+				failoverEnabled = *ep.Config.FailoverEnabled
+			}
+			ep.mutex.RUnlock()
 		}
 		if failoverEnabled {
 			allDisabled = false
@@ -786,7 +791,7 @@ func (gm *GroupManager) FilterEndpointsByActiveGroups(endpoints []*Endpoint) []*
 	// 组名 = 渠道(channel)，未配置 channel 则回退为端点名
 	var filtered []*Endpoint
 	for _, ep := range endpoints {
-		groupName := ChannelKey(ep)
+		groupName := ChannelKeyFromConfig(ep.configSnapshot())
 
 		if activeGroupNames[groupName] {
 			filtered = append(filtered, ep)

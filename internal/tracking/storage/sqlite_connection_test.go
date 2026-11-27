@@ -53,7 +53,7 @@ func TestSQLiteAdapter_ConnectionPragmasSurvivePoolGrowthAndReconnect(t *testing
 					require.NoError(t, conn.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&synchronous))
 					require.Equal(t, 1, synchronous)
 					require.NoError(t, conn.QueryRowContext(ctx, "PRAGMA cache_size").Scan(&cacheSize))
-					require.Equal(t, 10000, cacheSize)
+					require.Equal(t, -8192, cacheSize)
 				}
 				for _, conn := range conns {
 					require.NoError(t, conn.Close())
@@ -63,6 +63,27 @@ func TestSQLiteAdapter_ConnectionPragmasSurvivePoolGrowthAndReconnect(t *testing
 			}
 		})
 	}
+}
+
+func TestSQLiteAdapter_ReleasesExtraIdleReadersWithoutReducingConcurrency(t *testing.T) {
+	adapter := newSQLiteConnectionTestAdapter(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	readDB := adapter.GetReadDB()
+	var readers []*sql.Conn
+	for i := 0; i < 4; i++ {
+		conn, err := readDB.Conn(ctx)
+		require.NoError(t, err)
+		readers = append(readers, conn)
+	}
+	require.Equal(t, 4, readDB.Stats().InUse)
+	for _, reader := range readers {
+		require.NoError(t, reader.Close())
+	}
+	stats := readDB.Stats()
+	require.Equal(t, 1, stats.Idle)
+	require.Equal(t, 1, stats.OpenConnections)
+	require.GreaterOrEqual(t, stats.MaxIdleClosed, int64(3))
 }
 
 func TestSQLiteAdapter_ReaderDoesNotBlockWriteCommit(t *testing.T) {

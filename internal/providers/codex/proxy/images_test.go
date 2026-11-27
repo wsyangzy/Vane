@@ -52,15 +52,11 @@ func TestImageProfilePreservesModelBodyAndActualProvider(t *testing.T) {
 			profile.ID, profile.IsDefault = 1, true
 			profile.Members = []routing.RoutingMember{{ChannelID: 1, GroupID: 11, Enabled: true}, {ChannelID: 2, GroupID: 22, Enabled: true}}
 			profile.Rules = []routing.RoutingRule{{ID: 1, Enabled: true, Kind: "non_stream", Mode: "strict", Targets: []routing.RouteTarget{{ChannelID: 1, UpstreamModel: "wrong-text-model"}}}}
-			profile.Classifier = &routing.ClassifierConfig{Enabled: true}
+
 			runtime.Replace(routing.RuntimeConfig{Provider: "codex", Profiles: []routing.RoutingProfile{profile}, Candidates: []routing.DispatchCandidate{
 				{Provider: "codex", ChannelID: 1, GroupID: 11, EndpointID: "1", Protocol: "responses", Enabled: true},
 				{Provider: "codex", ChannelID: 2, GroupID: 22, EndpointID: "2", Protocol: "responses", Enabled: true},
-			}, PrepareCandidate: h.manager.PrepareDispatchCandidate, Supports: h.manager.SupportsDispatchCandidate,
-				Classify: func(context.Context, routing.RoutingProfile, routing.TurnInput) (routing.IntentResult, error) {
-					t.Fatal("image request invoked text intent classification")
-					return routing.IntentResult{}, nil
-				}})
+			}, PrepareCandidate: h.manager.PrepareDispatchCandidate, Supports: h.manager.SupportsDispatchCandidate})
 			tracker, err := tracking.NewUsageTracker(&tracking.Config{Enabled: true, DatabasePath: filepath.Join(t.TempDir(), "usage.db"), BufferSize: 50, BatchSize: 5, FlushInterval: time.Hour, CleanupInterval: time.Hour, MaxRetry: 1})
 			if err != nil {
 				t.Fatal(err)

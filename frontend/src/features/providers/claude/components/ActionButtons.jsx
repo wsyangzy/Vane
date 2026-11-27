@@ -22,6 +22,7 @@ const ActionButtons = ({
   disabled = false
 }) => {
   const [activateLoading, setActivateLoading] = useState(false);
+  const [priorityUpdating, setPriorityUpdating] = useState(false);
   const toast = useToast();
 
   // 判断是否有有效的组配置
@@ -56,9 +57,12 @@ const ActionButtons = ({
     if (!priorityEditorRef?.current) return;
 
     try {
+      setPriorityUpdating(true);
       await priorityEditorRef.current.executeUpdate();
     } catch (error) {
       console.error('更新优先级失败:', error);
+    } finally {
+      setPriorityUpdating(false);
     }
   };
 
@@ -89,7 +93,7 @@ const ActionButtons = ({
       <Tooltip content="保存优先级更改">
         <button
           onClick={handleUpdatePriority}
-          disabled={disabled || (priorityEditorRef?.current?.isUpdating)}
+          disabled={disabled || priorityUpdating}
           className="
             inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded
             bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200

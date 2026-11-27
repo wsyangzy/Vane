@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ArrowLeft, CheckCircle2, XCircle } from 'lucide-react';
 import { Button } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
+
+const EMPTY_ENDPOINTS = [];
 
 const buildRows = (endpoints = []) => (
   endpoints.map((endpoint, index) => ({
@@ -118,7 +120,7 @@ export const EndpointCopySourcePicker = ({
 };
 
 const EndpointCopyNameEditorStep = ({
-  endpoints = [],
+  endpoints = EMPTY_ENDPOINTS,
   description = '',
   loading = false,
   error = '',
@@ -127,10 +129,11 @@ const EndpointCopyNameEditorStep = ({
   onConfirm
 }) => {
   const [rows, setRows] = useState(() => buildRows(endpoints));
-
-  useEffect(() => {
+  const [previousEndpoints, setPreviousEndpoints] = useState(endpoints);
+  if (previousEndpoints !== endpoints) {
+    setPreviousEndpoints(endpoints);
     setRows(buildRows(endpoints));
-  }, [endpoints]);
+  }
 
   const validationError = getValidationError(rows);
   const displayError = validationError || error;

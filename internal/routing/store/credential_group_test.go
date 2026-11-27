@@ -32,14 +32,6 @@ func TestCredentialGroupDeletionChecksEveryRoutingReference(t *testing.T) {
 		{"non-stream channel target", func(p *routing.RoutingProfile) {
 			p.Rules = []routing.RoutingRule{{Kind: "non_stream", Name: "non-stream", Targets: []routing.RouteTarget{{ChannelID: 7}}}}
 		}, true},
-		{"intent target", func(p *routing.RoutingProfile) {
-			p.Intents = []routing.IntentRule{{ID: "coding", Name: "coding", Targets: []routing.RouteTarget{{ChannelID: 7, GroupID: 44}}}}
-		}, true},
-		{"classifier", func(p *routing.RoutingProfile) { p.Classifier = &routing.ClassifierConfig{ChannelID: 7, GroupID: 44} }, true},
-		{"cross-provider classifier", func(p *routing.RoutingProfile) {
-			p.Provider = "codex"
-			p.Classifier = &routing.ClassifierConfig{Provider: "claude", ChannelID: 7, GroupID: 44}
-		}, true},
 		{"same group ID in another provider", func(p *routing.RoutingProfile) {
 			p.Provider = "codex"
 			p.Members = []routing.RoutingMember{{ChannelID: 7, GroupID: 44}}
@@ -80,12 +72,10 @@ func TestPruneMissingCredentialGroupReferencesPreservesOtherTargetsAndProviders(
 		{Kind: "mapping", Name: "lost mapping", MatchModel: "lost", Enabled: true, Targets: []routing.RouteTarget{{ChannelID: 7, GroupID: 44, UpstreamModel: "upstream"}}},
 		{Kind: "model", Name: "mixed", MatchModel: "mixed", Enabled: true, Targets: []routing.RouteTarget{{ChannelID: 7, GroupID: 44}, {ChannelID: 7, GroupID: 45}, {ChannelID: 8}}},
 	}
-	p.Intents = []routing.IntentRule{{ID: "coding", Name: "coding", Enabled: true, Targets: []routing.RouteTarget{{ChannelID: 7, GroupID: 44}, {ChannelID: 7, GroupID: 45}}}}
 	require.NoError(t, s.Save(ctx, &p))
 	other := routing.DefaultProfile("codex")
 	other.Name = "same group number, different provider"
 	other.Members = []routing.RoutingMember{{ChannelID: 7, GroupID: 44, Enabled: true}}
-	other.Classifier = &routing.ClassifierConfig{Enabled: true, Provider: "claude", ChannelID: 7, GroupID: 44, Model: "classifier"}
 	require.NoError(t, s.Save(ctx, &other))
 	unrelated := routing.DefaultProfile("claude")
 	unrelated.Name = "unrelated"
@@ -110,12 +100,10 @@ func TestPruneMissingCredentialGroupReferencesPreservesOtherTargetsAndProviders(
 	require.False(t, got.Rules[0].Enabled)
 	require.Len(t, got.Rules[1].Targets, 3)
 	require.Equal(t, unrelated.ID, got.Rules[1].Targets[2].ProfileID)
-	require.Equal(t, []routing.RouteTarget{{ChannelID: 7, GroupID: 45}}, got.Intents[0].Targets)
 	otherAfter, err := s.Get(ctx, "codex", other.ID)
 	require.NoError(t, err)
 	require.Equal(t, int64(44), otherAfter.Members[0].GroupID)
-	require.False(t, otherAfter.Classifier.Enabled)
-	require.Zero(t, otherAfter.Classifier.GroupID)
+	require.Equal(t, other.Revision, otherAfter.Revision)
 	untouched, err := s.Get(ctx, "claude", unrelated.ID)
 	require.NoError(t, err)
 	require.Equal(t, unrelated.Revision, untouched.Revision)

@@ -379,6 +379,17 @@ func (h *CountTokensHandler) handleSubscription(ctx context.Context, w http.Resp
 		reason = "client_cancelled"
 		status = 499
 	}
+	if GetStatusCodeFromError(lastErr, nil) == 0 {
+		if rejected := run.profile.RejectLocal(reason); rejected != nil {
+			run.publishSnapshot()
+			if lifecycle != nil {
+				failRequest(lifecycle, reason, rejected.Detail, nil, nil)
+			}
+			*r = *r.WithContext(withFinalStatusCode(r.Context(), http.StatusBadRequest))
+			rejected.Write(w)
+			return
+		}
+	}
 	run.publishSnapshot()
 	if lifecycle != nil {
 		failRequest(lifecycle, reason, "", lastErr, nil)

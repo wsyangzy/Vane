@@ -198,7 +198,9 @@ func (h *Handler) tryEndpointCycleForStage(
 				*endpointChain = append(*endpointChain, chainNode{
 					Hop: len(*endpointChain) + 1, Channel: channelName,
 					CredentialGroup: endpoint.CredentialGroupName, Endpoint: endpoint.Name,
-					StartMs: time.Since(startTime).Milliseconds(),
+					StartMs:                time.Since(startTime).Milliseconds(),
+					RemovedReasoningItems:  recovery.removedReasoningItems,
+					RestoredReasoningItems: recovery.restoredReasoningItems,
 				})
 				if routed && stage.execution != nil {
 					stage.execution.Fail(stage.candidate(endpoint, requestedModel), routing.Failure{Scope: routing.ScopeRequest, Reason: recovery.rule.ID})

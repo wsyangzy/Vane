@@ -789,15 +789,15 @@ const PrivacyPage = () => {
 
   const toast = useToast();
 
-  const load = useCallback(async () => {
-    try {
+  const load = useCallback(() => {
+    return fetchPrivacyOverview().then((result) => {
       setLoadError('');
-      setOverview(await fetchPrivacyOverview());
-    } catch (error) {
+      setOverview(result);
+    }).catch((error) => {
       setLoadError(error.message);
-    } finally {
+    }).finally(() => {
       setLoading(false);
-    }
+    });
   }, []);
 
   useEffect(() => { load(); }, [load]);

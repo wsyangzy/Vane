@@ -258,6 +258,34 @@ export class CacheStatusItem {
              */
             this["size"] = 0;
         }
+        if (!("estimated_bytes" in $$source)) {
+            /**
+             * @member
+             * @type {number | null}
+             */
+            this["estimated_bytes"] = null;
+        }
+        if (!("max_bytes" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["max_bytes"] = 0;
+        }
+        if (!("loads" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["loads"] = 0;
+        }
+        if (!("last_load_ms" in $$source)) {
+            /**
+             * @member
+             * @type {number | null}
+             */
+            this["last_load_ms"] = null;
+        }
         if (!("hits" in $$source)) {
             /**
              * @member
@@ -3725,27 +3753,6 @@ export class DispatchInput {
              * @type {boolean}
              */
             this["new_turn"] = false;
-        }
-        if (!("current_user_message" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["current_user_message"] = "";
-        }
-        if (!("previous_user_message" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["previous_user_message"] = "";
-        }
-        if (!("previous_assistant_text" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["previous_assistant_text"] = "";
         }
 
         Object.assign(this, $$source);

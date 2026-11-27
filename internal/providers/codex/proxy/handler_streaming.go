@@ -48,7 +48,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		"provider", "codex", "request_id", requestID)
 
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 256*1024)
+	scanner.Buffer(make([]byte, 64*1024), maxCodexStreamEventBytes+1)
 	scanner.Split(splitCodexSSEWireLine)
 
 	var lastResult *TokenResult
@@ -59,13 +59,30 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 	var streamCompleted bool
 	var pending []byte
 	var decoder codexSSEDecoder
+	var completedHistory completedReasoningObservation
+	var downstreamWriteFailed bool
+	var historyRecovery *responseRecoveryState
+	if resp.Request != nil {
+		historyRecovery = responseRecoveryStateFromContext(resp.Request.Context())
+	}
+	observeHistory := historyRecovery != nil && historyRecovery.cfg.Enabled && historyRecovery.completedHistory != nil && historyRecovery.historyScope != ""
+	defer func() {
+		if !observeHistory || !served || streamErr != nil || scanner.Err() != nil || downstreamStreamErr != nil || downstreamWriteFailed || !completedHistory.completed || completedHistory.failed {
+			return
+		}
+		if resp.Request.Context().Err() != nil {
+			return
+		}
+		historyRecovery.completedHistory.remember(historyRecovery.historyScope, completedHistory.items)
+	}()
 	writeBytes := func(data []byte) {
 		writeHeaders()
 		if !outputSentRecorded && len(bytes.TrimSpace(data)) > 0 {
 			h.recordOutputSent(requestID)
 			outputSentRecorded = true
 		}
-		_, _ = w.Write(data)
+		n, err := w.Write(data)
+		downstreamWriteFailed = downstreamWriteFailed || err != nil || n != len(data)
 		if canFlush {
 			flusher.Flush()
 		}
@@ -88,6 +105,9 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 	processEvent := func(event *codexSSEEvent) *UpstreamStreamError {
 		if event == nil {
 			return nil
+		}
+		if observeHistory {
+			completedHistory.observe(event)
 		}
 		if h.usageTracker != nil {
 			h.usageTracker.RecordStreamOutput(requestID, event.outputBytes, event.reasoningBytes)
@@ -132,7 +152,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		if err := processEvent(decoder.wireLine(line)); err != nil {
 			return restoreFailure(err)
 		}
-		if !headersWritten && len(pending)+len(decoder.raw) >= maxPreOutputStreamBufferBytes {
+		if !headersWritten && len(pending) >= maxPreOutputStreamBufferBytes {
 			pending = append(pending, decoder.raw...)
 			return restoreFailure(invalidCodexStream("stream_prelude_too_large", "上游响应在有效输出前超过缓冲上限"))
 		}

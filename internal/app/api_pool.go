@@ -184,19 +184,32 @@ func (a *App) publishPoolRuntime(provider string) {
 }
 
 // Never fall through to the legacy globally mutating scheduler when pool loading fails.
-func (a *App) closePoolRuntime(provider string) {
+func (a *App) closePoolRuntime(provider string, causes ...error) {
 	a.poolMu.Lock()
 	if a.poolRuntimes == nil {
 		a.poolRuntimes = map[string]*routing.PoolRuntime{}
 	}
 	runtime := a.poolRuntimes[provider]
+	var cooldown routing.CooldownPolicy
 	if runtime == nil {
 		runtime = routing.NewPoolRuntime(routing.PoolConfig{}, nil, nil)
 		a.poolRuntimes[provider] = runtime
 	} else {
-		runtime.Replace(routing.PoolConfig{})
+		cooldown = runtime.Config().CooldownPolicy
+		runtime.Replace(routing.PoolConfig{CooldownPolicy: cooldown})
 	}
-	runtime.SetProfileRuntime(routing.NewProfileRuntime(routing.RuntimeConfig{Provider: provider}))
+	var cause error
+	if len(causes) > 0 {
+		cause = causes[0]
+	}
+	closed := routing.RuntimeConfig{Provider: provider, LoadError: cause, CooldownPolicy: cooldown}
+	profile := runtime.ProfileRuntime()
+	if profile == nil {
+		profile = routing.NewProfileRuntime(closed)
+	} else {
+		profile.Replace(closed)
+	}
+	runtime.SetProfileRuntime(profile)
 	a.poolMu.Unlock()
 	a.publishPoolRuntime(provider)
 }

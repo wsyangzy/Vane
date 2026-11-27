@@ -33,10 +33,10 @@ export default function SubscriptionAccountsPanel({ provider, embedded = false, 
 
   useEffect(() => { onBusyChange?.(Boolean(busy)); }, [busy, onBusyChange]);
 
-  const openLoginPage = useCallback(async (url) => {
-    setOpenError('');
-    try { await openExternalURL(url, { reportFailure: true }); }
-    catch (reason) { if (mounted.current) setOpenError(errorText(reason)); }
+  const openLoginPage = useCallback((url) => {
+    return openExternalURL(url, { reportFailure: true })
+      .then(() => { if (mounted.current) setOpenError(''); })
+      .catch((reason) => { if (mounted.current) setOpenError(errorText(reason)); });
   }, []);
 
   useEffect(() => {
@@ -47,9 +47,10 @@ export default function SubscriptionAccountsPanel({ provider, embedded = false, 
     void openLoginPage(login.url);
   }, [login?.id, login?.state, login?.url, openLoginPage]);
 
-  const reload = useCallback(async () => {
-    const result = await manageSubscriptionAccounts(provider, 'list');
+  const reload = useCallback(() => {
+    return manageSubscriptionAccounts(provider, 'list').then((result) => {
     if (mounted.current) { setAccounts(result.accounts); if (result.login) setLogin(result.login); }
+    });
   }, [provider]);
 
   useEffect(() => {

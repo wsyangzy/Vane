@@ -82,6 +82,16 @@ func (rh *RegularHandler) writeRegularTerminalFailure(w http.ResponseWriter, r *
 	if statusCode == 0 {
 		statusCode = http.StatusBadGateway
 	}
+	if len(routes) > 0 && routes[0] != nil && GetStatusCodeFromError(lastErr, nil) == 0 {
+		if rejected := routes[0].profile.RejectLocal(failureReason); rejected != nil {
+			routes[0].publishSnapshot()
+			*r = *r.WithContext(withFinalStatusCode(r.Context(), http.StatusBadRequest))
+			failRequest(lifecycleManager, failureReason, rejected.Detail, nil, nil)
+			rh.endpointManager.ClearEndpointsRequestFailure(failedEndpointNames)
+			rejected.Write(w)
+			return
+		}
+	}
 	*r = *r.WithContext(withFinalStatusCode(r.Context(), statusCode))
 	failRequest(lifecycleManager, failureReason, errMsg, lastErr, nil)
 	rh.endpointManager.ClearEndpointsRequestFailure(failedEndpointNames)
@@ -143,6 +153,17 @@ func (sh *StreamingHandler) writeStreamingTerminalFailure(w http.ResponseWriter,
 	}
 	if statusCode == 0 {
 		statusCode = http.StatusBadGateway
+	}
+	if len(routes) > 0 && routes[0] != nil && GetStatusCodeFromError(lastErr, nil) == 0 {
+		if rejected := routes[0].profile.RejectLocal(failureReason); rejected != nil {
+			routes[0].publishSnapshot()
+			*r = *r.WithContext(withFinalStatusCode(r.Context(), http.StatusBadRequest))
+			failRequest(lifecycleManager, failureReason, rejected.Detail, nil, nil)
+			sh.endpointManager.ClearEndpointsRequestFailure(failedEndpointNames)
+			clearStreamingHeaders(w)
+			rejected.Write(w)
+			return
+		}
 	}
 	*r = *r.WithContext(withFinalStatusCode(r.Context(), statusCode))
 	failRequest(lifecycleManager, failureReason, errMsg, lastErr, nil)

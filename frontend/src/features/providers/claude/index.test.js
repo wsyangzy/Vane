@@ -133,7 +133,8 @@ test('Claude endpoint rows keep one fixed height for every failover state', () =
 });
 
 test('Claude header shows the SQLite channel refresh time', () => {
-  assert.match(source, /const \[channelsLastUpdate, setChannelsLastUpdate\] = useState\('\'\);/);
+  assert.match(source, /const \[storedChannelsLastUpdate, setChannelsLastUpdate\] = useState\('\'\);/);
+  assert.match(source, /const channelsLastUpdate = isSqliteMode \? storedChannelsLastUpdate : ''/);
   assert.match(source, /setChannelsLastUpdate\(new Date\(\)\.toLocaleTimeString\(\)\)/);
   assert.match(source, /const headerLastUpdate = isSqliteMode \? channelsLastUpdate : lastUpdate/);
   assert.match(source, /headerLastUpdate &&/);

@@ -74,6 +74,7 @@ type App struct {
 	tokenUsageCache        *appcache.Cache[TokenUsageData]
 	endpointCostTodayCache *appcache.Cache[[]EndpointCostItem]
 	localUsageReader       *sessionusage.Reader
+	readCaches             atomic.Pointer[readQueryCaches]
 
 	// 端点存储 (SQLite)
 	endpointStore   claudestore.EndpointStore      // 端点数据持久化
@@ -144,6 +145,7 @@ type App struct {
 	appState       atomic.Int32 // AppState 枚举值
 	appStateReason string       // 进入当前状态的原因（如失败时的具体错误）
 	appStateMu     sync.RWMutex // 保护 appStateReason
+	memoryLogAt    atomic.Int64
 
 	// 并发控制
 	mu        sync.RWMutex

@@ -9,6 +9,112 @@ import (
 	"time"
 )
 
+func TestCacheLoadMetricsCountExecutionsAndPreserveUnknownByteEstimates(t *testing.T) {
+	c := NewSized(Options{Name: "metrics", MaxBytes: 1024}, func(v string) int64 { return int64(len(v)) })
+	if stats := c.Stats(); !stats.HasByteEstimate || stats.EstimatedBytes != 0 || stats.Loads != 0 {
+		t.Fatalf("empty measured cache = %+v", stats)
+	}
+	loader := func() (string, error) { time.Sleep(2 * time.Millisecond); return "value", nil }
+	if _, err := c.GetOrLoad("key", loader); err != nil {
+		t.Fatal(err)
+	}
+	loaded := c.Stats()
+	if loaded.Loads != 1 || loaded.LastLoadDuration <= 0 || loaded.EstimatedBytes <= 0 {
+		t.Fatalf("missing load metrics: %+v", loaded)
+	}
+	c.GetOrLoad("key", func() (string, error) { t.Fatal("cache hit invoked loader"); return "", nil })
+	if stats := c.Stats(); stats.Loads != 1 || stats.LastLoadDuration != loaded.LastLoadDuration {
+		t.Fatalf("cache hit changed load metrics: %+v", stats)
+	}
+	c.SetOptions(Options{Name: "metrics", Enabled: false})
+	c.GetOrLoad("key", func() (string, error) { return "", errors.New("load failed") })
+	if stats := c.Stats(); stats.Loads != 2 || stats.Size != 0 {
+		t.Fatalf("disabled loader was not measured: %+v", stats)
+	}
+	if New[string](Options{}).Stats().HasByteEstimate {
+		t.Fatal("unsized cache claimed a byte estimate")
+	}
+}
+
+func TestSizedCacheBudgetReplacementAndOversizedResults(t *testing.T) {
+	c := NewSized(Options{Name: "bytes", TTL: time.Hour, MaxEntries: 10, MaxBytes: 700}, func(v string) int64 { return int64(len(v)) })
+	c.Set("a", string(make([]byte, 200)))
+	c.Set("b", string(make([]byte, 200)))
+	c.Set("c", string(make([]byte, 200)))
+	if stats := c.Stats(); stats.EstimatedBytes > 700 || stats.Size != 2 || stats.Evicted != 1 {
+		t.Fatalf("stats=%+v", stats)
+	}
+	c.Set("c", "short")
+	if stats := c.Stats(); stats.EstimatedBytes != 463 {
+		t.Fatalf("replacement leaked bytes: %+v", stats)
+	}
+	value, err := c.GetOrLoad("huge", func() (string, error) { return string(make([]byte, 1000)), nil })
+	if err != nil || len(value) != 1000 {
+		t.Fatalf("oversized result truncated: %d, %v", len(value), err)
+	}
+	if _, ok := c.Get("huge"); ok {
+		t.Fatal("oversized value retained")
+	}
+	// Equal clock ticks may evict either older entry. Both have the same size.
+	if removed := c.Invalidate(InvalidateOptions{Key: "a"}) + c.Invalidate(InvalidateOptions{Key: "b"}); removed != 1 {
+		t.Fatalf("expected one older entry, removed %d", removed)
+	}
+	if c.Stats().EstimatedBytes != 134 {
+		t.Fatal("invalidation leaked bytes")
+	}
+	c.SetOptions(Options{Enabled: false})
+	if c.Stats().EstimatedBytes != 0 {
+		t.Fatal("disabled cache retained bytes")
+	}
+}
+
+func TestSizedCacheExpiryAndReducedBudget(t *testing.T) {
+	c := NewSized(Options{MaxBytes: 1000}, func(v int) int64 { return int64(v) })
+	c.Set("", 100)
+	c.Set("b", 100)
+	c.SetOptions(Options{Enabled: true, MaxBytes: 300})
+	if c.Stats().Size != 1 {
+		t.Fatal("reduced budget not enforced")
+	}
+	c.mu.Lock()
+	for key, item := range c.items {
+		item.expiresAt = time.Now().Add(-time.Second)
+		c.items[key] = item
+	}
+	c.mu.Unlock()
+	if stats := c.Stats(); stats.Size != 0 || stats.EstimatedBytes != 0 {
+		t.Fatalf("expiry leaked bytes: %+v", stats)
+	}
+}
+
+func TestInvalidatedLoadCannotAbsorbNewReadOrReturnStaleFallback(t *testing.T) {
+	c := New[string](Options{StaleOnError: true})
+	c.Set("key", "stale")
+	c.mu.Lock()
+	item := c.items["key"]
+	item.expiresAt = time.Now().Add(-time.Second)
+	c.items["key"] = item
+	c.mu.Unlock()
+	started, release, finished := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		_, err := c.GetOrLoad("key", func() (string, error) { close(started); <-release; return "", errors.New("old load failed") })
+		finished <- err
+	}()
+	<-started
+	c.Invalidate(InvalidateOptions{All: true})
+	got, err := c.GetOrLoad("key", func() (string, error) { return "new", nil })
+	if err != nil || got != "new" {
+		t.Fatalf("new read joined stale load: %q %v", got, err)
+	}
+	close(release)
+	if err := <-finished; err == nil {
+		t.Fatal("cleared stale value was served after failure")
+	}
+	if got, ok := c.Get("key"); !ok || got != "new" {
+		t.Fatal("old completion replaced fresh data")
+	}
+}
+
 func TestCacheSetGetHitAndExpiry(t *testing.T) {
 	c := New[string](Options{Name: "test", TTL: 20 * time.Millisecond, MaxEntries: 10})
 

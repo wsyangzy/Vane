@@ -47,13 +47,12 @@ export default function CopyRulesDialog({ profile, profiles, channels, accounts,
       <div className="profile-picker-dialog-body space-y-2">
         {(source?.rules || []).map((rule, index) => {
           const issue = ruleCopyIssue(profile, source, rule, resources);
-          const condition = [rule.matchModel, rule.intentId && (source.intents.find(intent => intent.id === rule.intentId)?.name || rule.intentId), rule.kind === 'non_stream' ? '仅非流式请求' : rule.requireStream == null ? '' : rule.requireStream ? '仅流式请求' : '仅非流式请求'].filter(Boolean).join(' · ');
+          const condition = [rule.matchModel, rule.kind === 'non_stream' ? '仅非流式请求' : rule.requireStream == null ? '' : rule.requireStream ? '仅流式请求' : '仅非流式请求'].filter(Boolean).join(' · ');
           return <button type="button" key={rule.id} className="profile-channel-option w-full disabled:!opacity-100" data-selected={selected.includes(rule.id)} aria-pressed={selected.includes(rule.id)} aria-label={`复制规则 ${index + 1}：${condition || ruleKindLabel(rule.kind)}`} disabled={busy || Boolean(issue)} onClick={() => setSelected(previous => previous.includes(rule.id) ? previous.filter(id => id !== rule.id) : [...previous, rule.id])}>
             <span className="profile-option-icon">{selected.includes(rule.id) ? <Check size={15} /> : <Copy size={14} />}</span><span className="profile-option-copy"><span>{ruleKindLabel(rule.kind)} · {condition}</span><small className="wrap-anywhere">{ruleTargetLabels(rule.targets, resources).join('；')}</small>{issue && <small className="!text-amber-700">{issue}</small>}</span><span className="profile-option-status">{!rule.enabled ? '已停用' : `优先级 ${rule.priority}`}</span>
           </button>;
         })}
         {!source && <p className="profile-picker-empty">暂无其他包含规则的方案</p>}
-        {source?.rules.some(rule => rule.intentId) && <p className="text-[11px] leading-5 text-slate-500">关联意图及回退定义会一并复制；分类器沿用当前设置。意图路由关闭时，这些规则暂不执行。</p>}
         {error && <p role="alert" className="wrap-anywhere text-xs text-rose-600">{error}</p>}
       </div>
       <footer className="profile-picker-dialog-footer"><span role="status" aria-live="polite">已选 {selected.length} / {source?.rules.length || 0} 条规则</span><div className="profile-picker-footer-actions"><Button type="button" size="sm" variant="secondary" icon={X} disabled={busy} onClick={onClose}>取消</Button><Button type="button" size="sm" icon={Copy} disabled={busy || !selected.length} onClick={() => { try { onConfirm(source, selected); } catch (error) { setError(error.message); } }}>追加所选规则</Button></div></footer>

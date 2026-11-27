@@ -13,12 +13,14 @@ import (
 )
 
 type RuntimeConfig struct {
+	LoadError        error
+	CooldownPolicy   CooldownPolicy
+	generation       uint64
 	Provider         string
 	RuleDefaults     *RuleDefaults
 	Profiles         []RoutingProfile
 	Candidates       []DispatchCandidate
 	Catalog          Catalog
-	Classify         ClassifierCall
 	PrepareCandidate func(DispatchCandidate, string, string) DispatchCandidate
 	Supports         func(DispatchCandidate, string) bool
 	Compatible       func(context.Context, DispatchCandidate) (bool, string)
@@ -28,21 +30,12 @@ type RuntimeConfig struct {
 	OnSettlement     func(AttemptSettlement)
 }
 
-type IntentRoute struct {
-	IntentID          string        `json:"intent_id"`
-	Mode              string        `json:"mode"`
-	Targets           []RouteTarget `json:"targets"`
-	FallbackToDefault bool          `json:"fallback_to_default"`
-}
-
 type DispatchDecision struct {
 	Kind              string        `json:"kind"`
 	RuleID            int64         `json:"rule_id,omitempty"`
-	IntentID          string        `json:"intent_id,omitempty"`
 	Mode              string        `json:"mode,omitempty"`
 	Targets           []RouteTarget `json:"targets,omitempty"`
 	FallbackToDefault bool          `json:"fallback_to_default"`
-	FallbackIntents   []IntentRoute `json:"fallback_intents,omitempty"`
 	ReusedTurn        bool          `json:"reused_turn,omitempty"`
 }
 
@@ -83,7 +76,6 @@ type DispatchTrace struct {
 	Strategy        string               `json:"strategy"`
 	AffinityMode    AffinityMode         `json:"affinity_mode"`
 	Decision        DispatchDecision     `json:"decision"`
-	Intent          IntentResult         `json:"intent"`
 	Candidates      []DispatchTraceEvent `json:"candidates"`
 	Attempts        int                  `json:"attempts"`
 	WaitMS          int64                `json:"wait_ms"`
@@ -101,7 +93,6 @@ type DispatchPlan struct {
 	RequestID          string                `json:"request_id"`
 	Profile            RoutingProfile        `json:"profile"`
 	Decision           DispatchDecision      `json:"decision"`
-	Intent             IntentResult          `json:"intent"`
 	Model              string                `json:"model"`
 	Stages             []DispatchPlanStage   `json:"stages"`
 	Evaluations        []CandidateEvaluation `json:"evaluations"`
@@ -111,11 +102,14 @@ type DispatchPlan struct {
 	Turn               TurnInput             `json:"-"`
 	Budget             *Budget               `json:"-"`
 	requestedModel     string                // The incoming model can differ from Model after turn reuse.
+	failureDetail      string
 	defaultSource      *DispatchRouteSource
 	state              *dispatchRequestState
 }
 
 type dispatchRequestState struct {
+	localRequest    *localRequest
+	generation      uint64
 	native          *nativeDispatchPolicy
 	mu              sync.Mutex
 	runtime         *ProfileRuntime
@@ -142,7 +136,6 @@ type profileAffinity struct {
 	revision               int64
 	candidate              Candidate
 	decision               DispatchDecision
-	intent                 string
 	model                  string
 	cachedTokens           int64
 	failures               int
@@ -150,11 +143,12 @@ type profileAffinity struct {
 }
 
 type ProfileRuntime struct {
+	localFailures   map[[32]byte]localFailure
+	resourceHash    [32]byte
 	mu              sync.Mutex
 	config          RuntimeConfig
 	healthEndpoints map[string]struct{}
 	scheduler       *Scheduler
-	classifier      *IntentClassifier
 	affinity        map[string]profileAffinity
 	now             func() time.Time
 }
@@ -162,7 +156,7 @@ type ProfileRuntime struct {
 var dispatchRequestSequence atomic.Uint64
 
 func NewProfileRuntime(config RuntimeConfig) *ProfileRuntime {
-	r := &ProfileRuntime{scheduler: NewScheduler(), classifier: NewIntentClassifier(), affinity: map[string]profileAffinity{}, now: time.Now}
+	r := &ProfileRuntime{scheduler: NewScheduler(), affinity: map[string]profileAffinity{}, now: time.Now}
 	r.Replace(config)
 	return r
 }
@@ -199,6 +193,7 @@ func (r *ProfileRuntime) Replace(config RuntimeConfig) {
 		}
 	}
 	r.mu.Lock()
+	r.updateLocalFailureConfigLocked(&config)
 	r.config = config
 	r.healthEndpoints = healthEndpoints
 	r.mu.Unlock()
@@ -257,7 +252,7 @@ func boolDefault(value *bool, fallback bool) bool {
 func profileRuleTier(rule RoutingRule) int {
 	switch rule.Kind {
 	case "model", "mapping":
-		if rule.RequireStream != nil || rule.IntentID != "" {
+		if rule.RequireStream != nil {
 			return 2
 		}
 		if tier, _ := specificity(rule.MatchModel); tier == 0 {
@@ -268,22 +263,17 @@ func profileRuleTier(rule RoutingRule) int {
 		return 2
 	case "non_stream":
 		return 3
-	case "intent":
-		return 4
 	default:
 		return 9
 	}
 }
 
 // ResolveDecision is pure. Target profile references are expanded later and
-// never cause their own rules or classifiers to run recursively.
-func ResolveDecision(p RoutingProfile, model string, streaming bool, intentID string) DispatchDecision {
-	if p.Classifier == nil || !p.Classifier.Enabled {
-		intentID = ""
-	}
+// never cause their own rules to run recursively.
+func ResolveDecision(p RoutingProfile, model string, streaming bool) DispatchDecision {
 	matched := []RoutingRule{}
 	for _, rule := range p.Rules {
-		if !rule.Enabled || len(rule.Targets) == 0 || rule.RequireStream != nil && *rule.RequireStream != streaming || rule.IntentID != "" && rule.IntentID != intentID {
+		if !rule.Enabled || len(rule.Targets) == 0 || rule.RequireStream != nil && *rule.RequireStream != streaming {
 			continue
 		}
 		switch rule.Kind {
@@ -293,10 +283,6 @@ func ResolveDecision(p RoutingProfile, model string, streaming bool, intentID st
 			}
 		case "non_stream":
 			if streaming {
-				continue
-			}
-		case "intent":
-			if intentID == "" || rule.IntentID != intentID {
 				continue
 			}
 		default:
@@ -317,37 +303,7 @@ func ResolveDecision(p RoutingProfile, model string, streaming bool, intentID st
 		if mode == "" {
 			mode = ModePrefer
 		}
-		return DispatchDecision{Kind: rule.Kind, RuleID: rule.ID, IntentID: intentID, Mode: mode, Targets: rule.Targets, FallbackToDefault: boolDefault(rule.FallbackToDefault, DefaultRuleDefaults().FallbackToDefault)}
-	}
-	for _, in := range p.Intents {
-		if !in.Enabled || in.ID != intentID {
-			continue
-		}
-		decision := DispatchDecision{Kind: "intent", IntentID: in.ID, Mode: in.Mode, Targets: in.Targets, FallbackToDefault: boolDefault(in.FallbackToDefault, DefaultRuleDefaults().FallbackToDefault)}
-		if decision.Mode == "" {
-			decision.Mode = ModePrefer
-		}
-		seen := map[string]bool{in.ID: true}
-		next := in.FallbackIntent
-		for next != "" && !seen[next] {
-			seen[next] = true
-			found := false
-			for _, fallback := range p.Intents {
-				if fallback.ID == next && fallback.Enabled {
-					mode := fallback.Mode
-					if mode == "" {
-						mode = ModePrefer
-					}
-					decision.FallbackIntents = append(decision.FallbackIntents, IntentRoute{fallback.ID, mode, fallback.Targets, boolDefault(fallback.FallbackToDefault, DefaultRuleDefaults().FallbackToDefault)})
-					next, found = fallback.FallbackIntent, true
-					break
-				}
-			}
-			if !found {
-				break
-			}
-		}
-		return decision
+		return DispatchDecision{Kind: rule.Kind, RuleID: rule.ID, Mode: mode, Targets: rule.Targets, FallbackToDefault: boolDefault(rule.FallbackToDefault, DefaultRuleDefaults().FallbackToDefault)}
 	}
 	return DispatchDecision{Kind: "default"}
 }
@@ -403,7 +359,7 @@ func (r *ProfileRuntime) ExpandTargets(p RoutingProfile, targets []RouteTarget, 
 }
 
 // PreviewTargets evaluates explicit resources using business routing eligibility
-// and ordering, without running rules, classification, affinity or reservations.
+// and ordering, without running rules, affinity or reservations.
 func (r *ProfileRuntime) PreviewTargets(ctx context.Context, p RoutingProfile, targets []RouteTarget, model string) []CandidateEvaluation {
 	plan := DispatchPlan{
 		Profile: p,
@@ -447,13 +403,6 @@ func decisionTargetStages(p RoutingProfile, d DispatchDecision) []profileTargetS
 	}
 	stages = append(stages, profileTargetStage{d.Kind, d.Targets})
 	allowDefault := d.FallbackToDefault
-	for _, fallback := range d.FallbackIntents {
-		if fallback.Mode == ModeFallback {
-			addDefault()
-		}
-		stages = append(stages, profileTargetStage{"intent_fallback", fallback.Targets})
-		allowDefault = allowDefault || fallback.FallbackToDefault
-	}
 	if allowDefault {
 		addDefault()
 	}
@@ -499,7 +448,17 @@ func (r *ProfileRuntime) plan(ctx context.Context, profileID int64, model string
 	p, exists := runtimeProfile(config, profileID)
 	plan := DispatchPlan{RequestID: fmt.Sprintf("dispatch-%d-%d", now.UnixNano(), dispatchRequestSequence.Add(1)), Profile: p, Model: model, requestedModel: model, Turn: turn, Preview: preview, Stages: []DispatchPlanStage{}, Evaluations: []CandidateEvaluation{}, EligibleCandidates: []DispatchCandidate{}}
 	plan.state = &dispatchRequestState{runtime: r, created: now, publish: config.OnTrace, native: native}
+	plan.state.generation = config.generation
+	if ticket, ok := ctx.Value(localRequestKey{}).(localRequest); ok {
+		plan.state.localRequest = &ticket
+	}
+	if config.LoadError != nil {
+		plan.Profile.Provider = config.Provider
+		plan.Error, plan.failureDetail = "routing_config_unavailable", configurationFailureDetail(config.LoadError)
+		return plan
+	}
 	if !exists {
+		plan.Profile.Provider = config.Provider
 		plan.Error = "routing_profile_missing"
 		return plan
 	}
@@ -543,36 +502,18 @@ func (r *ProfileRuntime) plan(ctx context.Context, profileID int64, model string
 	if hasSession && previous.revision != p.Revision {
 		hasSession = false
 	}
-	// Turning off intent routing also disables previously remembered intent
-	// decisions; the upstream remains responsible for protocol-state validation.
-	if hasTurn && (p.Classifier == nil || !p.Classifier.Enabled) && (sameTurn.intent != "" || sameTurn.decision.IntentID != "" || sameTurn.decision.Kind == "intent") {
-		hasTurn = false
-	}
 	var preferred *Candidate
-	if hasTurn && (p.AffinityMode != AffinityNone || fromState) {
+	// A turn or response-state hint may retain a decision only for the same
+	// requested model. Explicit model switches must re-evaluate rules and must
+	// never inherit the model from a previous successful request.
+	if hasTurn && sameTurn.model == model && (p.AffinityMode != AffinityNone || fromState) {
 		plan.Decision = sameTurn.decision
 		plan.Decision.ReusedTurn = true
-		plan.Model = sameTurn.model
-		plan.Intent = IntentResult{IntentID: sameTurn.intent, Cached: true, Reason: "turn_reused"}
 		preferred = &sameTurn.candidate
 	} else {
-		plan.Decision = ResolveDecision(p, model, streaming, "")
-		if plan.Decision.Kind == "default" && p.Classifier != nil && p.Classifier.Enabled {
-			if preview {
-				plan.Intent = IntentResult{Reason: "classifier_preview_not_requested"}
-			} else {
-				plan.Intent = r.classifier.Classify(ctx, p, turn, previous.intent, config.Classify)
-				plan.Decision = ResolveDecision(p, model, streaming, plan.Intent.IntentID)
-			}
-		}
+		plan.Decision = ResolveDecision(p, model, streaming)
 		if hasSession && (p.AffinityMode == AffinitySession || turn.TurnID == "" && (p.AffinityMode == AffinityTurn || p.AffinityMode == AffinityAdaptive) || p.AffinityMode == AffinityAdaptive && previous.failures == 0 && now.Sub(previous.success) < 10*time.Minute && (turn.Continuation || previous.cachedTokens > 0)) {
 			preferred = &previous.candidate
-		}
-		if hasTurn && !turn.NewTurn {
-			// none selects resources afresh, while intent classification still
-			// remains a once-per-turn operation.
-			plan.Intent = IntentResult{IntentID: sameTurn.intent, Cached: true, Reason: "turn_reused"}
-			plan.Decision = ResolveDecision(p, model, streaming, sameTurn.intent)
 		}
 	}
 	plan.Decision = applyRuleDefaults(p, plan.Decision, config.RuleDefaults)
@@ -715,17 +656,6 @@ func (r *ProfileRuntime) populateDispatchPlan(ctx context.Context, config Runtim
 
 func (r *ProfileRuntime) Preview(ctx context.Context, profileID int64, model string, streaming bool, turn TurnInput) DispatchPlan {
 	return r.Plan(ctx, profileID, model, streaming, turn, true)
-}
-
-func (r *ProfileRuntime) ClassifyIntent(ctx context.Context, profileID int64, turn TurnInput) IntentResult {
-	config := r.snapshot()
-	p, exists := runtimeProfile(config, profileID)
-	if !exists {
-		return IntentResult{Reason: "routing_profile_missing"}
-	}
-	_, session := affinityKeys(ctx, p, turn)
-	previous, _ := r.remembered(session, r.now(), false)
-	return r.classifier.Classify(ctx, p, turn, previous.intent, config.Classify)
 }
 
 type profileRequestContextKey struct{}
@@ -1035,8 +965,7 @@ func (r *ProfileRuntime) rememberSuccess(plan *DispatchPlan, candidate DispatchC
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	entry := profileAffinity{candidate: candidate.Identity(), revision: plan.Profile.Revision, decision: plan.Decision, intent: plan.Intent.IntentID, model: plan.Model, cachedTokens: cachedTokens, expires: now.Add(time.Hour), used: now, success: now}
-	// Intent memory is independent of whether resource affinity is enabled.
+	entry := profileAffinity{candidate: candidate.Identity(), revision: plan.Profile.Revision, decision: plan.Decision, model: plan.Model, cachedTokens: cachedTokens, expires: now.Add(time.Hour), used: now, success: now}
 	for _, key := range []string{state.turnKey, state.sessionKey} {
 		if key != "" {
 			copy := entry
@@ -1082,7 +1011,7 @@ func (r *ProfileRuntime) RememberResponseStates(plan *DispatchPlan, candidate Di
 	now := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	entry := profileAffinity{candidate: candidate.Identity(), profileID: plan.Profile.ID, revision: plan.Profile.Revision, decision: plan.Decision, intent: plan.Intent.IntentID, model: plan.Model, expires: now.Add(time.Hour), used: now, success: now}
+	entry := profileAffinity{candidate: candidate.Identity(), profileID: plan.Profile.ID, revision: plan.Profile.Revision, decision: plan.Decision, model: plan.Model, expires: now.Add(time.Hour), used: now, success: now}
 	for i, key := range keys {
 		if i >= 256 {
 			break
@@ -1104,7 +1033,7 @@ func (r *ProfileRuntime) rememberFailure(plan *DispatchPlan, candidate DispatchC
 }
 
 func (p *DispatchPlan) Trace() DispatchTrace {
-	trace := DispatchTrace{RequestID: p.RequestID, Provider: p.Profile.Provider, ProfileID: p.Profile.ID, ProfileName: p.Profile.Name, RequestedModel: p.requestedModel, Strategy: p.Profile.Strategy, AffinityMode: p.Profile.AffinityMode, Decision: p.Decision, Intent: p.Intent, StopReason: p.Error, Candidates: []DispatchTraceEvent{}}
+	trace := DispatchTrace{RequestID: p.RequestID, Provider: p.Profile.Provider, ProfileID: p.Profile.ID, ProfileName: p.Profile.Name, RequestedModel: p.requestedModel, Strategy: p.Profile.Strategy, AffinityMode: p.Profile.AffinityMode, Decision: p.Decision, StopReason: p.Error, Candidates: []DispatchTraceEvent{}}
 	if p.defaultSource != nil {
 		source := *p.defaultSource
 		trace.DefaultSource = &source

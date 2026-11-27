@@ -62,7 +62,7 @@ function RoutingReferencesDialog({ impact, onClose }) {
             <span className="min-w-0 flex-1 wrap-anywhere">{saveError}</span>
             <Button type="button" size="sm" variant="ghost" icon={RefreshCw} onClick={() => { exitEditor(); impact.refresh(); }}>返回并刷新</Button>
           </div>}
-          <ProfileEditor profile={profile} profiles={workspace.profiles} channels={workspace.channels} accounts={workspace.accounts} relatedWorkspaces={impact.workspaces} policy={policy} busy={saving} showStoredIntent onSave={save} onCancel={exitEditor} />
+          <ProfileEditor profile={profile} profiles={workspace.profiles} channels={workspace.channels} accounts={workspace.accounts} policy={policy} busy={saving} onSave={save} onCancel={exitEditor} />
         </div> : <>
           <div className="min-h-0 overflow-y-auto px-5 py-4">
             {impact.loading && <p role="status" className="py-3 text-sm text-slate-500">正在检查调度方案引用…</p>}
@@ -73,8 +73,6 @@ function RoutingReferencesDialog({ impact, onClose }) {
                 const references = [
                   item.memberReference && '参与分组',
                   item.ruleReference && '匹配规则',
-                  item.intentReference && '意图目标',
-                  item.classifierReference && '意图识别器',
                 ].filter(Boolean);
                 return <li key={`${item.provider}/${item.id}`} className="flex items-start justify-between gap-3 py-3 first:pt-0 last:pb-0">
                   <div className="min-w-0">

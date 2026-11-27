@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -135,6 +136,9 @@ func TestClaudeProfileActualSendsUseExactCandidatesAndSharedBudget(t *testing.T)
 		{"all_candidates", 503, 10, `{"error":{"type":"api_error"}}`, []string{"/a/v1/messages", "/b/v1/messages", "/c/v1/messages"}},
 		{"model_scope", 404, 10, `{"error":{"code":"model_not_found"}}`, []string{"/a/v1/messages", "/c/v1/messages"}},
 		{"credential_scope", 401, 10, `{"error":{"type":"authentication_error"}}`, []string{"/a/v1/messages", "/c/v1/messages"}},
+		{"rate_limit_scope", 429, 10, `{"error":{"type":"too_many_requests","code":"rate_limit_exceeded"}}`, []string{"/a/v1/messages", "/c/v1/messages"}},
+		{"debt_scope", 403, 10, `{"Code":"AccessDenied","Message":"Current user is in debt."}`, []string{"/a/v1/messages", "/c/v1/messages"}},
+		{"quota_scope", 429, 10, `{"error":{"code":"quota_exceeded"}}`, []string{"/a/v1/messages", "/c/v1/messages"}},
 		{"request_scope", 400, 10, `{"error":{"type":"invalid_request_error"}}`, []string{"/a/v1/messages"}},
 		{"shared_budget", 503, 1, `{"error":{"type":"api_error"}}`, []string{"/a/v1/messages"}},
 		{"global_budget", 503, 10, `{"error":{"type":"api_error"}}`, []string{"/a/v1/messages"}},
@@ -437,5 +441,155 @@ func TestClaudeUnifiedRuntimeWithoutDefaultNeverSendsToActiveChannel(t *testing.
 	}
 	if sends != 0 || manager.ActiveChannelName() != "A" {
 		t.Fatalf("missing default fell back to active channel: sends=%d", sends)
+	}
+}
+
+func TestClaudeLocalFailureCooldownRecordsOnlyFirstIdenticalRequest(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprint(streaming), func(t *testing.T) {
+			sends := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				sends++
+				if streaming {
+					w.Header().Set("Content-Type", "text/event-stream")
+					io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"test\",\"usage\":{\"input_tokens\":10}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+					io.WriteString(w, `{"type":"message","model":"test","content":[],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}`)
+				}
+			}))
+			t.Cleanup(server.Close)
+			cfg := &config.Config{Retry: config.RetryConfig{MaxAttempts: 1, DisableRecoveryWait: true}, Endpoints: []config.EndpointConfig{{Name: "a", Channel: "A", CredentialGroupID: 11, URL: server.URL, SkipHealthCheck: true}}}
+			h, manager := profileClaudeHandler(t, cfg, 1, nil)
+			tracker := newLifecycleTestTracker(t)
+			h.SetUsageTracker(tracker)
+			h.monitoringMiddleware = middleware.NewMonitoringMiddleware(manager)
+			runtime := manager.PoolRuntime().ProfileRuntime()
+			runtime.Replace(routing.RuntimeConfig{Provider: "claude", LoadError: errors.New("SQL logic error: no such column: intent_id (1)")})
+			body := fmt.Sprintf(`{"model":"test","stream":%t,"messages":[{"role":"user","content":"first"}],"max_tokens":16}`, streaming)
+			sequence := 0
+			call := func(body string) *httptest.ResponseRecorder {
+				sequence++
+				req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+				req = req.WithContext(context.WithValue(req.Context(), "conn_id", fmt.Sprintf("local-failure-%d", sequence)))
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, req)
+				return rec
+			}
+			for i := 0; i < 28; i++ {
+				rec := call(body)
+				if rec.Code != 400 || rec.Header().Get("Retry-After") == "" || !strings.Contains(rec.Body.String(), "no such column: intent_id") {
+					t.Fatalf("missing local rejection: %d %s", rec.Code, rec.Body.String())
+				}
+				if i > 0 && !strings.Contains(rec.Body.String(), "首次记录") {
+					t.Fatal("duplicate entered normal processing")
+				}
+			}
+			rows, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{Limit: 100})
+			if err != nil || len(rows) != 1 || sends != 0 {
+				t.Fatalf("retries recorded or sent: rows=%d sends=%d err=%v", len(rows), sends, err)
+			}
+			if rows[0].FailureReason != "routing_config_unavailable" || !strings.Contains(rows[0].LastFailureReason, "no such column: intent_id") || rows[0].HTTPStatusIsUpstream {
+				t.Fatalf("cause lost: %+v", rows[0])
+			}
+			call(strings.Replace(body, "first", "different", 1))
+			rows, _, err = tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{Limit: 100})
+			if err != nil || len(rows) != 2 {
+				t.Fatalf("different request suppressed: rows=%d err=%v", len(rows), err)
+			}
+			profile := routing.DefaultProfile("claude")
+			profile.ID, profile.IsDefault = 7, true
+			profile.Members = []routing.RoutingMember{{ChannelID: 1, GroupID: 11, Enabled: true}}
+			ep := manager.GetAllEndpoints()[0]
+			runtime.Replace(routing.RuntimeConfig{Provider: "claude", Profiles: []routing.RoutingProfile{profile}, Candidates: []routing.DispatchCandidate{{Provider: "claude", ChannelID: 1, GroupID: 11, EndpointID: endpoint.EndpointKeyForConfig(ep.Config), Protocol: "messages", Enabled: true}}})
+			if rec := call(body); rec.Code != 200 || sends != 1 {
+				t.Fatalf("repaired request blocked: %d %s sends=%d", rec.Code, rec.Body.String(), sends)
+			}
+			if err := tracker.ForceFlush(); err != nil {
+				t.Fatal(err)
+			}
+			rows, err = tracker.QueryRequestDetails(context.Background(), &tracking.QueryOptions{Limit: 100})
+			if err != nil || len(rows) != 3 {
+				t.Fatalf("archive differs from visible records: rows=%d err=%v", len(rows), err)
+			}
+		})
+	}
+}
+
+func TestClaudeUnsentHealthCooldownStopsIdenticalRetriesUntilRecovery(t *testing.T) {
+	sends := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sends++
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"type":"message","model":"test","content":[],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}`)
+	}))
+	t.Cleanup(server.Close)
+	cfg := &config.Config{Retry: config.RetryConfig{MaxAttempts: 1, DisableRecoveryWait: true}, Endpoints: []config.EndpointConfig{{Name: "a", Channel: "A", CredentialGroupID: 11, URL: server.URL, SkipHealthCheck: true}}}
+	h, manager := profileClaudeHandler(t, cfg, 1, nil)
+	tracker := newLifecycleTestTracker(t)
+	h.SetUsageTracker(tracker)
+	h.monitoringMiddleware = middleware.NewMonitoringMiddleware(manager)
+	runtime := manager.PoolRuntime().ProfileRuntime()
+	profile, _ := runtime.Profile(1)
+	profile.Members = profile.Members[:1]
+	ep := manager.GetAllEndpoints()[0]
+	blocked := true
+	until := time.Now().Add(time.Minute)
+	runtime.Replace(routing.RuntimeConfig{Provider: "claude", Profiles: []routing.RoutingProfile{profile}, Candidates: []routing.DispatchCandidate{{Provider: "claude", ChannelID: 1, GroupID: 11, EndpointID: endpoint.EndpointKeyForConfig(ep.Config), Protocol: "messages", Enabled: true}}, PrepareCandidate: func(c routing.DispatchCandidate, model, override string) routing.DispatchCandidate {
+		c = routing.CopyCandidateForModel(c, model, override)
+		c.Health = routing.HealthState{CoolingDown: blocked, Until: until}
+		return c
+	}})
+	seq := 0
+	call := func() *httptest.ResponseRecorder {
+		seq++
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"test","max_tokens":16,"messages":[]}`))
+		req = req.WithContext(context.WithValue(req.Context(), "conn_id", fmt.Sprintf("cooldown-%d", seq)))
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	for i := 0; i < 3; i++ {
+		if rec := call(); rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" || !strings.Contains(rec.Body.String(), "route_unavailable") {
+			t.Fatalf("cooldown response: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	rows, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{Limit: 10})
+	if err != nil || len(rows) != 1 || sends != 0 {
+		t.Fatalf("cooldown retries escaped: rows=%d sends=%d err=%v", len(rows), sends, err)
+	}
+	blocked = false
+	if rec := call(); rec.Code != 200 || sends != 1 {
+		t.Fatalf("recovery stayed blocked: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestClaudeCountTokensLocalFailureGatePreservesDisabledEstimation(t *testing.T) {
+	cfg := &config.Config{Retry: config.RetryConfig{MaxAttempts: 1, DisableRecoveryWait: true}, Endpoints: []config.EndpointConfig{{Name: "a", Channel: "A", CredentialGroupID: 11, URL: "http://127.0.0.1:1", SkipHealthCheck: true}}}
+	cfg.TokenCounting.Enabled = true
+	h, manager := profileClaudeHandler(t, cfg, 1, nil)
+	tracker := newLifecycleTestTracker(t)
+	h.SetUsageTracker(tracker)
+	h.monitoringMiddleware = middleware.NewMonitoringMiddleware(manager)
+	manager.PoolRuntime().ProfileRuntime().Replace(routing.RuntimeConfig{Provider: "claude", LoadError: errors.New("no such column: intent_id")})
+	call := func(id string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/v1/messages/count_tokens", strings.NewReader(`{"model":"test","messages":[]}`))
+		req = req.WithContext(context.WithValue(req.Context(), "conn_id", id))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	for _, id := range []string{"count-first", "count-duplicate"} {
+		if rec := call(id); rec.Code != 400 || !strings.Contains(rec.Body.String(), "intent_id") {
+			t.Fatalf("missing auxiliary rejection: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	rows, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{Limit: 10})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("auxiliary duplicate was recorded: rows=%d err=%v", len(rows), err)
+	}
+	cfg.TokenCounting.Enabled = false
+	if rec := call("count-estimated"); rec.Code != 200 || !strings.Contains(rec.Body.String(), "input_tokens") {
+		t.Fatalf("disabled counting must estimate: %d %s", rec.Code, rec.Body.String())
 	}
 }

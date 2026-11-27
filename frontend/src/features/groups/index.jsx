@@ -24,22 +24,26 @@ const GroupsPage = () => {
   const [channelFailoverEnabled, setChannelFailoverEnabled] = useState(true);
 
   // ==================== 数据加载 ====================
-  const loadGroups = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const [data, config] = await Promise.all([
+  const loadGroups = useCallback(() => {
+    return Promise.all([
         fetchGroups(),
         isWailsEnvironment() ? getConfig() : fetchConfig()
-      ]);
+      ]).then(([data, config]) => {
       setGroups(data.groups || []);
       setChannelFailoverEnabled(config?.failover_enabled !== false);
-    } catch (err) {
+      setError(null);
+    }).catch((err) => {
       setError(err.message);
-    } finally {
+    }).finally(() => {
       setLoading(false);
-    }
+    });
   }, []);
+
+  const refreshGroups = () => {
+    setLoading(true);
+    setError(null);
+    return loadGroups();
+  };
 
   // ==================== 事件处理 ====================
 
@@ -48,7 +52,7 @@ const GroupsPage = () => {
     try {
       setActionLoading(true);
       await activateGroup(groupName);
-      await loadGroups();
+      await refreshGroups();
     } catch (err) {
       console.error('激活组失败:', err);
     } finally {
@@ -61,7 +65,7 @@ const GroupsPage = () => {
     try {
       setActionLoading(true);
       await pauseGroup(groupName);
-      await loadGroups();
+      await refreshGroups();
     } catch (err) {
       console.error('暂停组失败:', err);
     } finally {
@@ -80,7 +84,7 @@ const GroupsPage = () => {
       <ErrorMessage
         title="组数据加载失败"
         message={error}
-        onRetry={loadGroups}
+        onRetry={refreshGroups}
       />
     );
   }
@@ -108,7 +112,7 @@ const GroupsPage = () => {
             <ViewToggle viewMode={viewMode} onViewModeChange={setViewMode} />
 
             {/* 刷新按钮 */}
-            <Button icon={RefreshCw} onClick={loadGroups} loading={loading}>
+            <Button icon={RefreshCw} onClick={refreshGroups} loading={loading}>
               刷新
             </Button>
           </div>

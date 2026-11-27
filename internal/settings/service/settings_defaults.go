@@ -66,6 +66,11 @@ func (s *SettingsService) InitDefaults(ctx context.Context) error {
 
 // cleanupDeprecatedSettings 清理废弃的配置项
 func (s *SettingsService) cleanupDeprecatedSettings(ctx context.Context) error {
+	for _, provider := range []SettingsProvider{ProviderGlobal, ProviderClaude, ProviderCodex} {
+		if err := s.store.DeleteScoped(ctx, string(provider), CategoryRetry, "intent_rule_fallback"); err != nil {
+			return err
+		}
+	}
 	deprecatedKeys := []struct {
 		category string
 		key      string
@@ -250,6 +255,12 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*settingssto
 		// 请求控制配置
 		// 移除 allow_retry_on_exhausted，始终保持连接挂起
 		return []*settingsstore.SettingRecord{
+			{Category: CategoryRequest, Key: "codex_encrypted_history_recovery", Value: "false", ValueType: ValueTypeBool, Label: "Codex 会话降级恢复", Description: "加密历史被拒绝时，优先原样重试并尝试补回可确认的完整推理状态。开启后，仍无法恢复才移除加密推理项再试一次；保留消息和工具记录，会丢失隐藏推理。含压缩历史或服务端会话引用时不降级，所有尝试仍受调度预算限制。", DisplayOrder: 4},
+			{Category: CategoryRequest, Key: "codex_history_persistence", Value: "false", ValueType: ValueTypeBool, Label: "保存完整恢复状态", Description: "使用当前 Windows 用户加密保存已完成的推理状态，供重启后恢复。关闭后停止读写，已有文件保留；普通日志不保存会话内容。", DisplayOrder: 5},
+			{Category: CategoryRequest, Key: "codex_history_directory", Value: "", ValueType: ValueTypeString, Label: "恢复状态保存目录", Description: "留空使用 Vane 数据目录。切换后写入新目录，旧目录保留且不自动合并；开发与正式环境分开保存。", DisplayOrder: 6},
+			{Category: CategoryRequest, Key: "codex_history_retention_days", Value: "7", ValueType: ValueTypeInt, Label: "恢复状态保留天数", Description: "1–90 天。启用、保存或读取时清理到期记录；关闭应用或关闭持久化期间不执行清理。", DisplayOrder: 7},
+			{Category: CategoryRequest, Key: "codex_history_max_mib", Value: "64", ValueType: ValueTypeInt, Label: "恢复存储容量上限（MiB）", Description: "8–1024 MiB，超出时优先清理最早记录。单项超过 256 KiB 时保留校验信息，由客户端会话补查完整内容。", DisplayOrder: 8},
+			{Category: CategoryRequest, Key: "codex_history_client_lookup", Value: "true", ValueType: ValueTypeBool, Label: "只读补查客户端会话", Description: "启用持久化后，按当前会话只读查找 Codex 会话文件，仅使用与已保存来源证据和密文哈希一致的完成项。遵循 CODEX_HOME，否则读取用户的 .codex 目录；不修改原文件。", DisplayOrder: 9},
 			{Category: CategoryRequest, Key: "global_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "非流式默认超时", Description: "非流式请求从发送到完成的默认时限。", DisplayOrder: 1},
 			{Category: CategoryRequest, Key: "response_header_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "流式响应头超时", Description: "流式请求等待上游首次响应头的最长时间。", DisplayOrder: 2},
 			{Category: CategoryRequest, Key: "default_response_header_timeout", Value: "60s", ValueType: ValueTypeDuration, Label: "非流式响应头超时", Description: "非流式请求等待上游首次响应头的最长时间。", DisplayOrder: 3},

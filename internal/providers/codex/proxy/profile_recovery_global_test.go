@@ -59,6 +59,9 @@ func TestCodexGlobalRecoveryPolicyOverridesStoredProfile(t *testing.T) {
 					}
 				} else {
 					wantReason := map[string]string{"disabled": "route_unavailable", "budget": routing.StopRecoveryOutsideBudget, "cancel": "client_cancelled"}[scenario]
+					if scenario != "cancel" && (rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" || !strings.Contains(rec.Body.String(), wantReason)) {
+						t.Fatalf("temporary gate must allow client retries: status=%d headers=%v body=%s", rec.Code, rec.Header(), rec.Body.String())
+					}
 					if sends != 0 || trace.StopReason != wantReason || scenario == "disabled" && trace.WaitMS != 0 {
 						t.Fatalf("recovery boundary failed: sends=%d trace=%+v body=%s", sends, trace, rec.Body.String())
 					}

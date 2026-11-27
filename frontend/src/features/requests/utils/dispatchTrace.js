@@ -8,8 +8,14 @@ const parseSnapshot = (value) => {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
 };
 const identity = (candidate) => JSON.stringify([candidate.provider, candidate.channel, candidate.credential, candidate.endpoint, candidate.model, candidate.protocol, candidate.state_version ?? candidate.stateVersion]);
+const matchesTarget = (target, attempt) => {
+  const channelId = String(target.channel_id ?? target.channelId ?? '');
+  const groupId = String(target.group_id ?? target.groupId ?? '0');
+  const model = target.upstream_model || target.upstreamModel || '';
+  return attempt.channelId === channelId && (groupId === '0' || attempt.groupId === groupId) && (!model || attempt.model === model);
+};
 
-export const dispatchDecisionLabel = (kind) => ({ default: '默认编排', model: '模型路由', mapping: '模型映射', non_stream: '非流改道', composite: '条件路由', intent: '意图路由', explicit: '指定资源' }[kind] || '方案调度');
+export const dispatchDecisionLabel = (kind) => ({ default: '默认编排', model: '模型路由', mapping: '模型映射', non_stream: '非流改道', composite: '条件路由', explicit: '指定资源' }[kind] || '方案调度');
 
 // Current resources resolve names only. Historical decisions and counts always
 // come from the request snapshot, even when a profile is edited or deleted.
@@ -123,7 +129,7 @@ export function readRequestDispatchTrace(request, resources = []) {
     if (targetProfileId > 0) return { label: `方案 #${targetProfileId}`, model: configuredModel, configuredModel, attempted: null, skipReasons: [] };
     // A target channel can also be a default member; its configured model
     // separates a rule send from a default-stage send to the same group.
-    const matches = item => item.channelId === channelId && (groupId === '0' || item.groupId === groupId) && (!configuredModel || item.model === configuredModel);
+    const matches = item => matchesTarget(target, item);
     const channel = resources.find(item => item.provider === provider && String(item.id) === channelId);
     const historical = attempts.find(item => item.channelId === channelId && (groupId === '0' || item.groupId === groupId));
     const group = channel?.credentialGroups?.find(item => String(item.id) === groupId);
@@ -139,6 +145,9 @@ export function readRequestDispatchTrace(request, resources = []) {
   const ruleExecuted = snapshot.decision.kind === 'default' || !targets.length || targets.some(item => item.attempted === null)
     ? null
     : targets.some(item => item.attempted);
+  for (const attempt of attempts) {
+    attempt.ruleExecuted = ruleExecuted === null ? null : snapshot.decision.targets.some(target => matchesTarget(target, attempt));
+  }
   const source = snapshot.default_source || snapshot.defaultSource;
   let defaultSource = null;
   if (source && typeof source === 'object') {
@@ -194,7 +203,7 @@ export const summarizeRequestRoute = (request = {}) => {
     ? trace.attempts
     : getRequestResourcePath({ ...request, dispatchTrace: trace });
   const modelRewrite = !trace && sourceModel && targetModel && sourceModel !== targetModel ? [sourceModel, targetModel] : [];
-  if (!nodes.length) return { paths: [], resources: [], models: modelRewrite, sourceModel, defaultSourceLabel: '' };
+  if (!nodes.length) return { paths: [], resources: [], models: modelRewrite, sourceModel, defaultSourceLabel: '', modelChanged: modelRewrite.length > 0, resourceChanged: false, ruleExecuted: false };
   const paths = [];
   const resources = [];
   const models = [];
@@ -216,7 +225,12 @@ export const summarizeRequestRoute = (request = {}) => {
     : [source?.channel, source?.credentialGroup].filter(Boolean).join(' / ')
       || (!trace && snapshot?.kind ? snapshot.channel : '');
   const defaultSourceLabel = origin && resources[0] !== origin ? origin : '';
-  return { paths, resources, models: models.length ? models : modelRewrite, sourceModel, defaultSourceLabel };
+  return {
+    paths, resources, models: models.length ? models : modelRewrite, sourceModel, defaultSourceLabel,
+    modelChanged: models.length > 1 || !!sourceModel && models.some(model => model !== sourceModel),
+    resourceChanged: resources.length > 1,
+    ruleExecuted: trace?.ruleExecuted ?? null,
+  };
 };
 
 export const describeRequestRoutePath = (request, route = summarizeRequestRoute(request)) => {

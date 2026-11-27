@@ -108,8 +108,8 @@ const FirstByteBadge = ({ ms, status, live, compact }) => {
     );
   }
 
-  return <DurationBadge ms={ms} status={status} live={live} size="xs"
-    className={compact ? `border-transparent! bg-transparent! px-0! py-0! text-[10px]! ${live ? 'text-blue-600!' : 'text-emerald-600!'}` : ''}>
+  return <DurationBadge ms={ms} status={status} size="xs"
+    className={compact ? 'border-transparent! bg-transparent! px-0! py-0! text-[10px]!' : ''}>
     <AnimatedMetric value={ms} live={live} format="duration" className="block min-w-0 max-w-full truncate tabular-nums" />
   </DurationBadge>;
 };
@@ -122,8 +122,8 @@ const LatencyCell = ({ request, compact }) => {
 
   return <Tooltip asChild content={tooltip}>
     <span className="inline-flex min-w-0 max-w-full items-center justify-center gap-1 whitespace-nowrap" aria-live="off">
-      <DurationBadge ms={latency.durationMs} status={request.status} live={latency.durationLive} size="xs"
-        className={compact ? 'border-transparent! bg-transparent! px-0! py-0! text-[10px]! text-slate-600!' : ''}>
+      <DurationBadge ms={latency.durationMs} status={request.status} size="xs"
+        className={compact ? 'border-transparent! bg-transparent! px-0! py-0! text-[10px]!' : ''}>
         <AnimatedMetric value={latency.durationMs} live={latency.durationLive} format="duration" className="block min-w-0 max-w-full truncate tabular-nums" />
       </DurationBadge>
       <span className={`shrink-0 text-slate-300 ${compact ? '' : 'hidden'}`} aria-hidden="true">/</span>
@@ -184,7 +184,7 @@ const renderCell = (column, request, onViewDispatch, showDate, auxiliary, route)
     case 'status':
       return <span className={`inline-flex max-w-full [&>div]:max-w-full [&>div]:gap-1 [&>div]:px-1 [&>div]:text-[11px] ${column.layoutWidth < 58 ? '[&_svg]:hidden' : ''}`}><RequestStatusBadge request={request} /></span>;
     case 'model': {
-      const routePath = route.resources.length > 1 || route.defaultSourceLabel ? (
+      const routePath = route.paths.length > 0 ? (
         <div className="space-y-1.5 text-left">
           {route.paths.map(({ model, resources }, index) => (
             <div key={index}>
@@ -207,6 +207,7 @@ const renderCell = (column, request, onViewDispatch, showDate, auxiliary, route)
           originalModel={request.originalModelName || request.original_model_name || ''}
           rewriteTarget={request.modelRewriteTarget || request.model_rewrite_target || request.model || ''}
           routeSnapshot={request.routeSnapshot || request.route_snapshot}
+          routeSummary={route}
           routePath={routePath}
           routeExecuted={request.dispatchTrace?.ruleExecuted ?? null}
         />

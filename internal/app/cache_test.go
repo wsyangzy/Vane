@@ -2,10 +2,26 @@ package app
 
 import (
 	"testing"
+	"time"
 
 	appcache "github.com/wsyangzy/Vane/internal/platform/cache"
 	"github.com/wsyangzy/Vane/internal/tracking/sessionusage"
 )
+
+func TestCacheStatusSeparatesUnknownMetricsFromMeasuredZero(t *testing.T) {
+	unknown := cacheStatusItem(appcache.Stats{Name: "legacy", Size: 1})
+	if unknown.EstimatedBytes != nil || unknown.LastLoadMs != nil {
+		t.Fatalf("unknown metrics became zero: %+v", unknown)
+	}
+	empty := cacheStatusItem(appcache.Stats{HasByteEstimate: true, MaxBytes: 4 << 20})
+	if empty.EstimatedBytes == nil || *empty.EstimatedBytes != 0 || empty.MaxBytes != 4<<20 || empty.LastLoadMs != nil {
+		t.Fatalf("measured empty cache lost its budget: %+v", empty)
+	}
+	loaded := cacheStatusItem(appcache.Stats{HasByteEstimate: true, EstimatedBytes: 512, Loads: 2, LastLoadDuration: 1500 * time.Microsecond})
+	if *loaded.EstimatedBytes != 512 || loaded.Loads != 2 || loaded.LastLoadMs == nil || *loaded.LastLoadMs != 1.5 {
+		t.Fatalf("metrics mapping = %+v", loaded)
+	}
+}
 
 func TestLocalUsageIndexParticipatesInCacheStatusAndClear(t *testing.T) {
 	a := &App{}

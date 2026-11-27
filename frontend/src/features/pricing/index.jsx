@@ -698,28 +698,32 @@ const PricingPage = () => {
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   // 加载数据
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [status, records] = await Promise.all([
+  const readData = useCallback(() => {
+    return Promise.all([
         getModelPricingStorageStatus(),
         getModelPricings()
-      ]);
+      ]).then(([status, records]) => {
       setStorageStatus(status);
       setPricings(records);
-    } catch (err) {
+      setError(null);
+    }).catch((err) => {
       console.error('加载模型定价失败:', err);
       setError(err.message);
-    } finally {
+    }).finally(() => {
       setLoading(false);
-    }
+    });
   }, []);
+
+  const loadData = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    return readData();
+  }, [readData]);
 
   // 初始化加载
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    readData();
+  }, [readData]);
 
   // 新建定价
   const handleCreate = () => {

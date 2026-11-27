@@ -309,11 +309,6 @@ func (a *App) clientConnectionManaged(provider string) bool {
 			targets = append(targets, rule.Targets...)
 		}
 	}
-	for _, intent := range profile.Intents {
-		if intent.Enabled {
-			targets = append(targets, intent.Targets...)
-		}
-	}
 	for _, candidate := range runtime.ExpandTargets(profile, targets, "") {
 		if candidate.Enabled && candidate.CredentialMode == "client_passthrough" {
 			return false

@@ -15,7 +15,7 @@ const failureScope = (request) => {
   const profile = request.dispatchTrace?.profileId || snapshot.profile_id || snapshot.profileId;
   if (profile) {
     const decision = request.dispatchTrace?.decision || snapshot.decision || {};
-    return ['profile', profile, decision.kind || '', decision.rule_id || decision.ruleId || '', decision.intent_id || decision.intentId || ''];
+    return ['profile', profile, decision.kind || '', decision.rule_id || decision.ruleId || ''];
   }
   return ['route', snapshot.kind || '', snapshot.id || '', snapshot.channel || request.channel || '', request.group || request.group_name || '', request.endpoint || request.endpoint_name || ''];
 };

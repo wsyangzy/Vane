@@ -13,6 +13,7 @@ type Options struct {
 	Name         string
 	TTL          time.Duration
 	MaxEntries   int
+	MaxBytes     int64 // Estimated retained bytes; zero leaves the byte limit disabled.
 	StaleOnError bool
 	Enabled      bool
 }
@@ -25,6 +26,11 @@ type Stats struct {
 	TTL               time.Duration `json:"ttl"`
 	MaxEntries        int           `json:"max_entries"`
 	Size              int           `json:"size"`
+	EstimatedBytes    int64         `json:"estimated_bytes"`
+	MaxBytes          int64         `json:"max_bytes"`
+	HasByteEstimate   bool          `json:"has_byte_estimate"`
+	Loads             uint64        `json:"loads"`
+	LastLoadDuration  time.Duration `json:"last_load_duration"`
 	Hits              uint64        `json:"hits"`
 	Misses            uint64        `json:"misses"`
 	Expired           uint64        `json:"expired"`
@@ -80,6 +86,7 @@ type entry[T any] struct {
 	scope     Scope
 	expiresAt time.Time
 	updatedAt time.Time
+	bytes     int64
 }
 
 // call 合并同一 key 的并发加载，避免缓存未命中时多个调用方同时查库。
@@ -88,6 +95,7 @@ type call[T any] struct {
 	value T
 	err   error
 	stale bool
+	scope Scope
 }
 
 // Cache is a small generic TTL cache for read-path aggregation data.
@@ -96,6 +104,8 @@ type Cache[T any] struct {
 	options  Options
 	items    map[string]entry[T]
 	inflight map[string]*call[T]
+	measure  func(T) int64
+	bytes    int64
 	// epoch 在每次失效时递增。加载开始后若发生过失效，加载结果可能基于失效前的数据，
 	// 只返回给调用方而不入缓存，避免旧值在兜底 TTL 内一直残留。
 	epoch uint64
@@ -108,6 +118,8 @@ type Cache[T any] struct {
 	staleServed       atomic.Uint64
 	lastUpdatedAt     time.Time
 	lastInvalidatedAt time.Time
+	loads             uint64
+	lastLoadDuration  time.Duration
 }
 
 // New creates a cache with normalized defaults.
@@ -117,6 +129,21 @@ func New[T any](options Options) *Cache[T] {
 		options:  options,
 		items:    make(map[string]entry[T]),
 		inflight: make(map[string]*call[T]),
+	}
+}
+
+// NewSized applies a retained-memory estimate without serializing a second copy
+// of the value. Oversized results still reach callers, but are not retained.
+func NewSized[T any](options Options, measure func(T) int64) *Cache[T] {
+	c := New[T](options)
+	c.measure = measure
+	return c
+}
+
+func (c *Cache[T]) removeLocked(key string) {
+	if item, ok := c.items[key]; ok {
+		c.bytes -= item.bytes
+		delete(c.items, key)
 	}
 }
 
@@ -155,7 +182,7 @@ func (c *Cache[T]) Get(key string) (T, bool) {
 		return zero, false
 	}
 	if c.isExpired(item, now) {
-		delete(c.items, key)
+		c.removeLocked(key)
 		c.expired.Add(1)
 		c.mu.Unlock()
 		c.misses.Add(1)
@@ -181,12 +208,23 @@ func (c *Cache[T]) setLocked(key string, scope Scope, value T, now time.Time) {
 	if existing, ok := c.items[key]; ok && c.isExpired(existing, now) {
 		c.expired.Add(1)
 	}
+	c.removeLocked(key)
+	var bytes int64
+	if c.measure != nil {
+		bytes = max(0, c.measure(value)) + int64(len(key)) + 128
+	}
+	if c.options.MaxBytes > 0 && bytes > c.options.MaxBytes {
+		c.evicted.Add(1)
+		return
+	}
 	c.items[key] = entry[T]{
 		value:     value,
 		scope:     scope,
 		expiresAt: c.expiresAt(now),
 		updatedAt: now,
+		bytes:     bytes,
 	}
+	c.bytes += bytes
 	c.lastUpdatedAt = now
 	c.enforceCapacityLocked(now)
 }
@@ -204,7 +242,7 @@ func (c *Cache[T]) GetOrLoadScoped(key string, scope Scope, loader func() (T, er
 	if !c.options.Enabled {
 		c.mu.Unlock()
 		c.misses.Add(1)
-		return loader()
+		return c.load(loader)
 	}
 	item, hasItem := c.items[key]
 	if hasItem && !c.isExpired(item, now) {
@@ -222,7 +260,7 @@ func (c *Cache[T]) GetOrLoadScoped(key string, scope Scope, loader func() (T, er
 		return pending.value, pending.err
 	}
 
-	current := &call[T]{done: make(chan struct{})}
+	current := &call[T]{done: make(chan struct{}), scope: scope}
 	c.inflight[key] = current
 	staleOnError := c.options.StaleOnError
 	epoch := c.epoch
@@ -232,19 +270,21 @@ func (c *Cache[T]) GetOrLoadScoped(key string, scope Scope, loader func() (T, er
 	// defer 保证 loader panic 时也会唤醒等待者并清理 inflight
 	defer func() {
 		c.mu.Lock()
-		delete(c.inflight, key)
+		if c.inflight[key] == current {
+			delete(c.inflight, key)
+		}
 		c.mu.Unlock()
 		close(current.done)
 	}()
 
-	current.value, current.err = loader()
+	current.value, current.err = c.load(loader)
 
 	c.mu.Lock()
 	if current.err == nil {
 		if c.options.Enabled && c.epoch == epoch {
 			c.setLocked(key, scope, current.value, time.Now())
 		}
-	} else if staleOnError && hasItem {
+	} else if staleOnError && hasItem && c.epoch == epoch && c.options.Enabled {
 		current.value, current.err, current.stale = item.value, nil, true
 	}
 	c.mu.Unlock()
@@ -253,6 +293,20 @@ func (c *Cache[T]) GetOrLoadScoped(key string, scope Scope, loader func() (T, er
 		c.staleServed.Add(1)
 	}
 	return current.value, current.err
+}
+
+// Measure only actual loader executions, including errors and disabled-cache
+// reads. Cache hits and coalesced waiters do not add another load.
+func (c *Cache[T]) load(loader func() (T, error)) (T, error) {
+	started := time.Now()
+	defer func() {
+		duration := time.Since(started)
+		c.mu.Lock()
+		c.loads++
+		c.lastLoadDuration = duration
+		c.mu.Unlock()
+	}()
+	return loader()
 }
 
 // Invalidate removes matching entries and returns the number removed.
@@ -265,15 +319,23 @@ func (c *Cache[T]) Invalidate(options InvalidateOptions) int {
 	defer c.mu.Unlock()
 
 	c.epoch++
+	// A read started after invalidation must not join an older load. Existing
+	// waiters may finish that load, whose epoch prevents it entering the cache.
+	for key, pending := range c.inflight {
+		if options.All || options.Change != nil && pending.scope.Affected(*options.Change) || options.Key == key || options.Prefix != "" && strings.HasPrefix(key, options.Prefix) {
+			delete(c.inflight, key)
+		}
+	}
 	removed := 0
 	switch {
 	case options.All:
 		removed = len(c.items)
 		c.items = make(map[string]entry[T])
+		c.bytes = 0
 	case options.Change != nil:
 		for key, item := range c.items {
 			if item.scope.Affected(*options.Change) {
-				delete(c.items, key)
+				c.removeLocked(key)
 				removed++
 			}
 		}
@@ -283,13 +345,13 @@ func (c *Cache[T]) Invalidate(options InvalidateOptions) int {
 		}
 	case options.Key != "":
 		if _, ok := c.items[options.Key]; ok {
-			delete(c.items, options.Key)
+			c.removeLocked(options.Key)
 			removed = 1
 		}
 	case options.Prefix != "":
 		for key := range c.items {
 			if strings.HasPrefix(key, options.Prefix) {
-				delete(c.items, key)
+				c.removeLocked(key)
 				removed++
 			}
 		}
@@ -312,7 +374,9 @@ func (c *Cache[T]) SetOptions(options Options) {
 	}
 	if !c.options.Enabled {
 		c.items = make(map[string]entry[T])
+		c.bytes = 0
 		c.epoch++
+		c.inflight = make(map[string]*call[T])
 		c.lastInvalidatedAt = time.Now()
 		c.invalidations.Add(1)
 		return
@@ -339,6 +403,11 @@ func (c *Cache[T]) Stats() Stats {
 		TTL:               c.options.TTL,
 		MaxEntries:        c.options.MaxEntries,
 		Size:              len(c.items),
+		EstimatedBytes:    c.bytes,
+		MaxBytes:          c.options.MaxBytes,
+		HasByteEstimate:   c.measure != nil,
+		Loads:             c.loads,
+		LastLoadDuration:  c.lastLoadDuration,
 		Hits:              c.hits.Load(),
 		Misses:            c.misses.Load(),
 		Expired:           c.expired.Load(),
@@ -368,7 +437,7 @@ func (c *Cache[T]) purgeExpiredLocked(now time.Time) int {
 	removed := 0
 	for key, item := range c.items {
 		if c.isExpired(item, now) {
-			delete(c.items, key)
+			c.removeLocked(key)
 			removed++
 		}
 	}
@@ -380,25 +449,22 @@ func (c *Cache[T]) purgeExpiredLocked(now time.Time) int {
 
 func (c *Cache[T]) enforceCapacityLocked(now time.Time) {
 	maxEntries := c.options.MaxEntries
-	if maxEntries <= 0 {
-		c.purgeExpiredLocked(now)
-		return
-	}
-
 	c.purgeExpiredLocked(now)
-	for len(c.items) > maxEntries {
+	for len(c.items) > 0 && (maxEntries > 0 && len(c.items) > maxEntries || c.options.MaxBytes > 0 && c.bytes > c.options.MaxBytes) {
 		oldestKey := ""
+		found := false
 		var oldestUpdatedAt time.Time
 		for key, item := range c.items {
-			if oldestKey == "" || item.updatedAt.Before(oldestUpdatedAt) {
+			if !found || item.updatedAt.Before(oldestUpdatedAt) {
 				oldestKey = key
+				found = true
 				oldestUpdatedAt = item.updatedAt
 			}
 		}
-		if oldestKey == "" {
+		if !found {
 			return
 		}
-		delete(c.items, oldestKey)
+		c.removeLocked(oldestKey)
 		c.evicted.Add(1)
 	}
 }

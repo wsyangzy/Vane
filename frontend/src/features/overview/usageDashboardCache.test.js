@@ -10,6 +10,15 @@ const deferred = () => {
   return { promise, resolve, reject };
 };
 
+test('forced refresh reaches the desktop loader so backend snapshots can be refreshed', async () => {
+  const calls = [];
+  const cache = createUsageDashboardCache(async (query, options) => { calls.push({ source: query.source, force: options.force }); return { tokens: 42 }; });
+  await cache.load({ source: 'local' });
+  await cache.load({ source: 'local' }, { force: true });
+  await cache.load({ source: 'proxy' }, { force: true });
+  assert.deepEqual(calls, [{ source: 'local', force: false }, { source: 'local', force: true }, { source: 'proxy', force: true }]);
+});
+
 test('usage cache returns revisited days immediately and expires after its freshness window', async () => {
   let at = 0, reads = 0;
   const cache = createUsageDashboardCache(async query => ({ day: query.day, reads: ++reads }), { now: () => at });
@@ -121,4 +130,39 @@ test('clear all rejects late in-flight cache writes and reports counters without
   assert.equal(cache.stats().misses, 1);
   assert.equal(cache.stats().invalidations, 1);
   assert.equal(JSON.stringify(cache.stats()).includes('private-project'), false);
+});
+
+test('usage results evict by byte budget before reaching the entry limit', async () => {
+  const cache = createUsageDashboardCache(async query => ({ day: query.day, title: 'x'.repeat(600) }), { capacity: 10, byteBudget: 2000 });
+  const a = dayQuery('2026-10-26'), b = dayQuery('2026-10-27');
+  await cache.load(a);
+  await cache.load(b);
+  assert.equal(cache.peek(a), undefined);
+  assert.equal(cache.peek(b).data.title.length, 600);
+  assert.equal(cache.stats().size, 1);
+  assert.ok(cache.stats().estimatedBytes <= cache.stats().budgetBytes);
+});
+
+test('oversized usage results remain complete and are returned without being cached', async () => {
+  let reads = 0;
+  const cache = createUsageDashboardCache(async () => ({ title: 'x'.repeat(2000), reads: ++reads }), { byteBudget: 1000 });
+  const query = dayQuery('2026-10-27');
+  assert.equal((await cache.load(query)).title.length, 2000);
+  assert.equal(cache.stats().size, 0);
+  assert.equal(cache.stats().estimatedBytes, 0);
+  assert.equal((await cache.load(query)).reads, 2);
+});
+
+test('expired inactive views release their bytes while the active stale view stays available', async () => {
+  let at = 0;
+  const cache = createUsageDashboardCache(async query => ({ day: query.day }), { now: () => at });
+  const a = dayQuery('2026-10-26'), b = dayQuery('2026-10-27');
+  const first = await cache.load(a);
+  await cache.load(b);
+  const before = cache.stats().estimatedBytes;
+  at = USAGE_CACHE_MAX_AGE;
+  assert.equal(cache.peek(a).data, first);
+  assert.equal(cache.stats().size, 1);
+  assert.ok(cache.stats().estimatedBytes < before);
+  assert.equal(cache.peek(b), undefined);
 });

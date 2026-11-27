@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/wsyangzy/Vane/internal/routing"
 	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
@@ -210,6 +211,11 @@ func (h *Handler) recordFailure(requestID string, startTime time.Time, reason st
 func (h *Handler) recordUpstreamFailure(requestID string, startTime time.Time, reason string, detail string, httpStatus int, tokenResult *TokenResult, requestModel string) {
 	if h.usageTracker == nil {
 		return
+	}
+	// The trace retains why scheduling stopped; the request keeps the upstream
+	// diagnosis even when its response arrived after the retry budget elapsed.
+	if code, _, _ := routing.ErrorIdentity([]byte(detail)); code == "invalid_encrypted_content" {
+		reason = code
 	}
 	duration := time.Since(startTime)
 	var tokens *tracking.TokenUsage

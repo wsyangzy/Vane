@@ -120,7 +120,7 @@ export default function ProfileSearchEditor({ profileId = 0, savedSearch, value,
         <p className="text-[11px] leading-5 text-slate-500">自动选择只尝试已保存配置且支持当前操作的服务，取到可用结果即停止。凭证留空则保留，修改或删除后需保存。</p>
         <p className="text-[11px] leading-5 text-slate-500">允许实时联网时，Tavily 和 Exa 可打开明确的网页地址。点击链接与页内查找由原生线路处理。</p>
       </div>}
-      <p className="text-[11px] leading-5 text-slate-400">标准入口按本方案选择处理；显式原生／适配入口始终固定线路。搜索不执行文本模型映射、非流改道或意图识别。</p>
+      <p className="text-[11px] leading-5 text-slate-400">标准入口按本方案选择处理；显式原生／适配入口始终固定线路。搜索不执行文本模型映射或非流改道。</p>
     </div>
   </section>;
 }

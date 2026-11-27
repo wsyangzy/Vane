@@ -102,6 +102,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer r.Body.Close()
+	if h.manager != nil && !isCodexSearchRequest(r) {
+		if pool := h.manager.PoolRuntime(); pool != nil {
+			var rejection *routing.LocalRejection
+			r, rejection = pool.ProfileRuntime().AdmitLocalRequest(r, body)
+			if rejection != nil {
+				rejection.Write(w)
+				return
+			}
+		}
+	}
 	originalBody := append([]byte(nil), body...)
 	if h.privacyService != nil {
 		turn := routing.ResolveTurn(r.Context(), r.Header, originalBody, "codex")

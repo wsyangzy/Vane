@@ -15,6 +15,6 @@ export { getSettingsStorageStatus, getSettingCategories, getAllSettings, getSett
 export { getSuspendedRequestsCount, getSuspendedEndpointCounts, getManualRetryRequestsCount, getManualRetryChannelCounts, getPortConflictStatus, resolvePortConflict } from './suspension.js';
 export { manageSubscriptionConnection, manageSubscriptionAccounts, mapSubscriptionAccount } from './subscriptions.js';
 export { getRecentLogs, getLogStreamStatus, startLogStream, stopLogStream, saveLogFile } from './logs.js';
-export { listRoutingProfiles, saveRoutingProfile, deleteRoutingProfile, setDefaultRoutingProfile, previewDispatch, classifyIntent, listQuotaSnapshots, refreshQuota, listDispatchTraces, checkRoutingConfiguration } from './dispatch.js';
+export { listRoutingProfiles, saveRoutingProfile, deleteRoutingProfile, setDefaultRoutingProfile, previewDispatch, listQuotaSnapshots, refreshQuota, listDispatchTraces, checkRoutingConfiguration } from './dispatch.js';
 
 export { probeCodexEndpoint } from './codex.js';

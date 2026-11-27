@@ -24,7 +24,7 @@ func (a *App) reloadCodexEndpointManager() error {
 		ctx, cancel := routeCtx()
 		defer cancel()
 		if _, err := a.refreshPoolRuntime(ctx, "codex"); err != nil {
-			a.closePoolRuntime("codex")
+			a.closePoolRuntime("codex", err)
 			return err
 		}
 		a.publishPoolRuntime("codex")

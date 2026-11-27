@@ -66,15 +66,10 @@ func (c *ErrorClassifier) Classify(resp *http.Response, err error) ErrorAction {
 
 // classifyStreamError 处理上游以 HTTP 200 SSE 流返回的错误事件。
 //
-// 只读上游自己给出的 error type/code/message 文本，不再把关键字折算成 HTTP 状态码：
-// 这条响应的真实状态码就是 200，编一个 429/401 出来既会写进转移链路冒充提供商的响应，
-// 又和真正的限流/鉴权失败无法区分。
-//
-// 折算表原本 8 个分支，实际只有一个语义边界——请求体本身不合法时换端点也没用，
-// 其余（限流、额度、鉴权、容量、未知）都值得换端点再试。
+// 与调度共用结构化错误语义，保留真实 HTTP 200。只有请求级终止错误
+// 立即失败；消息中的普通单词不能把限流或容量错误变成请求拒绝。
 func classifyStreamError(streamErr *UpstreamStreamError) ErrorAction {
-	combined := strings.ToLower(strings.Join([]string{streamErr.Type, streamErr.Code, streamErr.Message}, " "))
-	if strings.Contains(combined, "invalid_request") || strings.Contains(combined, "bad_request") {
+	if codexRouteFailure(http.StatusOK, nil, streamErr).Terminal {
 		return ActionFailFast
 	}
 	return ActionFailover

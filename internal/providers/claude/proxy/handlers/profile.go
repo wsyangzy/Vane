@@ -304,7 +304,7 @@ type profileResponseBody struct {
 }
 
 func (b *profileResponseBody) inspect(data []byte) {
-	if len(subscription.QuotaPauses(b.status, b.headers, data, subscription.Binding{GroupID: b.reservation.Candidate().GroupID}, b.reservation.Candidate().Identity().Model, time.Now())) > 0 {
+	if subscription.FromContext(b.health.ctx) != nil && len(subscription.QuotaPauses(b.status, b.headers, data, subscription.Binding{GroupID: b.reservation.Candidate().GroupID}, b.reservation.Candidate().Identity().Model, time.Now())) > 0 {
 		b.quota = true
 	}
 	if b.status >= 400 {

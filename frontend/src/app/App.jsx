@@ -40,8 +40,8 @@ const GlobalAlerts = () => {
   const inFlightRef = useRef(false);
   const failurePollerRef = useRef(null);
   const failureGroupsRef = useRef(null);
-  if (!failurePollerRef.current) failurePollerRef.current = createFailureNotificationPoller({ fetchRequests });
-  if (!failureGroupsRef.current) failureGroupsRef.current = createFailureNotificationAggregator();
+  if (failurePollerRef.current == null) failurePollerRef.current = createFailureNotificationPoller({ fetchRequests });
+  if (failureGroupsRef.current == null) failureGroupsRef.current = createFailureNotificationAggregator();
   const lastSuspendedCountRef = useRef(0);
   const lastManualRetryCountRef = useRef(0);
   // Codex 挂起数（独立于 Claude 挂起数，事件驱动）
@@ -180,11 +180,9 @@ function App() {
   const [showPortConflictDialog, setShowPortConflictDialog] = useState(false);
 
   // 检查端口冲突状态
-  const checkPortConflict = useCallback(async () => {
+  const checkPortConflict = useCallback(() => {
     if (!isWailsEnvironment()) return;
-
-    try {
-      const status = await getPortConflictStatus();
+    return getPortConflictStatus().then((status) => {
       const hasConflict = status.has_conflict || false;
       setPortConflict({
         hasConflict,
@@ -195,9 +193,9 @@ function App() {
       if (hasConflict) {
         setShowPortConflictDialog(true);
       }
-    } catch (error) {
+    }).catch((error) => {
       console.warn('检查端口冲突状态失败:', error);
-    }
+    });
   }, []);
 
   // 初始化时检查端口冲突

@@ -25,6 +25,7 @@ func (m *Manager) notifyWebInterface(endpoint *Endpoint) {
 
 	endpoint.mutex.RLock()
 	status := endpoint.Status
+	name := endpoint.Config.Name
 	endpoint.mutex.RUnlock()
 
 	// 确定事件类型和优先级
@@ -43,7 +44,7 @@ func (m *Manager) notifyWebInterface(endpoint *Endpoint) {
 		Source:   "endpoint_manager",
 		Priority: priority,
 		Data: map[string]interface{}{
-			"endpoint":          endpoint.Config.Name,
+			"endpoint":          name,
 			"healthy":           status.Healthy,
 			"response_time":     display.FormatResponseTime(status.ResponseTime),
 			"last_check":        status.LastCheck.Format("2006-01-02 15:04:05"),

@@ -148,7 +148,6 @@ func TestSettingsAdaptLegacyRowsWithoutReinterpretingRetryValues(t *testing.T) {
 		{"retry", "model_rule_fallback", "false"},
 		{"retry", "mapping_rule_fallback", "true"},
 		{"retry", "non_stream_rule_fallback", "false"},
-		{"retry", "intent_rule_fallback", "true"},
 		{"request", "eof_retry_hint", "true"},
 		{"request", "suspend_wait_timeout", "90s"},
 	}

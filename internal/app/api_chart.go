@@ -546,23 +546,32 @@ func (a *App) GetEndpointAvailability(provider, channel, endpointName string, ho
 	ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
 	defer cancel()
 
-	buckets, err := usageTracker.QueryEndpointAvailabilityBuckets(ctx, &tracking.QueryOptions{
-		StartDate:    &firstSlice,
-		EndDate:      &queryEnd,
-		EndpointName: endpointName,
-		Channel:      channel,
-		Provider:     provider,
-	}, "hour")
+	key := dashboardKey(provider, channel, endpointName, firstSlice.Format(time.RFC3339Nano), queryEnd.Format(time.RFC3339Nano), loc.String(), fmt.Sprintf("%p", usageTracker))
+	scope := appcache.Scope{Provider: provider, Start: firstSlice, End: queryEnd}
+	data, err := a.ensureReadCaches().availability.GetOrLoadScoped(key, scope, func() (EndpointAvailabilityData, error) {
+		buckets, err := usageTracker.QueryEndpointAvailabilityBuckets(ctx, &tracking.QueryOptions{
+			StartDate:    &firstSlice,
+			EndDate:      &queryEnd,
+			EndpointName: endpointName,
+			Channel:      channel,
+			Provider:     provider,
+		}, "hour")
+		if err != nil {
+			return empty, err
+		}
+
+		byKey := make(map[string]tracking.EndpointAvailabilityBucket, len(buckets))
+		for _, bucket := range buckets {
+			byKey[bucket.Key] = bucket
+		}
+
+		return buildEndpointAvailabilityData(byKey, firstSlice, hours), nil
+	})
 	if err != nil {
 		return empty, err
 	}
-
-	byKey := make(map[string]tracking.EndpointAvailabilityBucket, len(buckets))
-	for _, bucket := range buckets {
-		byKey[bucket.Key] = bucket
-	}
-
-	return buildEndpointAvailabilityData(byKey, firstSlice, hours), nil
+	data.Slices = append([]EndpointAvailabilitySlice(nil), data.Slices...)
+	return data, nil
 }
 
 // buildEndpointAvailabilityData 把稀疏的分桶结果摊平成连续的时间片并汇总。

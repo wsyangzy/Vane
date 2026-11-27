@@ -48,8 +48,8 @@ func DefaultRuleDefaults() RuleDefaults {
 	return RuleDefaults{FallbackToDefault: true}
 }
 
-// Only inherited values change. Reused turns keep their selected rule and
-// intent, and each admitted request keeps its resolved policy during recovery.
+// Only inherited values change. Reused turns keep their selected rule, and
+// each admitted request keeps its resolved policy during recovery.
 func applyRuleDefaults(p RoutingProfile, decision DispatchDecision, defaults *RuleDefaults) DispatchDecision {
 	if defaults == nil || decision.Kind == "default" {
 		return decision
@@ -60,32 +60,25 @@ func applyRuleDefaults(p RoutingProfile, decision DispatchDecision, defaults *Ru
 			return decision
 		}
 	}
-	if decision.Kind == "intent" {
-		for _, intent := range p.Intents {
-			if intent.ID == decision.IntentID {
-				decision.FallbackToDefault = boolDefault(intent.FallbackToDefault, defaults.FallbackToDefault)
-			}
-		}
-		decision.FallbackIntents = append([]IntentRoute(nil), decision.FallbackIntents...)
-		for i := range decision.FallbackIntents {
-			for _, intent := range p.Intents {
-				if intent.ID == decision.FallbackIntents[i].IntentID {
-					decision.FallbackIntents[i].FallbackToDefault = boolDefault(intent.FallbackToDefault, defaults.FallbackToDefault)
-				}
-			}
-		}
-	}
 	return decision
 }
 
 func (r *PoolRuntime) SetCooldownPolicy(policy CooldownPolicy) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.config.CooldownPolicy = policy.normalized()
+	r.mu.Unlock()
+	if profile := r.ProfileRuntime(); profile != nil {
+		profile.mu.Lock()
+		profile.config.CooldownPolicy = policy.normalized()
+		profile.mu.Unlock()
+	}
 }
 
 func (r *ProfileRuntime) SetRuleDefaults(defaults RuleDefaults) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.config.RuleDefaults = &defaults
+	config := r.config
+	config.RuleDefaults = &defaults
+	r.updateLocalFailureConfigLocked(&config)
+	r.config = config
 }

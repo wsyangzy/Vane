@@ -58,8 +58,10 @@ export function useWailsLogs(options = {}) {
   const isMountedRef = useRef(true);
   // 防止并发调用 startStreaming
   const isStartingRef = useRef(false);
-  // 唯一实例 ID，用于防止 StrictMode 下的重复订阅
-  const instanceIdRef = useRef(Date.now().toString(36) + Math.random().toString(36).slice(2));
+  // 每次挂载或停止都递增，旧的异步启动与订阅不能恢复当前监听。
+  const instanceIdRef = useRef(0);
+  // 后端启停按顺序执行，快速停止后重开时不能由旧操作覆盖新状态。
+  const streamOperationRef = useRef(null);
   // 用户手动暂停标志，防止页面可见性控制自动恢复
   const userPausedRef = useRef(false);
 
@@ -70,24 +72,22 @@ export function useWailsLogs(options = {}) {
   }, [levelFilter]);
 
   // 加载历史日志
-  const loadRecentLogs = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const recentLogs = await getRecentLogs(maxLogs);
+  const loadRecentLogs = useCallback(() => {
+    return getRecentLogs(maxLogs).then((recentLogs) => {
       if (isMountedRef.current) {
         setLogs(filterLogs((recentLogs || []).map(normalizeLogEntry)));
+        setError(null);
       }
-    } catch (err) {
+    }).catch((err) => {
       console.error('❌ 加载历史日志失败:', err);
       if (isMountedRef.current) {
         setError(err.message || '加载失败');
       }
-    } finally {
+    }).finally(() => {
       if (isMountedRef.current) {
         setLoading(false);
       }
-    }
+    });
   }, [maxLogs, filterLogs]);
 
   // 启动日志流
@@ -99,22 +99,23 @@ export function useWailsLogs(options = {}) {
       return;
     }
     isStartingRef.current = true;
+    const currentInstanceId = ++instanceIdRef.current;
     // 用户主动启动时清除暂停标志
     if (userInitiated) {
       userPausedRef.current = false;
       writeUserPaused(false);
     }
 
-    try {
-      // 检查是否已经在流式传输
+    streamOperationRef.current = (streamOperationRef.current || Promise.resolve()).then(async () => {
+      if (!isMountedRef.current || instanceIdRef.current !== currentInstanceId) return;
       const status = await getLogStreamStatus();
+      if (!isMountedRef.current || instanceIdRef.current !== currentInstanceId) return;
       if (!status) {
         await startLogStream();
       }
 
-      // 组件已卸载，不继续订阅
-      if (!isMountedRef.current) {
-        isStartingRef.current = false;
+      // StrictMode 重挂载、停止或卸载已经使本次启动失效。
+      if (!isMountedRef.current || instanceIdRef.current !== currentInstanceId) {
         return;
       }
 
@@ -124,7 +125,6 @@ export function useWailsLogs(options = {}) {
       unsubscribeRef.current = null;
 
       // 订阅日志事件（批量）
-      const currentInstanceId = instanceIdRef.current;
       const unsubscribe = EventsOn('log:batch', (batchLogs) => {
         // 检查是否仍是当前实例且组件未卸载
         if (!isMountedRef.current || instanceIdRef.current !== currentInstanceId) {
@@ -141,16 +141,18 @@ export function useWailsLogs(options = {}) {
       unsubscribeRef.current = unsubscribe;
 
       if (isMountedRef.current) {
+        setError(null);
         setIsStreaming(true);
       }
-    } catch (err) {
+    }).catch((err) => {
       console.error('❌ 启动日志流失败:', err);
-      if (isMountedRef.current) {
+      if (isMountedRef.current && instanceIdRef.current === currentInstanceId) {
         setError(err.message || '启动失败');
       }
-    } finally {
-      isStartingRef.current = false;
-    }
+    }).finally(() => {
+      if (instanceIdRef.current === currentInstanceId) isStartingRef.current = false;
+    });
+    return streamOperationRef.current;
   }, [maxLogs, filterLogs]);
 
   // 停止日志流
@@ -162,26 +164,30 @@ export function useWailsLogs(options = {}) {
       writeUserPaused(true);
     }
 
-    try {
-      // 更新实例 ID，使旧的回调失效
-      instanceIdRef.current = Date.now().toString(36) + Math.random().toString(36).slice(2);
+    // 使旧的异步启动与回调失效，并允许下一次主动启动。
+    const currentInstanceId = ++instanceIdRef.current;
+    isStartingRef.current = false;
 
-      // 用 EventsOff 显式取消所有 log:batch 订阅
-      EventsOff('log:batch');
-      unsubscribeRef.current = null;
+    // 用 EventsOff 显式取消所有 log:batch 订阅
+    EventsOff('log:batch');
+    unsubscribeRef.current = null;
 
-      // 再停止后端流（检查是否正在运行）
+    // 再停止后端流（检查是否正在运行）
+    streamOperationRef.current = (streamOperationRef.current || Promise.resolve()).then(async () => {
+      if (instanceIdRef.current !== currentInstanceId) return;
       const isRunning = await getLogStreamStatus();
+      if (instanceIdRef.current !== currentInstanceId) return;
       if (isRunning) {
         await stopLogStream();
       }
 
-      if (isMountedRef.current) {
+      if (isMountedRef.current && instanceIdRef.current === currentInstanceId) {
         setIsStreaming(false);
       }
-    } catch (err) {
+    }).catch((err) => {
       console.error('❌ 停止日志流失败:', err);
-    }
+    });
+    return streamOperationRef.current;
   }, []);
 
   // 清空日志
@@ -191,6 +197,8 @@ export function useWailsLogs(options = {}) {
 
   // 刷新日志
   const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     await loadRecentLogs();
   }, [loadRecentLogs]);
 
@@ -199,8 +207,7 @@ export function useWailsLogs(options = {}) {
     isMountedRef.current = true;
     // 重置启动锁
     isStartingRef.current = false;
-    // 生成新的实例 ID
-    instanceIdRef.current = Date.now().toString(36) + Math.random().toString(36).slice(2);
+    instanceIdRef.current += 1;
     userPausedRef.current = readUserPaused();
 
     // 1. 加载历史日志

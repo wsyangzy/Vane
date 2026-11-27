@@ -21,9 +21,8 @@ func defaultResponseRecoveryConfig() routing.ResponseRecoveryConfig {
 	}}}
 }
 
-// These Go configuration methods are intentionally not registered as Wails
-// services or HTTP routes. Future settings/UI adapters can reuse the validated
-// configuration contract and supply persistence at the application boundary.
+// The rule configuration remains internal; the opt-in history fallback is
+// supplied by the existing application settings boundary.
 func (h *Handler) GetResponseRecoveryConfig() routing.ResponseRecoveryConfig {
 	h.configMu.RLock()
 	defer h.configMu.RUnlock()
@@ -61,28 +60,62 @@ func (h *HTTPHandler) UpdateResponseRecoveryConfig(cfg routing.ResponseRecoveryC
 type responseRecoveryConfigKey struct{}
 type responseRecoveryStateKey struct{}
 
+type responseRecoverySnapshot struct {
+	cfg             routing.ResponseRecoveryConfig
+	historyFallback bool
+}
+
+func (h *Handler) SetEncryptedHistoryRecovery(enabled bool) {
+	h.configMu.Lock()
+	h.encryptedHistoryRecovery = enabled
+	h.configMu.Unlock()
+}
+
+func (h *HTTPHandler) SetEncryptedHistoryRecovery(enabled bool) {
+	if h.handler != nil {
+		h.handler.SetEncryptedHistoryRecovery(enabled)
+	}
+}
+
+func (h *Handler) responseRecoverySnapshot() responseRecoverySnapshot {
+	h.configMu.RLock()
+	defer h.configMu.RUnlock()
+	cfg := defaultResponseRecoveryConfig()
+	if h.responseRecoveryCfg != nil {
+		cfg = h.responseRecoveryCfg.Clone()
+	}
+	return responseRecoverySnapshot{cfg: cfg, historyFallback: h.encryptedHistoryRecovery}
+}
+
 func (h *Handler) withResponseRecoveryConfig(r *http.Request) *http.Request {
-	return r.WithContext(context.WithValue(r.Context(), responseRecoveryConfigKey{}, h.GetResponseRecoveryConfig()))
+	return r.WithContext(context.WithValue(r.Context(), responseRecoveryConfigKey{}, h.responseRecoverySnapshot()))
 }
 
 func (h *Handler) newResponseRecoveryState(r *http.Request, requestID string) *responseRecoveryState {
-	cfg, ok := r.Context().Value(responseRecoveryConfigKey{}).(routing.ResponseRecoveryConfig)
+	snapshot, ok := r.Context().Value(responseRecoveryConfigKey{}).(responseRecoverySnapshot)
 	if !ok {
-		cfg = h.GetResponseRecoveryConfig()
+		snapshot = h.responseRecoverySnapshot()
 	}
-	return &responseRecoveryState{requestID: requestID, cfg: cfg, attempts: 1}
+	return &responseRecoveryState{requestID: requestID, cfg: snapshot.cfg, historyFallback: snapshot.historyFallback, attempts: 1, completedHistory: h.completedHistory}
 }
 
 // Recovery stays inside the selected destination's admission. The caller
 // records every send and ends the request when the selected rule is exhausted.
 type responseRecoveryState struct {
-	requestID   string
-	cfg         routing.ResponseRecoveryConfig
-	rule        routing.ResponseRecoveryRule
-	attempts    int
-	retries     int
-	onRejected  func(*http.Response, []byte)
-	beforeRetry func(context.Context) error
+	requestID              string
+	cfg                    routing.ResponseRecoveryConfig
+	rule                   routing.ResponseRecoveryRule
+	attempts               int
+	retries                int
+	historyFallback        bool
+	removedReasoningItems  int
+	restoredReasoningItems int
+	completedHistory       *completedReasoningCache
+	historyScope           string
+	historySession         string
+	completedTried         bool
+	onRejected             func(*http.Response, []byte)
+	beforeRetry            func(context.Context) error
 }
 
 func (r *responseRecoveryState) retried() bool { return r.retries > 0 }
@@ -97,8 +130,8 @@ func responseRecoveryStateFromContext(ctx context.Context) *responseRecoveryStat
 }
 
 // doWithResponseRecovery runs before any response observers or downstream
-// output. Replaying the prepared request keeps the URL, credentials, headers,
-// model and encrypted items identical, including for managed subscriptions.
+// output. After unchanged retries, restore a proven completed ciphertext before
+// considering the opt-in lossy fallback. URL, credentials and model stay pinned.
 func (f *Forwarder) doWithResponseRecovery(client *http.Client, req, source *http.Request) (*http.Response, error) {
 	recovery := responseRecoveryStateFromContext(req.Context())
 	if recovery == nil || !recovery.cfg.Enabled || recovery.beforeRetry == nil || req.GetBody == nil || req.Body == nil || req.Body == http.NoBody {
@@ -109,7 +142,7 @@ func (f *Forwarder) doWithResponseRecovery(client *http.Client, req, source *htt
 	template, getBody := req.Clone(req.Context()), req.GetBody
 	resp, err := client.Do(req)
 	for err == nil {
-		if recovery.rule.ID != "" && recovery.retries >= recovery.rule.MaxRetries {
+		if recovery.removedReasoningItems > 0 {
 			break
 		}
 		match, raw, readable := inspectRecoveryResponse(resp, metadata, recovery.cfg)
@@ -128,6 +161,31 @@ func (f *Forwarder) doWithResponseRecovery(client *http.Client, req, source *htt
 		}
 		switch recovery.rule.Action {
 		case routing.ResponseRecoveryRetrySameTarget:
+			var recoveredBody []byte
+			removed, restored := 0, 0
+			if recovery.retries >= recovery.rule.MaxRetries {
+				if match.StatusCode != http.StatusBadRequest || match.ErrorCode != "invalid_encrypted_content" || metadata.Path != "/responses" || template.Header.Get("Content-Encoding") != "" {
+					return resp, nil
+				}
+				original, bodyErr := getBody()
+				if bodyErr != nil {
+					return resp, nil
+				}
+				body, bodyErr := io.ReadAll(original)
+				original.Close()
+				if bodyErr != nil {
+					return resp, nil
+				}
+				if !recovery.completedTried {
+					recoveredBody, restored = recovery.completedHistory.restore(recovery.historyScope, body, recovery.historySession)
+				}
+				if restored == 0 && recovery.historyFallback {
+					recoveredBody, removed = withoutEncryptedReasoning(body)
+				}
+				if removed == 0 && restored == 0 {
+					return resp, nil
+				}
+			}
 			if resp.Request == nil {
 				resp.Request = req
 			}
@@ -136,7 +194,8 @@ func (f *Forwarder) doWithResponseRecovery(client *http.Client, req, source *htt
 			}
 			f.logger.Info("[Codex 响应恢复等待]", "request_id", recovery.requestID,
 				"policy_id", recovery.rule.ID, "delay_ms", recovery.rule.DelayMS,
-				"retry", recovery.retries+1, "max_retries", recovery.rule.MaxRetries)
+				"retry", recovery.retries+1, "max_unchanged_retries", recovery.rule.MaxRetries,
+				"history_fallback", removed > 0, "completed_state_restore", restored > 0)
 			if waitErr := routing.BudgetFromContext(req.Context()).Wait(req.Context(), recovery.rule.Delay()); waitErr != nil {
 				return resp, nil
 			}
@@ -148,12 +207,27 @@ func (f *Forwarder) doWithResponseRecovery(client *http.Client, req, source *htt
 			// The policy owns the retry count; transport auto-replay must not
 			// send additional requests outside that count or the shared budget.
 			replay.GetBody = nil
+			if removed > 0 || restored > 0 {
+				replay.Body.Close()
+				replay.Body = io.NopCloser(bytes.NewReader(recoveredBody))
+				replay.ContentLength = int64(len(recoveredBody))
+				replay.Header.Del("Content-Length")
+			}
+			recovery.removedReasoningItems, recovery.restoredReasoningItems = removed, restored
 			if err := recovery.beforeRetry(replay.Context()); err != nil {
+				recovery.removedReasoningItems, recovery.restoredReasoningItems = 0, 0
 				replay.Body.Close()
 				return resp, nil
 			}
 			recovery.retries++
 			recovery.attempts++
+			if restored > 0 {
+				recovery.completedTried = true
+				f.logger.Info("[Codex 完整推理状态恢复]", "request_id", recovery.requestID, "restored_reasoning_items", restored)
+			}
+			if removed > 0 {
+				f.logger.Warn("[Codex 会话降级恢复]", "request_id", recovery.requestID, "removed_reasoning_items", removed)
+			}
 			resp.Body.Close()
 			req = replay
 			resp, err = client.Do(replay)

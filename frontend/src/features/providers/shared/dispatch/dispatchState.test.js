@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { credentialGroupRoutingImpact, profileSwitchBlockReason, ruleDraftIssue, ruleTargetLabels } from './dispatchState.js';
-import { addProfileChannel, candidateHealthPresentation, classifierInputNotice, dispatchReason, editableProfile, mappingTargetAllowed, moveProfileChannel, newRoutingProfile as createRoutingProfile, quotaPresentation, selectProfileChannels, setIntentRoutingEnabled, stateCompatibilityLabel, summarizeIntentTraces, updateProfileMembers, validateProfileDraft } from './dispatchState.js';
+import { addProfileChannel, candidateHealthPresentation, dispatchReason, editableProfile, mappingTargetAllowed, moveProfileChannel, newRoutingProfile as createRoutingProfile, quotaPresentation, selectProfileChannels, stateCompatibilityLabel, updateProfileMembers, validateProfileDraft } from './dispatchState.js';
 
 const newRoutingProfile = (provider, isDefault) => createRoutingProfile(provider, isDefault, { maxAttempts: 10, maxDurationMs: 60000, waitForRecovery: true });
 
@@ -45,7 +45,7 @@ test('collapsed rule targets identify channels, scoped groups, profiles and mode
 
 test('new rules require usable conditions and every target before another rule is added', () => {
   for (const provider of ['claude', 'codex']) {
-    const profile = { ...newRoutingProfile(provider), members: [{ channelId: 1, groupId: 11, enabled: true }], intents: [{ id: 'coding' }] };
+    const profile = { ...newRoutingProfile(provider), members: [{ channelId: 1, groupId: 11, enabled: true }] };
     const rule = { kind: 'model', matchModel: '  ', targets: [] };
     assert.match(ruleDraftIssue(profile, rule), /请求模型/);
     rule.matchModel = 'gpt-*';
@@ -60,8 +60,6 @@ test('new rules require usable conditions and every target before another rule i
     assert.equal(ruleDraftIssue(profile, rule), '');
     assert.match(ruleDraftIssue(profile, { kind: 'non_stream', targets: [] }), /至少一个/);
     assert.equal(ruleDraftIssue(profile, { kind: 'non_stream', targets: [{ profileId: 2 }] }), '');
-    assert.match(ruleDraftIssue(profile, { kind: 'intent', intentId: '', targets: [{ channelId: 1 }] }), /匹配意图/);
-    assert.equal(ruleDraftIssue(profile, { kind: 'intent', intentId: 'coding', targets: [{ channelId: 1 }] }), '');
     const mapping = { kind: 'mapping', matchModel: 'client-model', targets: [{ channelId: 1, groupId: 11, upstreamModel: ' ' }] };
     assert.match(ruleDraftIssue(profile, mapping), /实际模型/);
     mapping.targets[0].upstreamModel = 'actual-model';
@@ -108,6 +106,9 @@ test('health presentation distinguishes disabled resources, credential repair an
   assert.equal(cooling.label, '冷却中'); assert.equal(cooling.until, '2026-10-23T10:00:00Z');
   assert.equal(candidateHealthPresentation({ enabled: true, health: {} }).label, '正常');
   assert.match(dispatchReason('state_origin_unknown'), /新建会话/);
+  assert.equal(dispatchReason('balance_exhausted'), '上游账号余额已耗尽');
+  assert.equal(dispatchReason('rate_limited'), '上游限流');
+  assert.equal(dispatchReason('permission_denied'), '上游拒绝访问权限');
 });
 
 test('profile membership ignores legacy switches and preserves its own selections when reordered', () => {
@@ -139,16 +140,16 @@ test('confirmed channel selection removes unchecked channels and preserves retai
   assert.deepEqual(selectProfileChannels(profile, [], []).members, []);
 });
 
-test('editable intent and target keys remain independent of editable identity', () => {
+test('editable rule and target keys remain independent of editable identity', () => {
   const value = newRoutingProfile('claude');
-  value.intents = [{ id: 'coding', targets: [{ channelId: 1 }] }];
+  value.rules = [{ id: 1, name: 'coding', targets: [{ channelId: 1 }] }];
   let key = 0;
   const draft = editableProfile(value, () => `row-${++key}`);
-  draft.intents[0].id = 'analysis';
-  draft.intents[0].targets[0].channelId = 2;
-  assert.equal(draft.intents[0].rowKey, 'row-1');
-  assert.equal(draft.intents[0].targets[0].rowKey, 'row-2');
-  assert.equal(value.intents[0].id, 'coding');
+  draft.rules[0].name = 'analysis';
+  draft.rules[0].targets[0].channelId = 2;
+  assert.equal(draft.rules[0].rowKey, 'row-1');
+  assert.equal(draft.rules[0].targets[0].rowKey, 'row-2');
+  assert.equal(value.rules[0].name, 'coding');
 });
 
 test('group selection preserves model, weight and other channels while adding new groups in channel order', () => {
@@ -169,12 +170,10 @@ test('group selection preserves model, weight and other channels while adding ne
   assert.equal(profile.members[0].enabled, true);
 });
 
-test('draft validation rejects broken intent fallback and invalid budgets', () => {
+test('draft validation rejects invalid budgets', () => {
   const profile = newRoutingProfile('codex'); profile.name = '默认';
   assert.equal(validateProfileDraft(profile), '');
-  profile.intents = [{ id: 'coding', fallbackIntent: 'missing' }];
-  assert.match(validateProfileDraft(profile), /回退意图/);
-  profile.intents = []; profile.maxDurationMs = 'NaN';
+  profile.maxDurationMs = 'NaN';
   assert.match(validateProfileDraft(profile), /预算/);
 });
 
@@ -184,22 +183,6 @@ test('quota presentation preserves unknown and historical quota without claiming
   const stale = quotaPresentation({ confidence: 'exact', usedPercent: 0, expiresAt: new Date(now - 1000).toISOString() }, now);
   assert.equal(stale.known, false); assert.equal(stale.label, '0.0%（历史）');
   assert.equal(quotaPresentation({ confidence: 'exact', usedPercent: 0, expiresAt: new Date(now + 1000).toISOString() }, now).known, true);
-});
-
-test('intent master switch preserves definitions, rules and classifier settings without mutating saved state', () => {
-  const profile = { ...newRoutingProfile('codex'), intents: [{ id: 'coding', targets: [{ channelId: 1 }] }], rules: [{ kind: 'intent', intentId: 'coding' }], classifier: { enabled: true, provider: 'claude', channelId: 7, groupId: 8, model: 'router', confidence: .8 } };
-  const before = structuredClone(profile);
-  const off = setIntentRoutingEnabled(profile, false);
-  assert.equal(off.classifier.enabled, false);
-  assert.deepEqual(off.intents, profile.intents);
-  assert.deepEqual(off.rules, profile.rules);
-  const on = setIntentRoutingEnabled(off, true);
-  assert.equal(on.classifier.model, 'router');
-  assert.equal(on.classifier.provider, 'claude');
-  assert.equal(on.classifier.confidence, .8);
-  assert.equal(on.classifier.channelId, 7);
-  assert.deepEqual(profile, before);
-  assert.equal(setIntentRoutingEnabled(newRoutingProfile('claude'), true).classifier.timeoutMs, 8000);
 });
 
 test('model mapping is limited to selected groups and requires an explicit actual model', () => {
@@ -241,65 +224,30 @@ test('channel-wide model mapping follows participating groups for both providers
   }
 });
 
-test('classification input notices count Unicode code points and show truncation limits', () => {
-  assert.equal(classifierInputNotice('text', '😀'.repeat(4000)), '4000 / 4000 字符');
-  assert.match(classifierInputNotice('previousUserMessage', 'a'.repeat(1001)), /1001 \/ 1000.*标记截断/);
+test('state compatibility labels distinguish known and unknown states', () => {
   assert.equal(stateCompatibilityLabel('incompatible'), '状态不兼容');
   assert.equal(stateCompatibilityLabel(undefined), '状态兼容性未知');
 });
 
-test('recent intent statistics exclude cached reuse and skips while charging failed classifications once', () => {
-  const row = (intent, extra = {}) => ({ provider: 'codex', profileId: 1, intent, ...extra });
-  const success = { model: 'gpt-mini', intentId: 'coding', reason: '', inputTokens: 30, outputTokens: 10, cost: 0.002 };
-  const stats = summarizeIntentTraces([
-    row(success),
-    row({ ...success, cached: true, cost: 5 }),
-    row({ ...success, reason: 'classifier_upstream_error', fallback: 'previous', cost: 0.001 }),
-    row({ model: 'gpt-mini', reason: 'classifier_invalid_output', fallback: 'default', inputTokens: 20, outputTokens: 5, cost: 0.0005 }),
-    row({ model: 'gpt-mini', reason: 'classifier_cooling_down', fallback: 'default' }),
-    row({ model: 'gpt-mini', reason: 'classifier_no_new_turn', fallback: 'default' }),
-    row({ model: 'gpt-mini', reason: 'classifier_privacy_rejected', fallback: 'default' }),
-    row({ intentId: 'coding', cached: true, reason: 'turn_reused' }),
-    row({}),
-    row(success, { profileId: 2 }),
-    row(success, { provider: 'claude' })
-  ], 'codex', 1);
-  assert.equal(stats.sampled, 10); assert.equal(stats.matching, 9);
-  assert.equal(stats.calls, 3); assert.equal(stats.hits, 1); assert.equal(stats.failures, 2);
-  assert.deepEqual(stats.intents, { coding: 1 });
-  assert.equal(stats.cost, 0.0035); assert.equal(stats.inputTokens, 80); assert.equal(stats.outputTokens, 25);
-});
-
-test('intent statistics use at most the latest 100 dispatches rather than a lifetime total', () => {
-  const skipped = { provider: 'codex', profileId: 1, intent: { reason: 'classifier_disabled' } };
-  const old = { provider: 'codex', profileId: 1, intent: { model: 'gpt-mini', intentId: 'coding', cost: 1 } };
-  const stats = summarizeIntentTraces([...Array.from({ length: 100 }, () => skipped), old], 'codex', 1);
-  assert.equal(stats.sampled, 100); assert.equal(stats.calls, 0); assert.equal(stats.cost, 0);
-  const stringID = summarizeIntentTraces([{ ...old, intent: { ...old.intent, intentId: '__proto__' } }], 'codex', 1);
-  assert.equal(stringID.intents.__proto__, 1);
-});
-test('credential deletion impact includes members, rules, wildcard channels and cross-provider classifiers', () => {
-  const profile = (id, name, patch = {}) => ({ id, name, members: [], rules: [], intents: [], classifier: null, ...patch });
+test('credential deletion impact includes members, rules, wildcard channels and provider isolation', () => {
+  const profile = (id, name, patch = {}) => ({ id, name, members: [], rules: [], ...patch });
   const workspaces = [
     { provider: 'claude', accounts: [{ groupId: 44, channelId: 7 }], profiles: [
       profile(1, 'member', { members: [{ profileId: 1, groupId: 44, channelId: 7, enabled: true }] }),
       profile(2, 'disabled reference', { members: [{ profileId: 2, groupId: 44, channelId: 7, enabled: false }] }),
       profile(3, 'model rule', { rules: [{ targets: [{ groupId: 44, channelId: 7 }] }] }),
-      profile(4, 'intent rule', { intents: [{ targets: [{ groupId: 44, channelId: 7 }] }] }),
       profile(5, 'wildcard', { members: [{ profileId: 5, groupId: 0, channelId: 7, enabled: true }] }),
       profile(6, 'other channel', { members: [{ groupId: 0, channelId: 8, enabled: true }] }),
       profile(7, 'profile expansion', { rules: [{ targets: [{ profileId: 2, groupId: 44 }] }] }),
     ] },
     { provider: 'codex', accounts: [{ groupId: 44, channelId: 7 }], profiles: [
       profile(8, 'same ID in other provider', { members: [{ groupId: 44, channelId: 7, enabled: true }] }),
-      profile(9, 'cross-provider classifier', { classifier: { provider: 'claude', groupId: 44, enabled: true } }),
     ] },
   ];
   const impact = credentialGroupRoutingImpact(workspaces, 'claude', 44);
-  assert.deepEqual(impact.map((item) => item.id), [1, 3, 4, 5, 9]);
+  assert.deepEqual(impact.map((item) => item.id), [1, 3, 5]);
   assert.equal(impact[0].losesLastMember, true);
   assert.equal(impact[1].losesLastMember, false);
-  assert.equal(impact.at(-1).classifierReference, true);
   assert.deepEqual(credentialGroupRoutingImpact(workspaces, 'codex', 44).map((item) => item.id), [8]);
   assert.deepEqual(credentialGroupRoutingImpact(workspaces, 'claude', 0), []);
 });

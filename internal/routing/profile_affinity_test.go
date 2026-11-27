@@ -27,7 +27,7 @@ func TestSessionAffinityRestoresOnlyResourcePreferenceAndChecksBinding(t *testin
 		t.Fatalf("sessions=%+v", entries)
 	}
 	raw, _ := json.Marshal(entries)
-	for _, secret := range []string{"PRIVATE", "conversation", "intent_id", "decision", "current_user_message"} {
+	for _, secret := range []string{"PRIVATE", "conversation", "decision", "current_user_message"} {
 		if strings.Contains(string(raw), secret) {
 			t.Fatalf("session persistence leaked %s", secret)
 		}
@@ -35,7 +35,7 @@ func TestSessionAffinityRestoresOnlyResourcePreferenceAndChecksBinding(t *testin
 	restarted := NewProfileRuntime(config)
 	restarted.SeedSessionAffinity(entries)
 	next := restarted.Plan(context.Background(), 0, "test", true, runtimeTestTurn("two"), false)
-	if next.EligibleCandidates[0].Identity() != selected.Identity() || next.Decision.ReusedTurn || next.Intent.Cached {
+	if next.EligibleCandidates[0].Identity() != selected.Identity() || next.Decision.ReusedTurn {
 		t.Fatalf("restart did not restore resource-only preference: %+v", next)
 	}
 	changed := config

@@ -213,6 +213,16 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 	if err := subscription.AuthorizeOutbound(r, req, endpoint.AuthMode, endpoint.CredentialGroupID); err != nil {
 		return nil, err
 	}
+	if recovery := responseRecoveryStateFromContext(req.Context()); recovery != nil {
+		recovery.historyScope = completedReasoningScope(req, r, endpoint, body)
+		if recovery.historyScope != "" {
+			recovery.historyScope = reasoningHash(recovery.completedHistory.scopeNamespace(), recovery.historyScope)
+			turn := routing.ResolveTurn(r.Context(), r.Header, body, "codex")
+			if turn.BranchID == "" {
+				recovery.historySession = turn.ConversationID
+			}
+		}
+	}
 
 	// 执行转发
 	client, err := f.clientForEndpoint(endpoint)

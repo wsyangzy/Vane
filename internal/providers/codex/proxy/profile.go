@@ -196,7 +196,7 @@ func (b *codexProfileStream) Read(data []byte) (int, error) {
 		if ch == '\n' {
 			b.frame(bytes.TrimSpace(b.line))
 			b.line = b.line[:0]
-		} else if len(b.line) < 256*1024 {
+		} else if len(b.line) < maxCodexStreamEventBytes {
 			b.line = append(b.line, ch)
 		} else {
 			b.failed = true
@@ -318,8 +318,13 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 		if h.trySearchFallback(w, r, body, requestID, start, chain) {
 			return
 		}
-		h.recordFailure(requestID, start, plan.Error, plan.Error, nil, plan.Model)
-		h.writeError(w, http.StatusServiceUnavailable, plan.Error)
+		rejection := plan.RejectLocal(plan.Error)
+		h.recordFailure(requestID, start, plan.Error, plan.FailureDetail(), nil, plan.Model)
+		if rejection != nil {
+			rejection.Write(w)
+		} else {
+			h.writeError(w, http.StatusBadRequest, plan.Error)
+		}
 		return
 	}
 	var lastResponse *http.Response
@@ -420,7 +425,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			}
 			recordSend := func() {
 				sent = true
-				chain = append(chain, chainNode{Hop: len(chain) + 1, Channel: channel.Name, CredentialGroup: ep.CredentialGroupName, Endpoint: ep.Name, Attempts: 1, StartMs: time.Since(start).Milliseconds()})
+				chain = append(chain, chainNode{Hop: len(chain) + 1, Channel: channel.Name, CredentialGroup: ep.CredentialGroupName, Endpoint: ep.Name, Attempts: 1, StartMs: time.Since(start).Milliseconds(), RemovedReasoningItems: recovery.removedReasoningItems, RestoredReasoningItems: recovery.restoredReasoningItems})
 				h.recordForwarding(requestID, ep.Name, channel.Name, candidate.Identity().Model, chain)
 				publishProgress()
 			}
@@ -487,13 +492,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 					h.observeProfileResponse(sendRequest.Context(), candidate, resp.StatusCode, resp.Header, diagnosticBody)
 				}
 				failure := codexRequestFailure(sendRequest, resp.StatusCode, diagnosticBody, nil)
-				code, kind, _ := routing.ErrorIdentity(diagnosticBody)
-				for _, identifier := range []string{code, kind} {
-					switch identifier {
-					case "usage_limit_reached", "usage_limit_exceeded", "quota_exceeded", "insufficient_quota", "model_usage_limit_reached":
-						quotaFailure = true
-					}
-				}
+				quotaFailure = codexProfileQuotaFailure(sendRequest.Context(), resp.StatusCode, resp.Header, diagnosticBody, candidate.Identity().Model)
 				failure = finish(0, false, failure, routing.RetryAfter(resp.Header, time.Now()))
 				lastUpstreamError = subscription.Redact(sendRequest.Context(), chainBodyText(diagnosticBody, failure.Reason))
 				annotateLastChainError(&chain, resp.StatusCode, lastUpstreamError, resp.Header, false)
@@ -543,10 +542,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 						} else if streamErr.Type == "response_incomplete" {
 							failure = routing.Failure{Scope: routing.ScopeCandidate, Reason: "incomplete_response"}
 						}
-						switch streamErr.Code {
-						case "usage_limit_reached", "usage_limit_exceeded", "quota_exceeded", "insufficient_quota", "model_usage_limit_reached":
-							quotaFailure = true
-						}
+						quotaFailure = codexProfileQuotaFailure(sendRequest.Context(), resp.StatusCode, resp.Header, observed.errorFrame, candidate.Identity().Model)
 					}
 					attempt.SetUsage(codexAttemptUsage(observed.usage, success, extractServiceTier(body)))
 					failure = finish(tokens, success, failure, routing.RetryAfter(resp.Header, time.Now()))
@@ -601,6 +597,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			attempt.SetCachedTokens(cached)
 			if !success {
 				failure := codexRequestFailure(sendRequest, resp.StatusCode, raw, readErr)
+				quotaFailure = codexProfileQuotaFailure(sendRequest.Context(), resp.StatusCode, resp.Header, raw, candidate.Identity().Model)
 				failure = finish(tokens, false, failure, routing.RetryAfter(resp.Header, time.Now()))
 				if resp.StatusCode >= 400 {
 					lastUpstreamError = subscription.Redact(sendRequest.Context(), chainBodyText(raw, failure.Reason))
@@ -716,6 +713,11 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 	detail := lastUpstreamError
 	if detail == "" {
 		detail = lastFailure
+	}
+	if rejection := plan.RejectLocal(lastFailure); rejection != nil {
+		h.recordFailure(requestID, start, lastFailure, detail, nil, plan.Model)
+		rejection.Write(w)
+		return
 	}
 	h.recordFailure(requestID, start, lastFailure, detail, nil, plan.Model)
 	h.writeError(w, status, lastFailure)

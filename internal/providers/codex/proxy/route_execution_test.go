@@ -245,18 +245,28 @@ func TestRoutedCodexLongAcceptedResponseOutlivesRetryBudget(t *testing.T) {
 }
 
 func TestRoutedCodexFinalExecutionSnapshotPersistsBeforeArchive(t *testing.T) {
-	for _, exhausted := range []bool{false, true} {
-		t.Run(fmt.Sprint(exhausted), func(t *testing.T) {
+	for _, outcome := range []struct {
+		name         string
+		errorCode    string
+		wantAttempts int
+		wantStop     string
+		wantWait     bool
+	}{
+		{name: "success", wantAttempts: 2},
+		{name: "deadline", errorCode: "temporary", wantAttempts: 1, wantStop: routing.StopRetryDeadlineExceeded, wantWait: true},
+		{name: "attempts", errorCode: "rate_limit", wantAttempts: 2, wantStop: routing.StopRetryAttemptsExhausted},
+	} {
+		t.Run(outcome.name, func(t *testing.T) {
 			tracker, err := tracking.NewUsageTracker(&tracking.Config{Enabled: true, DatabasePath: ":memory:", BufferSize: 10, BatchSize: 10, FlushInterval: time.Hour, MaxRetry: 1, CleanupInterval: time.Hour})
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = tracker.Close() })
 			h := newRoutedCodexExecutionFixture(t, func(w http.ResponseWriter, r *http.Request) {
-				if exhausted {
+				if outcome.errorCode != "" {
 					w.Header().Set("Retry-After", "3600")
 					w.WriteHeader(429)
-					_, _ = io.WriteString(w, `{"error":{"code":"rate_limit"}}`)
+					_, _ = fmt.Fprintf(w, `{"error":{"code":%q}}`, outcome.errorCode)
 					return
 				}
 				var body map[string]any
@@ -285,12 +295,8 @@ func TestRoutedCodexFinalExecutionSnapshotPersistsBeforeArchive(t *testing.T) {
 			if snapshot.Execution == nil || len(snapshot.Execution.Events) < 2 {
 				t.Fatalf("missing trace: %+v", snapshot)
 			}
-			if exhausted {
-				if snapshot.Attempts != 1 || snapshot.StopReason != routing.StopRetryDeadlineExceeded || snapshot.WaitMs == 0 || snapshot.MaxAttempts != 2 || snapshot.MaxDurationMS != 100 {
-					t.Fatalf("lost final budget stats: %+v", snapshot)
-				}
-			} else if snapshot.Attempts != 2 || snapshot.StopReason != "" {
-				t.Fatalf("success at limit mislabeled: %+v", snapshot)
+			if snapshot.Attempts != outcome.wantAttempts || snapshot.StopReason != outcome.wantStop || (snapshot.WaitMs > 0) != outcome.wantWait || snapshot.MaxAttempts != 2 || snapshot.MaxDurationMS != 100 {
+				t.Fatalf("lost final budget stats: %+v", snapshot)
 			}
 		})
 	}

@@ -68,8 +68,17 @@ const RequestsPage = ({ initialProvider = '' }) => {
     allColumns: columnConfigs
   } = useColumnConfig();
 
+  // 分页状态在使用它的筛选回调之前声明。
+  const [pagination, setPagination] = useState({
+    page: 1,
+    pageSize: PAGINATION_CONFIG.DEFAULT_PAGE_SIZE,
+    total: 0,
+    totalPages: 1
+  });
+
   // 时间范围 Hook
   const { activeRange, selectRange, clearRange } = useTimeRange((timeRange) => {
+    setLoading(true);
     updateFilters(timeRange);
     setPagination(prev => ({ ...prev, page: 1 }));
   });
@@ -80,14 +89,6 @@ const RequestsPage = ({ initialProvider = '' }) => {
       key !== 'startDate' && key !== 'endDate' && (Array.isArray(value) ? filters[key]?.length > 0 : filters[key] !== value)
     ))
   );
-
-  // 分页状态
-  const [pagination, setPagination] = useState({
-    page: 1,
-    pageSize: PAGINATION_CONFIG.DEFAULT_PAGE_SIZE,
-    total: 0,
-    totalPages: 1
-  });
 
   const filterResources = useMemo(
     () => buildRequestFilterResources(claudeChannels, codexChannels),
@@ -109,37 +110,30 @@ const RequestsPage = ({ initialProvider = '' }) => {
 
   // ==================== 数据加载 ====================
 
-  const loadData = useCallback(async (silent = false) => {
+  const loadData = useCallback((silent = false) => {
     const isSilent = silent === true;
-    try {
-      // 静默刷新时不改变 loading 状态，避免闪屏
-      if (!isSilent) {
-        setLoading(true);
-      }
+    const queryParams = buildQueryParams();
 
-      const queryParams = buildQueryParams();
+    // 为stats API添加默认时间范围（30天），避免无数据问题
+    const statsParams = {
+      ...queryParams,
+      period: '30d'
+    };
 
-      // 为stats API添加默认时间范围（30天），避免无数据问题
-      const statsParams = {
+    // 渠道资源仅用于请求筛选，默认方案由独立入口管理。
+    return Promise.all([
+      fetchRequests({
         ...queryParams,
-        period: '30d'
-      };
-
-      // 渠道资源仅用于请求筛选，默认方案由独立入口管理。
-      const [requestsData, statsData, claudeStatsData, codexStatsData, modelsData, codexChannelsData, claudeChannelsData] = await Promise.all([
-        fetchRequests({
-          ...queryParams,
-          page: pagination.page,
-          pageSize: pagination.pageSize
-        }),
-        fetchUsageStats(statsParams),
-        fetchUsageStats({ ...statsParams, provider: 'claude' }).catch(() => null),
-        fetchUsageStats({ ...statsParams, provider: 'codex' }).catch(() => null),
-        fetchModels(),
-        getCodexChannels().catch(() => []), // Codex 渠道获取失败不影响主流程
-        isWailsEnvironment() ? getChannels() : fetchGroups().then((data) => data?.groups || [])
-      ]);
-
+        page: pagination.page,
+        pageSize: pagination.pageSize
+      }),
+      fetchUsageStats(statsParams),
+      fetchUsageStats({ ...statsParams, provider: 'claude' }).catch(() => null),
+      fetchUsageStats({ ...statsParams, provider: 'codex' }).catch(() => null),
+      fetchModels(),
+      getCodexChannels().catch(() => []), // Codex 渠道获取失败不影响主流程
+      isWailsEnvironment() ? getChannels() : fetchGroups().then((data) => data?.groups || [])
+    ]).then(([requestsData, statsData, claudeStatsData, codexStatsData, modelsData, codexChannelsData, claudeChannelsData]) => {
       setRequests(requestsData.requests);
       setPagination(prev => ({
         ...prev,
@@ -163,21 +157,26 @@ const RequestsPage = ({ initialProvider = '' }) => {
       setCodexChannels(Array.isArray(codexChannelsData) ? codexChannelsData : []);
 
       setClaudeChannels(Array.isArray(claudeChannelsData) ? claudeChannelsData : []);
-    } catch (err) {
+    }).catch((err) => {
       console.error('加载请求追踪数据失败:', err);
       if (!isSilent) {
         toast.error(getErrorMessage(err, '请求数据加载失败'), '请求数据加载失败');
       }
-    } finally {
+    }).finally(() => {
       // 只有手动刷新才会改变 loading 状态
       if (!isSilent) {
         setLoading(false);
       }
-    }
+    });
   }, [buildQueryParams, pagination.page, pagination.pageSize, toast]);
 
+  const reloadData = useCallback((silent = false) => {
+    if (silent !== true) setLoading(true);
+    return loadData(silent);
+  }, [loadData]);
+
   // 自动刷新 Hook (必须在 loadData 定义之后)
-  const autoRefresh = useAutoRefresh(loadData);
+  const autoRefresh = useAutoRefresh(reloadData);
 
   // ==================== 事件处理 ====================
 
@@ -198,6 +197,7 @@ const RequestsPage = ({ initialProvider = '' }) => {
 
   // 应用筛选
   const handleApplyFilters = (nextFilters) => {
+    setLoading(true);
     if (nextFilters) {
       updateFilters(nextFilters);
       clearRange();
@@ -213,11 +213,15 @@ const RequestsPage = ({ initialProvider = '' }) => {
 
   // 页码变更
   const handlePageChange = (newPage) => {
+    if (newPage === pagination.page) return;
+    setLoading(true);
     setPagination(prev => ({ ...prev, page: newPage }));
   };
 
   // 每页条数变更
   const handlePageSizeChange = (newPageSize) => {
+    if (newPageSize === pagination.pageSize) return;
+    setLoading(true);
     setPagination(prev => ({
       ...prev,
       pageSize: newPageSize,

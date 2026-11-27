@@ -9,6 +9,16 @@ const limit = { provider: 'codex', channel_id: 38, group_id: 5, endpoint_id: '97
   endpoint_name: '主站', model: 'model', reason: 'daily_cost_limit_exceeded', recovery: 'automatic',
   recover_at: '2026-11-18T00:00:00+08:00', daily_used_usd: 5.125, daily_limit_usd: 5, observed_at: '2026-11-17T10:53:31+08:00' };
 
+test('upstream billing and rate limits retain their actual repair action under health blockers', () => {
+  const billing = describeBlockageRecovery({ reason: 'credential_repair_required', cause: 'balance_exhausted', recovery: 'manual' }, at);
+  assert.match(billing.recovery, /需要手动处理/);
+  assert.match(billing.action, /余额并充值/);
+  assert.doesNotMatch(billing.action, /更新.*凭证/);
+  const rate = describeBlockageRecovery({ reason: 'cooldown', cause: 'rate_limited', recovery: 'automatic', recoverAt: limit.recover_at }, at);
+  assert.match(rate.recovery, /可重新尝试/);
+  assert.match(rate.action, /其他可用凭证分组/);
+});
+
 test('daily limit recovery retains exact saved amounts and describes a real reset without claiming upstream health', () => {
   const mapped = mapBlockage(limit);
   assert.equal(mapped.groupId, 5);

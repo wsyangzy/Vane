@@ -43,13 +43,10 @@ func codexRouteFailure(status int, body []byte, err error) routing.Failure {
 	if status == http.StatusUnauthorized {
 		return routing.Failure{Scope: routing.ScopeCredential, Reason: "credential_rejected"}
 	}
-	code, kind, _ := routing.ErrorIdentity(body)
-	if streamErr, ok := err.(*UpstreamStreamError); ok {
-		code, kind = streamErr.Code, streamErr.Type
-	}
-	code = strings.ToLower(code)
-	kind = strings.ToLower(kind)
+	code, kind, message := codexFailureIdentity(body, err)
 	switch code {
+	case "invalid_encrypted_content":
+		return routing.Failure{Scope: routing.ScopeRequest, Reason: code, Terminal: true}
 	case "model_not_found", "model_not_available", "model_not_supported", "unsupported_model", "model_access_denied", "context_length_exceeded", "input_too_long", "streaming_not_supported", "unsupported_stream":
 		return routing.Failure{Scope: routing.ScopeModel, Reason: code}
 	}
@@ -59,14 +56,23 @@ func codexRouteFailure(status int, body []byte, err error) routing.Failure {
 	if status == 400 || (status == 0 || status == 200) && (kind == "invalid_request_error" || kind == "bad_request") {
 		return routing.Failure{Scope: routing.ScopeRequest, Reason: "invalid_request", Terminal: true}
 	}
+	if failure, known := codexStructuredFailure(status, code, kind, message); known {
+		return failure
+	}
 	if status == 403 {
 		return routing.Failure{Scope: routing.ScopeCandidate, Reason: "permission_scope_unknown"}
 	}
-	if status == 429 || status == 200 {
+	if status == 429 {
+		return routing.Failure{Scope: routing.ScopeCandidate, Reason: "rate_limited"}
+	}
+	if status == 200 {
 		return routing.Failure{Scope: routing.ScopeCandidate, Reason: "upstream_unavailable"}
 	}
 	if status == 0 && err != nil && strings.Contains(err.Error(), "timeout awaiting response headers") {
 		return routing.Failure{Scope: routing.ScopeRequest, Reason: "response_header_timeout", Terminal: true}
+	}
+	if status == 0 && err != nil {
+		return routing.Failure{Scope: routing.ScopeEndpoint, Reason: "network_error"}
 	}
 	return routing.Failure{Scope: routing.ScopeEndpoint, Reason: "endpoint_unavailable"}
 }
@@ -128,14 +134,17 @@ func codexResponseStateKeys(r *http.Request, frame map[string]any) []string {
 	if id, ok := response["id"].(string); ok && id != "" {
 		keys = append(keys, routing.StateKey(r.Context(), "response_id", id))
 	}
-	if items, ok := response["output"].([]any); ok {
+	complete := frame["type"] == "response.completed" || response["status"] == "completed" || response["object"] == "response.compaction" || response["type"] == "response.compaction"
+	if items, ok := response["output"].([]any); ok && complete {
 		keys = append(keys, codexItemStateKeys(r, items)...)
 	}
 	// Some Responses backends send sealed output only in the completed item
 	// event. These hashes remain provisional until the whole response succeeds.
 	if frame["type"] == "response.output_item.done" {
 		if item, ok := frame["item"].(map[string]any); ok {
-			keys = append(keys, codexItemStateKeys(r, []any{item})...)
+			if status, _ := item["status"].(string); status == "" || status == "completed" {
+				keys = append(keys, codexItemStateKeys(r, []any{item})...)
+			}
 		}
 	}
 	return keys

@@ -151,7 +151,11 @@ func (m *Manager) performHealthChecks() {
 	// - 未启用时：只检查当前活跃渠道中参与故障转移的端点
 	if pool != nil {
 		for _, ep := range snapshot {
-			if ep != nil && ep.Config.AuthMode != "client_passthrough" && m.IsHealthCheckEnabled(EndpointKeyForConfig(ep.Config)) {
+			if ep == nil {
+				continue
+			}
+			cfg := ep.configSnapshot()
+			if cfg.AuthMode != "client_passthrough" && m.IsHealthCheckEnabled(EndpointKeyForConfig(cfg)) {
 				endpointsToCheck = append(endpointsToCheck, ep)
 			}
 		}
@@ -160,14 +164,15 @@ func (m *Manager) performHealthChecks() {
 			if ep == nil {
 				continue
 			}
+			cfg := ep.configSnapshot()
 			// 渠道级开关：暂停渠道不参与跨渠道故障转移，也不做健康检查
-			if pool == nil && m.groupManager != nil && !m.groupManager.IsChannelFailoverEnabled(ChannelKey(ep)) {
+			if pool == nil && m.groupManager != nil && !m.groupManager.IsChannelFailoverEnabled(ChannelKeyFromConfig(cfg)) {
 				continue
 			}
 			// 端点级开关：不参与故障转移的端点不做健康检查
 			failoverEnabled := true
-			if ep.Config.FailoverEnabled != nil {
-				failoverEnabled = *ep.Config.FailoverEnabled
+			if cfg.FailoverEnabled != nil {
+				failoverEnabled = *cfg.FailoverEnabled
 			}
 			if !failoverEnabled {
 				continue
@@ -176,7 +181,7 @@ func (m *Manager) performHealthChecks() {
 		}
 		channelSet := make(map[string]struct{}, len(endpointsToCheck))
 		for _, ep := range endpointsToCheck {
-			key := ChannelKey(ep)
+			key := ChannelKeyFromConfig(ep.configSnapshot())
 			if key == "" {
 				continue
 			}
@@ -190,9 +195,10 @@ func (m *Manager) performHealthChecks() {
 			if ep == nil {
 				continue
 			}
+			cfg := ep.configSnapshot()
 			failoverEnabled := true
-			if ep.Config.FailoverEnabled != nil {
-				failoverEnabled = *ep.Config.FailoverEnabled
+			if cfg.FailoverEnabled != nil {
+				failoverEnabled = *cfg.FailoverEnabled
 			}
 			if !failoverEnabled {
 				continue
@@ -201,7 +207,7 @@ func (m *Manager) performHealthChecks() {
 		}
 		channelSet := make(map[string]struct{}, len(endpointsToCheck))
 		for _, ep := range endpointsToCheck {
-			key := ChannelKey(ep)
+			key := ChannelKeyFromConfig(ep.configSnapshot())
 			if key == "" {
 				continue
 			}
@@ -246,13 +252,17 @@ func (m *Manager) performHealthChecks() {
 // 🔧 [P5.4 新增] 经过 healthThrottleAllow 节流（外部调用方应通过 checkEndpointHealthForced 绕过节流）
 // 注意：本函数自身不再做节流，由各触发源在调用前显式判断
 func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
-	if endpoint == nil || !m.IsHealthCheckEnabled(EndpointKeyForConfig(endpoint.Config)) {
+	if endpoint == nil {
+		return
+	}
+	cfg := endpoint.configSnapshot()
+	if !m.IsHealthCheckEnabled(EndpointKeyForConfig(cfg)) {
 		return
 	}
 	// 🔧 [P5.4] 节流检查：避免多触发源重复检查同一端点
 	if !m.healthThrottleAllow(endpoint) {
 		slog.Debug("⏸️ [健康检查节流] 跳过短时间内重复检查",
-			"endpoint", endpoint.Config.Name)
+			"endpoint", cfg.Name)
 		return
 	}
 	m.checkEndpointHealthInternal(endpoint)
@@ -262,7 +272,8 @@ func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
 // 🔧 [P5.4 新增]
 func (m *Manager) checkEndpointHealthForced(endpoint *Endpoint) {
 	// 标记 lastCheck 时间，让后续节流窗口正确计算
-	key := endpoint.Config.Channel + "/" + endpoint.Config.Name
+	cfg := endpoint.configSnapshot()
+	key := cfg.Channel + "/" + cfg.Name
 	m.healthThrottleMu.Lock()
 	m.healthThrottleLastTime[key] = time.Now()
 	m.healthThrottleMu.Unlock()
@@ -275,7 +286,8 @@ func (m *Manager) checkEndpointHealthForced(endpoint *Endpoint) {
 //   - 返回 true：允许检查（并自动更新 lastCheck 时间）
 //   - 返回 false：在节流窗口内，跳过本次检查
 func (m *Manager) healthThrottleAllow(endpoint *Endpoint) bool {
-	key := endpoint.Config.Channel + "/" + endpoint.Config.Name
+	cfg := endpoint.configSnapshot()
+	key := cfg.Channel + "/" + cfg.Name
 
 	m.healthThrottleMu.Lock()
 	defer m.healthThrottleMu.Unlock()
@@ -293,19 +305,20 @@ func (m *Manager) healthThrottleAllow(endpoint *Endpoint) bool {
 // checkEndpointHealthInternal 实际的健康检查逻辑（无节流）
 // 🔧 [P5.4 重命名] 原 checkEndpointHealth 的实现，由节流入口调用
 func (m *Manager) checkEndpointHealthInternal(endpoint *Endpoint) {
+	cfg := endpoint.configSnapshot()
 	// Subscription auth belongs to a real caller request. No timer/manual
 	// health check may invent credentials or consume subscription quota.
-	if endpoint.Config.AuthMode == "client_passthrough" {
+	if cfg.AuthMode == "client_passthrough" {
 		return
 	}
 	// 跳过健康检查（部分中转商不支持健康检查端点）
-	if endpoint.Config.SkipHealthCheck {
+	if cfg.SkipHealthCheck {
 		// 仅进行“可达性/延迟探测”，不根据 HTTP 状态码判定健康与否，避免误判为不健康；
 		// 仍保留 NeverChecked = true，用于前端展示“跳过检测”。
 		start := time.Now()
 		responseTime := time.Duration(0)
 
-		baseURL := strings.TrimSpace(endpoint.Config.URL)
+		baseURL := strings.TrimSpace(cfg.URL)
 		probeURL := baseURL + m.config.Health.HealthPath
 		req, err := http.NewRequestWithContext(m.ctx, http.MethodGet, probeURL, nil)
 		probeSucceeded := false
@@ -328,7 +341,7 @@ func (m *Manager) checkEndpointHealthInternal(endpoint *Endpoint) {
 			// 旧实现：_ = doErr 直接丢弃，端点真正不可达时无任何日志线索
 			if doErr != nil {
 				slog.Debug("📡 [跳过健康检查] 探测请求错误（仅记录，不影响健康判定）",
-					"endpoint", endpoint.Config.Name,
+					"endpoint", cfg.Name,
 					"url", probeURL,
 					"error", doErr)
 			} else {
@@ -352,7 +365,7 @@ func (m *Manager) checkEndpointHealthInternal(endpoint *Endpoint) {
 
 	start := time.Now()
 
-	baseURL := strings.TrimSpace(endpoint.Config.URL)
+	baseURL := strings.TrimSpace(cfg.URL)
 	healthURL := baseURL + m.config.Health.HealthPath
 	req, err := http.NewRequestWithContext(m.ctx, "GET", healthURL, nil)
 	if err != nil {
@@ -483,9 +496,8 @@ func (e *Endpoint) GetStatus() EndpointStatus {
 // 状态包括: "skipped"(跳过检测), "unchecked"(未检测), "healthy"(健康), "request_failed"(请求失败), "unhealthy"(不健康)
 // 新增 request_failed 状态，区分健康检查失败和请求转发失败
 func (e *Endpoint) GetHealthState() string {
-	skipHealthCheck := e.Config.SkipHealthCheck
-
 	e.mutex.RLock()
+	skipHealthCheck := e.Config.SkipHealthCheck
 	neverChecked := e.Status.NeverChecked
 	requestFailed := e.Status.RequestFailed
 	healthy := e.Status.Healthy
@@ -578,7 +590,7 @@ func (m *Manager) ManualHealthCheck(endpointName string) error {
 	// 使用读锁查找端点
 	m.endpointsMu.RLock()
 	for _, endpoint := range m.endpoints {
-		if endpoint.Config.Name == endpointName {
+		if endpoint.configSnapshot().Name == endpointName {
 			targetEndpoint = endpoint
 			break
 		}
@@ -595,7 +607,7 @@ func (m *Manager) ManualHealthCheck(endpointName string) error {
 	m.checkEndpointHealthForced(targetEndpoint)
 
 	// Get status and log completion with response time
-	status := targetEndpoint.Status
+	status := targetEndpoint.GetStatus()
 	healthStatus := "健康"
 	if !status.Healthy {
 		if status.NeverChecked {
@@ -636,7 +648,11 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 
 	if pool != nil {
 		for _, ep := range snapshot {
-			if ep != nil && ep.Config.AuthMode != "client_passthrough" && m.IsHealthCheckEnabled(EndpointKeyForConfig(ep.Config)) {
+			if ep == nil {
+				continue
+			}
+			cfg := ep.configSnapshot()
+			if cfg.AuthMode != "client_passthrough" && m.IsHealthCheckEnabled(EndpointKeyForConfig(cfg)) {
 				endpointsToCheck = append(endpointsToCheck, ep)
 			}
 		}
@@ -646,14 +662,15 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 			if ep == nil {
 				continue
 			}
+			cfg := ep.configSnapshot()
 			// 渠道级开关：暂停渠道不检测
-			if pool == nil && m.groupManager != nil && !m.groupManager.IsChannelFailoverEnabled(ChannelKey(ep)) {
+			if pool == nil && m.groupManager != nil && !m.groupManager.IsChannelFailoverEnabled(ChannelKeyFromConfig(cfg)) {
 				continue
 			}
 			// 端点级开关：不参与故障转移的端点不检测
 			failoverEnabled := true
-			if ep.Config.FailoverEnabled != nil {
-				failoverEnabled = *ep.Config.FailoverEnabled
+			if cfg.FailoverEnabled != nil {
+				failoverEnabled = *cfg.FailoverEnabled
 			}
 			if !failoverEnabled {
 				continue
@@ -662,7 +679,7 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 		}
 		channelSet := make(map[string]struct{}, len(endpointsToCheck))
 		for _, ep := range endpointsToCheck {
-			if key := ChannelKey(ep); key != "" {
+			if key := ChannelKeyFromConfig(ep.configSnapshot()); key != "" {
 				channelSet[key] = struct{}{}
 			}
 		}
@@ -675,9 +692,10 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 			if ep == nil {
 				continue
 			}
+			cfg := ep.configSnapshot()
 			failoverEnabled := true
-			if ep.Config.FailoverEnabled != nil {
-				failoverEnabled = *ep.Config.FailoverEnabled
+			if cfg.FailoverEnabled != nil {
+				failoverEnabled = *cfg.FailoverEnabled
 			}
 			if !failoverEnabled {
 				continue
@@ -686,7 +704,7 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 		}
 		channelSet := make(map[string]struct{}, len(endpointsToCheck))
 		for _, ep := range endpointsToCheck {
-			if key := ChannelKey(ep); key != "" {
+			if key := ChannelKeyFromConfig(ep.configSnapshot()); key != "" {
 				channelSet[key] = struct{}{}
 			}
 		}
@@ -714,7 +732,8 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 		go func(ep *Endpoint) {
 			defer wg.Done()
 			defer func() { <-semaphore }() // 释放信号量
-			if !m.IsHealthCheckEnabled(EndpointKeyForConfig(ep.Config)) {
+			cfg := ep.configSnapshot()
+			if !m.IsHealthCheckEnabled(EndpointKeyForConfig(cfg)) {
 				return
 			}
 
@@ -742,7 +761,7 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 				healthStatus = "✅ 健康"
 			}
 			slog.Debug(fmt.Sprintf("   检测端点: %s - 状态: %s, 响应时间: %s",
-				ep.Config.Name,
+				cfg.Name,
 				healthStatus,
 				display.FormatResponseTime(responseTime),
 			))

@@ -30,16 +30,6 @@ func CheckCredentialGroupReferences(ctx context.Context, tx *sql.Tx, provider st
 			for _, rule := range profile.Rules {
 				referenced = referenced || slices.ContainsFunc(rule.Targets, matches)
 			}
-			for _, intent := range profile.Intents {
-				referenced = referenced || slices.ContainsFunc(intent.Targets, matches)
-			}
-		}
-		if classifier := profile.Classifier; classifier != nil {
-			classifierProvider := classifier.Provider
-			if classifierProvider == "" {
-				classifierProvider = profile.Provider
-			}
-			referenced = referenced || (classifierProvider == provider && classifier.GroupID == groupID)
 		}
 		if referenced {
 			references = append(references, fmt.Sprintf("%s「%s」", profile.Provider, profile.Name))
@@ -52,7 +42,7 @@ func CheckCredentialGroupReferences(ctx context.Context, tx *sql.Tx, provider st
 }
 
 // RemoveCredentialGroupReferences clears saved deselections after the reference
-// check has ruled out selected members, rule targets and classifiers.
+// check has ruled out selected members, rule targets.
 func RemoveCredentialGroupReferences(ctx context.Context, tx *sql.Tx, provider string, groupID int64) error {
 	_, err := pruneCredentialGroupReferences(ctx, tx, provider, func(_, id int64) bool { return id == groupID && id > 0 })
 	return err
@@ -163,20 +153,6 @@ func pruneProfileCredentialGroups(profile *routing.RoutingProfile, provider stri
 			if before > 0 && len(rule.Targets) == 0 && rule.Kind == "mapping" {
 				rule.Enabled = false
 			}
-		}
-		for i := range profile.Intents {
-			profile.Intents[i].Targets = pruneTargets(profile.Intents[i].Targets)
-		}
-	}
-	if classifier := profile.Classifier; classifier != nil {
-		classifierProvider := classifier.Provider
-		if classifierProvider == "" {
-			classifierProvider = profile.Provider
-		}
-		if classifierProvider == provider && removed(classifier.ChannelID, classifier.GroupID) {
-			classifier.Enabled = false
-			classifier.ChannelID, classifier.GroupID = 0, 0
-			changed = true
 		}
 	}
 	return changed

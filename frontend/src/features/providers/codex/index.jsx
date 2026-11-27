@@ -48,9 +48,8 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
   });
 
   // 页面加载时读取全局配置，供端点详情展示。
-  const loadGlobalConfig = useCallback(async () => {
-    try {
-      const data = await getCodexGlobalConfig();
+  const loadGlobalConfig = useCallback(() => {
+    return getCodexGlobalConfig().then((data) => {
       setGlobalConfig({
         model: data.model || '',
         enable_1m_context: Boolean(data.enable_1m_context),
@@ -58,9 +57,9 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
         effective_enable_1m_context: Boolean(data.effective_enable_1m_context ?? data.enable_1m_context),
         global_timeout_seconds: data.global_timeout_seconds || data.globalTimeoutSeconds || 300
       });
-    } catch {
+    }).catch(() => {
       // 静默失败：全局配置加载失败仅影响展示，不影响渠道管理
-    }
+    });
   }, []);
 
   // 渠道弹窗
@@ -109,20 +108,18 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
 	  ) || credentialGroupDetailTarget.group;
 	  return { channel: latestChannel, group: latestGroup };
 	})() : null;
-  const fetchData = useCallback(async ({ silent = false, throwOnError = false } = {}) => {
-    if (!silent) setLoading(true);
-    setError('');
-    try {
-      const [list, failoverSettings] = await Promise.all([
+  const readData = useCallback(({ silent = false, throwOnError = false } = {}) => {
+    return Promise.all([
         getCodexChannels(),
         getSettingsByScope('codex', 'failover').catch(() => [])
-      ]);
+      ]).then(([list, failoverSettings]) => {
       const normalizedList = Array.isArray(list) ? list : [];
       setChannels(normalizedList);
       setChannelFailoverEnabled((failoverSettings || []).find((setting) => setting.key === 'enabled')?.value === 'true');
       setLastUpdate(new Date().toLocaleTimeString());
+      setError('');
       return normalizedList;
-    } catch (err) {
+    }).catch((err) => {
       if (throwOnError) throw err;
       const message = getErrorMessage(err, '加载 Codex 渠道失败');
       if (silent) {
@@ -131,13 +128,19 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
         setError(message);
       }
       return [];
-    } finally {
+    }).finally(() => {
       if (!silent) setLoading(false);
-    }
+    });
   }, [toast]);
 
+  const fetchData = useCallback((options = {}) => {
+    if (!options.silent) setLoading(true);
+    setError('');
+    return readData(options);
+  }, [readData]);
+
   useEffect(() => {
-    fetchData();
+    readData();
     // 初始拉取一次挂起数
     getCodexSuspendedCount().then(setSuspendedCount).catch(() => {});
     // 初始拉取一次全局配置
@@ -159,7 +162,7 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
       if (typeof unsubscribe === 'function') unsubscribe();
       if (typeof unsubscribeSuspension === 'function') unsubscribeSuspension();
     };
-  }, [fetchData, loadGlobalConfig]);
+  }, [readData, fetchData, loadGlobalConfig]);
 
   // ===== 渠道动作 =====
   const handleActivateChannel = async (channel) => {

@@ -18,24 +18,26 @@ import (
 
 // Handler 处理 Codex 代理请求
 type Handler struct {
-	profileResponse func(context.Context, routing.DispatchCandidate, int, http.Header, []byte)
-	searchConfig    func(context.Context) (search.Config, error)
-	subscriptions   *subscription.Controller
-	configMu        sync.RWMutex
-	manager         *EndpointManager
-	forwarder       *Forwarder
-	streamFwd       *Forwarder
-	tokenParser     *TokenParser
-	classifier      *ErrorClassifier
-	logger          *slog.Logger
-	usageTracker    *tracking.UsageTracker
-	privacyService  *privacy.Service
-	states          *routing.StateTracker
+	profileResponse  func(context.Context, routing.DispatchCandidate, int, http.Header, []byte)
+	searchConfig     func(context.Context) (search.Config, error)
+	subscriptions    *subscription.Controller
+	configMu         sync.RWMutex
+	manager          *EndpointManager
+	forwarder        *Forwarder
+	streamFwd        *Forwarder
+	tokenParser      *TokenParser
+	classifier       *ErrorClassifier
+	logger           *slog.Logger
+	usageTracker     *tracking.UsageTracker
+	privacyService   *privacy.Service
+	states           *routing.StateTracker
+	completedHistory *completedReasoningCache
 
 	// retryCfg 同端点重试配置（来自设置页 retry.*）
 	retryCfg config.RetryConfig
 	// nil selects provider defaults; explicit configuration is copied per request.
-	responseRecoveryCfg *routing.ResponseRecoveryConfig
+	responseRecoveryCfg      *routing.ResponseRecoveryConfig
+	encryptedHistoryRecovery bool
 	// failoverCfg 故障转移与挂起配置（来自设置页 failover.*）
 	failoverCfg config.FailoverConfig
 	// suspensionMgr 请求挂起队列（loop_retry 全部耗尽后等待运维干预）
@@ -121,18 +123,19 @@ func newHandler(
 		redactor = privacyService[0]
 	}
 	return &Handler{
-		manager:        manager,
-		forwarder:      NewForwarder(timeout, logger, transportProvider),
-		streamFwd:      NewStreamingForwarder(logger, transportProvider),
-		tokenParser:    NewTokenParser(),
-		classifier:     NewErrorClassifier(),
-		logger:         logger,
-		usageTracker:   usageTracker,
-		privacyService: redactor,
-		states:         routing.NewStateTracker(),
-		retryCfg:       retryCfg,
-		failoverCfg:    failoverCfg,
-		suspensionMgr:  suspensionMgr,
+		manager:          manager,
+		forwarder:        NewForwarder(timeout, logger, transportProvider),
+		streamFwd:        NewStreamingForwarder(logger, transportProvider),
+		tokenParser:      NewTokenParser(),
+		classifier:       NewErrorClassifier(),
+		logger:           logger,
+		usageTracker:     usageTracker,
+		privacyService:   redactor,
+		states:           routing.NewStateTracker(),
+		completedHistory: newCompletedReasoningCache(),
+		retryCfg:         retryCfg,
+		failoverCfg:      failoverCfg,
+		suspensionMgr:    suspensionMgr,
 	}
 }
 

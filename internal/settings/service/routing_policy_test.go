@@ -5,6 +5,33 @@ import (
 	"testing"
 )
 
+func TestStartupRemovesRetiredIntentPreferenceAcrossProviders(t *testing.T) {
+	svc, _ := newSettingsServiceTestStore(t)
+	ctx := context.Background()
+	for _, provider := range []string{"global", "claude", "codex"} {
+		for _, key := range []string{"intent_rule_fallback", "rule_fallback_to_default"} {
+			if err := svc.store.SetScoped(ctx, provider, CategoryRetry, key, "false"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if err := svc.InitDefaults(ctx); err != nil {
+			t.Fatal(err)
+		}
+		for _, provider := range []string{"global", "claude", "codex"} {
+			retired, err := svc.store.GetScoped(ctx, provider, CategoryRetry, "intent_rule_fallback")
+			if err != nil || retired != nil {
+				t.Fatalf("retired preference remains for %s: %+v %v", provider, retired, err)
+			}
+			kept, err := svc.store.GetScoped(ctx, provider, CategoryRetry, "rule_fallback_to_default")
+			if err != nil || kept == nil || kept.Value != "false" {
+				t.Fatalf("ordinary fallback changed for %s: %+v %v", provider, kept, err)
+			}
+		}
+	}
+}
+
 func TestUnifiedRuleFallbackInitializationPreservesSavedPreference(t *testing.T) {
 	for _, legacy := range []string{"", "true", "false", "invalid"} {
 		t.Run("legacy="+legacy, func(t *testing.T) {

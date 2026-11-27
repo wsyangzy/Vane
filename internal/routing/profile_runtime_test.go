@@ -19,7 +19,7 @@ func runtimeTestConfig() RuntimeConfig {
 }
 
 func runtimeTestTurn(id string) TurnInput {
-	return TurnInput{ConversationID: "conversation", TurnID: id, NewTurn: true, CurrentUserMessage: "PRIVATE_CURRENT_TEXT", PreviousUserMessage: "PRIVATE_PREVIOUS_TEXT", PreviousAssistantText: "PRIVATE_ASSISTANT_TEXT"}
+	return TurnInput{ConversationID: "conversation", TurnID: id, NewTurn: true}
 }
 
 func TestRuleTraceCapturesDefaultSourceWithoutSendingOrChangingSelection(t *testing.T) {
@@ -200,11 +200,7 @@ func TestProfileRuntimeExplicitPreviewEligibilityAndNoSideEffects(t *testing.T) 
 		t.Run(reason, func(t *testing.T) {
 			config := runtimeTestConfig()
 			config.Profiles[0].Strategy = StrategyRotate
-			var calls, traces atomic.Int32
-			config.Classify = func(context.Context, RoutingProfile, TurnInput) (IntentResult, error) {
-				calls.Add(1)
-				return IntentResult{}, nil
-			}
+			var traces atomic.Int32
 			config.OnTrace = func(DispatchTrace) { traces.Add(1) }
 			config.Supports = func(c DispatchCandidate, model string) bool {
 				return reason != "model_unsupported" || c.GroupID != 1
@@ -221,8 +217,8 @@ func TestProfileRuntimeExplicitPreviewEligibilityAndNoSideEffects(t *testing.T) 
 					t.Fatalf("explicit resource eligibility: %+v", evaluations)
 				}
 			}
-			if calls.Load() != 0 || traces.Load() != 0 || len(r.affinity) != 0 || len(r.scheduler.loads) != 0 || len(r.scheduler.rotation) != 0 {
-				t.Fatal("explicit previews changed classification, traces, affinity or scheduler state")
+			if traces.Load() != 0 || len(r.affinity) != 0 || len(r.scheduler.loads) != 0 || len(r.scheduler.rotation) != 0 {
+				t.Fatal("explicit previews changed traces, affinity or scheduler state")
 			}
 
 			config.Supports = nil
@@ -263,11 +259,9 @@ func runtimeTestSend(t *testing.T, r *ProfileRuntime, plan *DispatchPlan, cached
 
 func TestProfileRuntimeRulePriority(t *testing.T) {
 	p := runtimeTestConfig().Profiles[0]
-	p.Classifier = &ClassifierConfig{Enabled: true}
 	stream := true
 	target := []RouteTarget{{ChannelID: 2, GroupID: 3}}
 	p.Rules = []RoutingRule{
-		{ID: 1, Enabled: true, Kind: "intent", IntentID: "coding", Priority: -100, Targets: target},
 		{ID: 2, Enabled: true, Kind: "non_stream", Priority: -100, Targets: target},
 		{ID: 3, Enabled: true, Kind: "composite", MatchModel: "gpt-test", RequireStream: &stream, Priority: -100, Targets: target},
 		{ID: 4, Enabled: true, Kind: "model", MatchModel: "gpt-*", Priority: -100, Targets: target},
@@ -277,17 +271,17 @@ func TestProfileRuntimeRulePriority(t *testing.T) {
 		remove int
 		want   int64
 	}{{0, 5}, {1, 4}, {2, 3}} {
-		p.Rules = p.Rules[:5-tc.remove]
-		if got := ResolveDecision(p, "gpt-test", true, "coding"); got.RuleID != tc.want {
+		p.Rules = p.Rules[:4-tc.remove]
+		if got := ResolveDecision(p, "gpt-test", true); got.RuleID != tc.want {
 			t.Fatalf("priority got %+v want rule %d", got, tc.want)
 		}
 	}
-	p.Rules = p.Rules[:2]
-	if got := ResolveDecision(p, "gpt-test", false, "coding"); got.RuleID != 2 || !got.FallbackToDefault {
+	p.Rules = p.Rules[:1]
+	if got := ResolveDecision(p, "gpt-test", false); got.RuleID != 2 || !got.FallbackToDefault {
 		t.Fatalf("non-stream priority/default fallback wrong: %+v", got)
 	}
-	if got := ResolveDecision(p, "gpt-test", true, "coding"); got.RuleID != 1 {
-		t.Fatalf("intent rule did not apply: %+v", got)
+	if got := ResolveDecision(p, "gpt-test", true); got.Kind != "default" {
+		t.Fatalf("streaming request should use default: %+v", got)
 	}
 }
 
@@ -448,62 +442,19 @@ func TestMappingAllGroupsFollowsEnabledMembers(t *testing.T) {
 	}
 }
 
-func TestIntentMasterSwitchDisablesRememberedDecisions(t *testing.T) {
-	cfg := runtimeTestConfig()
-	cfg.Profiles[0].Classifier = &ClassifierConfig{Enabled: true, Model: "classifier", Confidence: .6}
-	cfg.Profiles[0].Intents = []IntentRule{{ID: "coding", Enabled: true, Targets: []RouteTarget{{ChannelID: 2, GroupID: 3}}}}
-	var calls atomic.Int32
-	cfg.Classify = func(context.Context, RoutingProfile, TurnInput) (IntentResult, error) {
-		calls.Add(1)
-		return IntentResult{IntentID: "coding", Confidence: 1}, nil
-	}
-	r := NewProfileRuntime(cfg)
-	turn := runtimeTestTurn("same-turn")
-	first := r.Plan(context.Background(), 1, "gpt-test", true, turn, false)
-	if got := runtimeTestSend(t, r, &first, 0); got.ChannelID != 2 {
-		t.Fatalf("enabled intent did not select target: %+v", got)
-	}
-	cfg.Profiles[0].Classifier.Enabled = false
-	r.Replace(cfg)
-	turn.NewTurn, turn.Continuation = false, true
-	for _, preview := range []bool{false, true} {
-		plan := r.Plan(context.Background(), 1, "gpt-test", true, turn, preview)
-		if plan.Decision.Kind != "default" || plan.Intent.IntentID != "" || plan.EligibleCandidates[0].ChannelID != 1 || calls.Load() != 1 {
-			t.Fatalf("disabled intent reused cached decision: %+v calls=%d", plan, calls.Load())
-		}
-	}
-	p := cfg.Profiles[0]
-	p.Rules = []RoutingRule{{Kind: "intent", Enabled: true, IntentID: "coding", Targets: []RouteTarget{{ChannelID: 2}}}}
-	if got := ResolveDecision(p, "gpt-test", true, "coding"); got.Kind != "default" {
-		t.Fatalf("disabled intent rule matched: %+v", got)
-	}
-}
-
-func TestProfileRuntimeIntentFallbackChainAndTargetProfilesDoNotRecurse(t *testing.T) {
+func TestProfileRuntimeTargetProfilesDoNotRecurse(t *testing.T) {
 	cfg := runtimeTestConfig()
 	p := cfg.Profiles[0]
-	p.Classifier = &ClassifierConfig{Enabled: true, Provider: "codex", ChannelID: 1, GroupID: 1, Model: "router"}
-	p.Intents = []IntentRule{
-		{ID: "coding", Enabled: true, Targets: []RouteTarget{{ProfileID: 2, UpstreamModel: "coding-model"}}, FallbackIntent: "simple", FallbackToDefault: boolPointer(false)},
-		{ID: "simple", Enabled: true, Targets: []RouteTarget{{ChannelID: 1, GroupID: 2, UpstreamModel: "small-model"}}, FallbackToDefault: boolPointer(false)},
-	}
+	p.Rules = []RoutingRule{{ID: 1, Kind: "model", MatchModel: "gpt-test", Enabled: true, Targets: []RouteTarget{{ProfileID: 2, UpstreamModel: "coding-model"}, {ChannelID: 1, GroupID: 2, UpstreamModel: "small-model"}}, FallbackToDefault: boolPointer(false)}}
 	other := p
 	other.ID, other.IsDefault = 2, false
 	other.Members = []RoutingMember{{ChannelID: 2, GroupID: 3, Enabled: true, UpstreamModel: "member-model"}}
 	other.Rules = []RoutingRule{{ID: 999, Kind: "model", Enabled: true, MatchModel: "*", Targets: []RouteTarget{{ChannelID: 1, GroupID: 1}}}}
 	cfg.Profiles = []RoutingProfile{p, other}
-	var calls atomic.Int64
-	cfg.Classify = func(_ context.Context, profile RoutingProfile, _ TurnInput) (IntentResult, error) {
-		calls.Add(1)
-		if profile.ID != 1 {
-			t.Errorf("referenced profile classifier ran: %d", profile.ID)
-		}
-		return IntentResult{IntentID: "coding", Confidence: 1}, nil
-	}
 	r := NewProfileRuntime(cfg)
 	plan := r.Plan(context.Background(), 1, "gpt-test", true, runtimeTestTurn("t1"), false)
-	if calls.Load() != 1 || plan.Decision.IntentID != "coding" || len(plan.EligibleCandidates) != 2 {
-		t.Fatalf("wrong classification/fallback expansion: %+v", plan)
+	if plan.Decision.RuleID != 1 || len(plan.EligibleCandidates) != 2 {
+		t.Fatalf("wrong rule target expansion: %+v", plan)
 	}
 	if plan.EligibleCandidates[0].GroupID != 3 || plan.EligibleCandidates[0].UpstreamModel != "coding-model" || plan.EligibleCandidates[1].GroupID != 2 || plan.EligibleCandidates[1].UpstreamModel != "small-model" {
 		t.Fatalf("target profiles recursed or lost overrides: %+v", plan.EligibleCandidates)
@@ -533,17 +484,10 @@ func TestProfileRuntimePrepareSupportsAndCompatibilityApplyToPreviewAndActual(t 
 	}
 }
 
-func TestProfileRuntimePreviewDoesNotClassifyReserveOrRemember(t *testing.T) {
+func TestProfileRuntimePreviewDoesNotReserveOrRemember(t *testing.T) {
 	cfg := runtimeTestConfig()
 	p := &cfg.Profiles[0]
 	p.Strategy = StrategyWeighted
-	p.Classifier = &ClassifierConfig{Enabled: true, Provider: "codex", Model: "router", ChannelID: 1, GroupID: 1}
-	p.Intents = []IntentRule{{ID: "coding", Enabled: true}}
-	var calls atomic.Int64
-	cfg.Classify = func(context.Context, RoutingProfile, TurnInput) (IntentResult, error) {
-		calls.Add(1)
-		return IntentResult{IntentID: "coding", Confidence: 1}, nil
-	}
 	r := NewProfileRuntime(cfg)
 	for i := 0; i < 5; i++ {
 		plan := r.Preview(context.Background(), 1, "gpt-test", true, runtimeTestTurn("t1"))
@@ -551,25 +495,15 @@ func TestProfileRuntimePreviewDoesNotClassifyReserveOrRemember(t *testing.T) {
 			t.Fatal("preview could reserve")
 		}
 	}
-	if calls.Load() != 0 || len(r.affinity) != 0 || len(r.scheduler.loads) != 0 || len(r.scheduler.rotation) != 0 {
+	if len(r.affinity) != 0 || len(r.scheduler.loads) != 0 || len(r.scheduler.rotation) != 0 {
 		t.Fatal("preview changed runtime state")
-	}
-	if result := r.ClassifyIntent(context.Background(), 1, runtimeTestTurn("t1")); result.IntentID != "coding" || calls.Load() != 1 {
-		t.Fatalf("explicit classify did not run: %+v", result)
 	}
 }
 
-func TestProfileRuntimeToolsReuseDecisionWithoutClassificationOrRotation(t *testing.T) {
+func TestProfileRuntimeToolsReuseDecisionWithoutRotation(t *testing.T) {
 	cfg := runtimeTestConfig()
 	p := &cfg.Profiles[0]
 	p.Strategy = StrategyRotate
-	p.Classifier = &ClassifierConfig{Enabled: true, Model: "router", Provider: "codex", ChannelID: 1, GroupID: 1}
-	p.Intents = []IntentRule{{ID: "coding", Enabled: true, Targets: []RouteTarget{{ProfileID: 1}}}}
-	var calls atomic.Int64
-	cfg.Classify = func(context.Context, RoutingProfile, TurnInput) (IntentResult, error) {
-		calls.Add(1)
-		return IntentResult{IntentID: "coding", Confidence: 1}, nil
-	}
 	r := NewProfileRuntime(cfg)
 	turn := runtimeTestTurn("t1")
 	plan := r.Plan(context.Background(), 1, "gpt-test", true, turn, false)
@@ -577,16 +511,80 @@ func TestProfileRuntimeToolsReuseDecisionWithoutClassificationOrRotation(t *test
 		t.Fatal("first selection")
 	}
 	turn.NewTurn, turn.Continuation = false, true
-	tool := r.Plan(context.Background(), 1, "changed-client-alias", true, turn, false)
-	if tool.Trace().RequestedModel != "changed-client-alias" {
+	tool := r.Plan(context.Background(), 1, "gpt-test", true, turn, false)
+	if tool.Trace().RequestedModel != "gpt-test" {
 		t.Fatal("turn reuse overwrote the current request's original model")
 	}
-	if !tool.Decision.ReusedTurn || tool.Model != "gpt-test" || runtimeTestSend(t, r, &tool, 0).GroupID != 1 || calls.Load() != 1 {
-		t.Fatalf("tool continuation reclassified/rerouted: %+v", tool)
+	if !tool.Decision.ReusedTurn || tool.Model != "gpt-test" || runtimeTestSend(t, r, &tool, 0).GroupID != 1 {
+		t.Fatalf("tool continuation rerouted: %+v", tool)
 	}
 	next := r.Plan(context.Background(), 1, "gpt-test", true, runtimeTestTurn("t2"), false)
-	if runtimeTestSend(t, r, &next, 0).GroupID != 2 || calls.Load() != 2 {
+	if runtimeTestSend(t, r, &next, 0).GroupID != 2 {
 		t.Fatal("tool request advanced rotation")
+	}
+}
+
+func TestProfileRuntimeModelSwitchReevaluatesRememberedDecision(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		for _, continuation := range []string{"turn", "response_state", "response_state_no_affinity"} {
+			for _, scenario := range []struct {
+				name, from, to, kind, upstream string
+				group                          int64
+			}{
+				{"default", "old-model", "new-model", "default", "new-model", 1},
+				{"enter_rule", "old-model", "rule-model", "model", "rule-upstream", 3},
+				{"leave_rule", "rule-model", "new-model", "default", "new-model", 1},
+				{"mapping", "rule-model", "mapped-model", "mapping", "mapped-upstream", 2},
+			} {
+				t.Run(provider+"/"+continuation+"/"+scenario.name, func(t *testing.T) {
+					cfg := runtimeTestConfig()
+					cfg.Provider, cfg.Profiles[0].Provider = provider, provider
+					for i := range cfg.Candidates {
+						cfg.Candidates[i].Provider = provider
+					}
+					if continuation == "response_state_no_affinity" {
+						cfg.Profiles[0].AffinityMode = AffinityNone
+					}
+					cfg.Profiles[0].Rules = []RoutingRule{
+						{ID: 1, Enabled: true, Kind: "model", MatchModel: "rule-model", Targets: []RouteTarget{{ChannelID: 2, GroupID: 3, UpstreamModel: "rule-upstream"}}},
+						{ID: 2, Enabled: true, Kind: "mapping", MatchModel: "mapped-model", Targets: []RouteTarget{{ChannelID: 1, GroupID: 2, UpstreamModel: "mapped-upstream"}}},
+					}
+					r := NewProfileRuntime(cfg)
+					ctx := context.Background()
+					turn := runtimeTestTurn("same-turn")
+					first := r.Plan(ctx, 1, scenario.from, true, turn, false)
+					selected := runtimeTestSend(t, r, &first, 0)
+					r.RememberResponseStates(&first, selected, []string{"response-state"})
+					turn.NewTurn, turn.Continuation = false, true
+					if continuation != "turn" {
+						turn = TurnInput{Continuation: true}
+						ctx = WithProfileStateKeys(ctx, []string{"response-state"})
+						tracker := NewStateTracker()
+						tracker.Observe([]string{"response-state"}, "", selected.Identity())
+						ctx = WithStatePreference(ctx, tracker, []string{"response-state"}, "")
+					}
+					same := r.Plan(ctx, 1, scenario.from, true, turn, false)
+					if !same.Decision.ReusedTurn || same.Decision.RuleID != first.Decision.RuleID || same.EligibleCandidates[0].Identity() != selected.Identity() {
+						t.Fatalf("same-model continuation lost its decision: %+v", same)
+					}
+					next := r.Plan(ctx, 1, scenario.to, true, turn, false)
+					if next.Decision.ReusedTurn || next.Decision.Kind != scenario.kind || next.Model != scenario.to || next.Trace().RequestedModel != scenario.to {
+						t.Fatalf("model switch inherited the old decision: %+v", next)
+					}
+					actual := runtimeTestSend(t, r, &next, 0)
+					if actual.GroupID != scenario.group || actual.Identity().Model != scenario.upstream {
+						t.Fatalf("wrong send after model switch: %+v", actual)
+					}
+					// Switching back must also resolve the original request model;
+					// the newly remembered decision must not leak in the other direction.
+					r.RememberResponseStates(&next, actual, []string{"response-state"})
+					back := r.Plan(ctx, 1, scenario.from, true, turn, false)
+					if back.Decision.ReusedTurn || back.Model != scenario.from || back.Decision.Kind != first.Decision.Kind {
+						t.Fatalf("switching back retained the newer model: %+v", back)
+					}
+				})
+			}
+		}
 	}
 }
 
@@ -681,7 +679,6 @@ func TestProfileRuntimeStartedResponsePreventsReplayAndIsNotSuccess(t *testing.T
 
 func TestProfileRuntimeTraceExcludesRequestContentAndRawFailureText(t *testing.T) {
 	cfg := runtimeTestConfig()
-	cfg.Profiles[0].Intents = []IntentRule{{ID: "coding", Description: "PRIVATE_INTENT_DESCRIPTION"}}
 	r := NewProfileRuntime(cfg)
 	plan := r.Plan(context.Background(), 1, "gpt-test", true, runtimeTestTurn("PRIVATE_TURN_ID"), false)
 	a, err := r.Reserve(context.Background(), &plan, plan.EligibleCandidates[0])
