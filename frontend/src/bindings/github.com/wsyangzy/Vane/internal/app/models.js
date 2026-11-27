@@ -258,6 +258,34 @@ export class CacheStatusItem {
              */
             this["size"] = 0;
         }
+        if (!("estimated_bytes" in $$source)) {
+            /**
+             * @member
+             * @type {number | null}
+             */
+            this["estimated_bytes"] = null;
+        }
+        if (!("max_bytes" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["max_bytes"] = 0;
+        }
+        if (!("loads" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["loads"] = 0;
+        }
+        if (!("last_load_ms" in $$source)) {
+            /**
+             * @member
+             * @type {number | null}
+             */
+            this["last_load_ms"] = null;
+        }
         if (!("hits" in $$source)) {
             /**
              * @member

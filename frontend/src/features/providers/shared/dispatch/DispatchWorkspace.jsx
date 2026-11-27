@@ -47,9 +47,9 @@ export default function DispatchWorkspace({ provider, onError, onSuccess, onMana
   const [loadError, setLoadError] = useState('');
   const [quotaModel, setQuotaModel] = useState('');
   const generation = useRef(0);
-  const reload = useCallback(async () => {
+  const reload = useCallback(() => {
     const current = ++generation.current;
-    const results = await Promise.allSettled([listRoutingProfiles(provider), checkRoutingConfiguration(provider), getSettingsByCategory('retry').then(readDispatchPolicy)]);
+    return Promise.allSettled([listRoutingProfiles(provider), checkRoutingConfiguration(provider), getSettingsByCategory('retry').then(readDispatchPolicy)]).then((results) => {
     if (current !== generation.current) return;
     if (results[0].status === 'fulfilled') setState(results[0].value);
     if (results[1].status === 'fulfilled') setStatus(results[1].value);
@@ -57,6 +57,7 @@ export default function DispatchWorkspace({ provider, onError, onSuccess, onMana
     const failure = [results[0], results[1], results[2]].find((result) => result.status === 'rejected');
     setLoadError(failure ? dispatchReason(getErrorMessage(failure.reason, '读取调度配置失败')) : '');
     setLoading(false);
+    });
   }, [provider]);
   useEffect(() => { reload(); }, [reload, refreshToken]);
   const perform = async (operation, message = '') => {

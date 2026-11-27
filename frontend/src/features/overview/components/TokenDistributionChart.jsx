@@ -84,30 +84,26 @@ const TokenDistributionChart = () => {
   const toast = useToast();
 
   // 加载数据 - 同时拉取今日全量、Claude、Codex 三组数据
-  const loadData = useCallback(async (showRefreshing = false) => {
-    if (showRefreshing) {
-      setIsRefreshing(true);
-    }
-    try {
-      const [all, claude, codex] = await Promise.all([
+  const loadData = useCallback((showRefreshing = false) => {
+    return Promise.all([
         fetchTokenUsageData(''),
         fetchTokenUsageData('claude'),
         fetchTokenUsageData('codex')
-      ]);
+      ]).then(([all, claude, codex]) => {
       setTokenData(all);
       setBreakdown({ claude, codex });
       lastErrorRef.current = '';
-    } catch (error) {
+    }).catch((error) => {
       console.error('加载 Token 分布数据失败:', error);
       const message = error?.message || 'Token 分布数据加载失败';
       if (showRefreshing || lastErrorRef.current !== message) {
         toast.error(message, 'Token 分布数据加载失败');
       }
       lastErrorRef.current = message;
-    } finally {
+    }).finally(() => {
       setLoading(false);
       setIsRefreshing(false);
-    }
+    });
   }, [toast]);
 
   // 初始加载
@@ -130,6 +126,7 @@ const TokenDistributionChart = () => {
 
   // 手动刷新
   const handleRefresh = () => {
+    setIsRefreshing(true);
     loadData(true);
   };
 

@@ -387,23 +387,22 @@ const ChannelModelRoutesEditor = ({ provider, channelId, channelName, disabled =
   const loadSeqRef = useRef(0);
   const toast = useToast();
 
-  const load = useCallback(async () => {
+  const load = useCallback(() => {
     const seq = ++loadSeqRef.current;
-    try {
-      const [nextRules, nextOptions] = await Promise.all([
+    return Promise.all([
         listModelRoutes(provider, channelId),
         getRouteTargetOptions(provider)
-      ]);
+      ]).then(([nextRules, nextOptions]) => {
       if (seq !== loadSeqRef.current) return;
       setLoadError('');
       setRules(nextRules);
       setOptions(nextOptions);
-    } catch (error) {
+    }).catch((error) => {
       if (seq !== loadSeqRef.current) return;
       setLoadError(getErrorMessage(error, '加载模型路由失败'));
-    } finally {
+    }).finally(() => {
       if (seq === loadSeqRef.current) setLoading(false);
-    }
+    });
   }, [provider, channelId]);
 
   useEffect(() => { load(); }, [load]);

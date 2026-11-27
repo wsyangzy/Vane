@@ -5,6 +5,8 @@ const mapCacheStatusItem = (item = {}) => {
   const maxEntries = Number(item.max_entries ?? item.maxEntries ?? 0);
   const lastUpdatedAt = item.last_updated_at || item.lastUpdatedAt || '';
   const lastInvalidatedAt = item.last_invalidated_at || item.lastInvalidatedAt || '';
+  const estimatedBytes = item.estimated_bytes ?? item.estimatedBytes;
+  const lastLoadMs = item.last_load_ms ?? item.lastLoadMs;
   return {
     name: item.name || '',
     enabled: Boolean(item.enabled),
@@ -12,6 +14,10 @@ const mapCacheStatusItem = (item = {}) => {
     maxEntries,
     max_entries: maxEntries,
     size: Number(item.size ?? 0),
+    estimatedBytes: estimatedBytes == null ? null : Number(estimatedBytes),
+    maxBytes: Number(item.max_bytes ?? item.maxBytes ?? item.budgetBytes ?? 0),
+    loads: Number(item.loads ?? 0),
+    lastLoadMs: lastLoadMs == null ? null : Number(lastLoadMs),
     hits: Number(item.hits ?? 0),
     misses: Number(item.misses ?? 0),
     fixed: Boolean(item.fixed),
@@ -64,8 +70,12 @@ export const clearCacheGroups = async (names, clearBackend, cache = usageDashboa
   if (all || selected.includes(USAGE_CACHE_NAME)) {
     clearedCaches++;
     clearedEntries += cache.invalidate();
-  } else if (backend.includes('usage:local-index')) {
+  } else if (backend.some(name => ['usage:local-index', 'usage:dashboard-local', 'usage:dashboard-pricing'].includes(name))) {
     const removed = cache.invalidate('local');
+    if (removed) { clearedCaches++; clearedEntries += removed; }
+  }
+  if (!all && backend.includes('usage:dashboard-proxy')) {
+    const removed = cache.invalidate('proxy');
     if (removed) { clearedCaches++; clearedEntries += removed; }
   }
   return { clearedCaches, clearedEntries, unknownNames: result?.unknown_names || result?.unknownNames || [] };

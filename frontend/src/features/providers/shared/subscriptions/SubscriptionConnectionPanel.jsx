@@ -28,6 +28,7 @@ export default function SubscriptionConnectionPanel({ provider, embedded = false
   const catalogMode = catalogChoice?.mode ?? status?.modelCatalogMode ?? 'local';
   const catalogPath = catalogChoice?.path ?? status?.modelCatalogPath ?? '';
   const generation = useRef(0);
+  const statusIdentity = useRef('');
   const previewTriggerRef = useRef(null);
   const hadPreview = useRef(false);
   useEffect(() => { onBusyChange?.(Boolean(busy)); }, [busy, onBusyChange]);
@@ -35,19 +36,26 @@ export default function SubscriptionConnectionPanel({ provider, embedded = false
     if (preview) hadPreview.current = true;
     else if (hadPreview.current && !busy) { previewTriggerRef.current?.focus(); hadPreview.current = false; }
   }, [preview, busy]);
-  const load = useCallback(async () => {
+  const applyStatus = useCallback((result) => {
+    const identity = JSON.stringify([result?.profileId, result?.bindingVersion, result?.managed, result?.authEnabled, result?.compactionMode]);
+    if (statusIdentity.current !== identity) {
+      statusIdentity.current = identity;
+      setPreview(null);
+      setConfirmed(false);
+    }
+    setStatus(result);
+  }, []);
+  const load = useCallback(() => {
     const version = ++generation.current;
-    try {
-      const [result, workspace] = await Promise.all([manageSubscriptionConnection(provider, 'status'), listRoutingProfiles(provider)]);
-      if (version === generation.current) { setStatus(result); setProfiles(workspace.profiles); setStatusError(''); }
-    } catch (e) { if (version === generation.current) { setStatus(null); setStatusError(errorText(e)); } }
-  }, [provider]);
+    return Promise.all([manageSubscriptionConnection(provider, 'status'), listRoutingProfiles(provider)]).then(([result, workspace]) => {
+      if (version === generation.current) { applyStatus(result); setProfiles(workspace.profiles); setStatusError(''); }
+    }).catch((e) => { if (version === generation.current) { applyStatus(null); setStatusError(errorText(e)); } });
+  }, [provider, applyStatus]);
   useEffect(() => {
     load();
     const timer = setInterval(load, 5000);
     return () => { clearInterval(timer); generation.current += 1; };
   }, [load]);
-  useEffect(() => { setPreview(null); setConfirmed(false); }, [status?.profileId, status?.bindingVersion, status?.managed, status?.authEnabled, status?.compactionMode]);
   const clearPreview = () => { setPreview(null); setConfirmed(false); setNotice(''); setError(''); };
   const run = async (action) => {
     setBusy(action); setError(''); setNotice('');

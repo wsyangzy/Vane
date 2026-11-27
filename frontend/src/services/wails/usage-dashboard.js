@@ -24,9 +24,10 @@ export function mapUsageDashboard(value) {
   };
 }
 export const buildUsageDashboardQuery = (value) => ({ source: value.source || 'local', period: value.period || '30d', provider: value.provider || '', model: value.model || '', project: value.project || '', credential: value.credential || '', day: value.day || '', search: value.search?.trim() || '', sort: value.sort || 'recent', page: value.page || 1, page_size: value.pageSize || 20 });
-export async function getUsageDashboard(query) {
+export async function getUsageDashboard(query, { force = false } = {}) {
   if (!isWailsEnvironment()) throw new Error('请在 Vane 桌面应用中查看本机用量');
   if (!await initWails()) throw new Error('用量桌面接口加载失败');
   if (typeof WailsApp?.GetUsageDashboard !== 'function') throw new Error('当前运行的应用尚未包含用量工作区，请启动本次构建的桌面应用');
+  if (force) await WailsApp.ClearCache({ names: [`usage:dashboard-${query.source || 'local'}`] });
   return mapUsageDashboard(await WailsApp.GetUsageDashboard(buildUsageDashboardQuery(query)));
 }

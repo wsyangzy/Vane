@@ -80,25 +80,21 @@ const TokenCostChart = () => {
   const toast = useToast();
 
   // 加载数据
-  const loadData = useCallback(async (showRefreshing = false) => {
-    if (showRefreshing) {
-      setIsRefreshing(true);
-    }
-    try {
-      const data = await fetchEndpointCostsData(provider);
+  const loadData = useCallback((showRefreshing = false) => {
+    return fetchEndpointCostsData(provider).then((data) => {
       setChartData(prepareGroupCosts(data));
       lastErrorRef.current = '';
-    } catch (error) {
+    }).catch((error) => {
       console.error('加载凭证分组成本数据失败:', error);
       const message = error?.message || '凭证分组成本数据加载失败';
       if (showRefreshing || lastErrorRef.current !== message) {
         toast.error(message, '凭证分组成本数据加载失败');
       }
       lastErrorRef.current = message;
-    } finally {
+    }).finally(() => {
       setLoading(false);
       setIsRefreshing(false);
-    }
+    });
   }, [provider, toast]);
 
   // 初始加载和 provider 变化时重新加载
@@ -137,6 +133,7 @@ const TokenCostChart = () => {
 
   // 手动刷新
   const handleRefresh = () => {
+    setIsRefreshing(true);
     loadData(true);
   };
 

@@ -4,7 +4,7 @@ import Tooltip from '@/shared/ui/Tooltip.jsx';
 // (2025-12-08)
 // ============================================
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Settings,
   RefreshCw,
@@ -84,13 +84,31 @@ const formatCacheHitRate = (hits = 0, misses = 0) => {
 const formatCacheTTL = (ttl) => (!ttl || ttl === '0s' ? '随写入失效' : ttl);
 const CACHE_DETAILS = {
   'overview:queries': { label: '概览查询结果', description: '按日期与筛选条件缓存整页结果；仅存内存，最多 24 项，有效期不超过 30 秒。' },
-  'usage:local-index': { label: '本地会话索引', description: '缓存会话文件的用量元数据并保存到本机；重启可复用。清理后重新解析，不删除原始会话。' }
+  'usage:local-index': { label: '本地会话索引', description: '内存指标为解析器与标题缓存；完整用量元数据保存在本机，重启可复用。清理后重新解析，不删除原始会话。' },
+  'usage:dashboard-local': { label: '本地用量汇总', description: '翻页与排序复用同一份汇总；最多保留 4MiB，手动刷新立即更新。' },
+  'usage:dashboard-proxy': { label: '代理用量汇总', description: '翻页与排序复用同一份汇总；最多保留 4MiB，请求记录变化时失效。' },
+  'usage:dashboard-pricing': { label: '用量估算定价', description: '缓存本地用量的模型定价，最多保留 1MiB；修改定价后更新。' },
+  'endpoint:availability': { label: '端点历史可用性', description: '复用端点的历史统计，最多保留 1MiB；请求记录变化时失效。' }
 };
 
 const formatCacheCapacity = (cache) => {
   const size = cache?.size ?? 0;
   const maxEntries = cache?.maxEntries ?? 0;
   return maxEntries > 0 ? `${size}/${maxEntries}` : `${size}/不限`;
+};
+
+const formatCacheBytes = (bytes) => {
+  if (bytes == null || !Number.isFinite(bytes)) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+};
+
+const formatCacheLoadTime = (milliseconds) => {
+  if (milliseconds == null || !Number.isFinite(milliseconds)) return '—';
+  if (milliseconds < 1) return '<1 ms';
+  if (milliseconds < 1000) return `${milliseconds.toFixed(1)} ms`;
+  return `${(milliseconds / 1000).toFixed(2)} s`;
 };
 
 const formatCacheTime = (value) => {
@@ -117,25 +135,48 @@ const CacheStatusPanel = ({
   onClear
 }) => {
   const [modalOpen, setModalOpen] = useState(false);
+  const triggerRef = useRef(null);
+  const dialogRef = useRef(null);
+  const closeRef = useRef(null);
   const caches = status?.caches || [];
   const totalHits = caches.reduce((sum, item) => sum + (item.hits || 0), 0);
   const totalMisses = caches.reduce((sum, item) => sum + (item.misses || 0), 0);
   const totalSize = caches.reduce((sum, item) => sum + (item.size || 0), 0);
+  const measuredCaches = caches.filter(item => Number.isFinite(item.estimatedBytes));
+  const memorySummary = measuredCaches.length ? ` · 已统计内存 ${formatCacheBytes(measuredCaches.reduce((sum, item) => sum + item.estimatedBytes, 0))}` : '';
   const clearAllKey = getCacheClearKey([]);
   const summaryText = loading
     ? '正在刷新状态...'
-    : `${caches.length} 组 · ${totalSize} 项 · 命中率 ${formatCacheHitRate(totalHits, totalMisses)}`;
+    : `${caches.length} 组 · ${totalSize} 项${memorySummary} · 命中率 ${formatCacheHitRate(totalHits, totalMisses)}`;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!modalOpen) return undefined;
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        setModalOpen(false);
-      }
+    const previousFocus = triggerRef.current || document.activeElement;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    closeRef.current?.focus();
+    return () => {
+      document.body.style.overflow = overflow;
+      if (previousFocus?.isConnected) previousFocus.focus();
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [modalOpen]);
+
+  const handleModalKeyDown = (event) => {
+    if (event.defaultPrevented) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      setModalOpen(false);
+    }
+    if (event.key !== 'Tab') return;
+    const controls = [...dialogRef.current.querySelectorAll('button:not(:disabled), [tabindex="0"]')]
+      .filter(element => element.getClientRects().length);
+    const first = controls[0], last = controls.at(-1);
+    if ((event.shiftKey && document.activeElement === first) || (!event.shiftKey && document.activeElement === last)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first)?.focus();
+    }
+  };
 
   return (
     <>
@@ -158,11 +199,13 @@ const CacheStatusPanel = ({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button
+              ref={triggerRef}
               icon={Gauge}
               variant="secondary"
               size="sm"
               onClick={() => setModalOpen(true)}
               aria-haspopup="dialog"
+              aria-expanded={modalOpen}
             >
               查看状态明细
             </Button>
@@ -190,14 +233,19 @@ const CacheStatusPanel = ({
         <div
           className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm animate-fade-in"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setModalOpen(false);
+            if (event.target === event.currentTarget) {
+              event.preventDefault();
+              setModalOpen(false);
+            }
           }}
         >
           <div
-            className="flex max-h-[calc(100dvh-2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-white shadow-xl"
+            ref={dialogRef}
+            className="flex max-h-[calc(100dvh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-xl bg-white shadow-xl"
             role="dialog"
             aria-modal="true"
             aria-labelledby="cache-status-title"
+            onKeyDown={handleModalKeyDown}
             onMouseDown={(event) => event.stopPropagation()}
           >
             <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
@@ -210,7 +258,7 @@ const CacheStatusPanel = ({
                     缓存运行状态
                   </h2>
                   <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
-                    {summaryText} · 占用为查询项或索引文件数，上限为自动淘汰阈值
+                    {summaryText} · 内存为估算值，“—”表示未统计或尚未加载
                   </p>
                 </div>
               </div>
@@ -235,6 +283,7 @@ const CacheStatusPanel = ({
                   清理全部
                 </Button>
                 <button
+                  ref={closeRef}
                   type="button"
                   onClick={() => setModalOpen(false)}
                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
@@ -253,13 +302,14 @@ const CacheStatusPanel = ({
             )}
 
             <div className="min-h-0 overflow-auto p-4">
-              <table className="w-full min-w-[760px] text-left text-xs">
-            <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-400">
+              <table className="w-full min-w-[860px] text-left text-xs">
+            <thead className="whitespace-nowrap bg-slate-50 text-xs font-semibold uppercase text-slate-400">
               <tr>
                 <th className="px-3 py-2">名称</th>
                 <th className="px-3 py-2">状态</th>
                 <th className="px-3 py-2">TTL</th>
-                <th className="px-3 py-2">占用/上限</th>
+                <th className="px-3 py-2">缓存占用</th>
+                <th className="px-3 py-2">最近加载</th>
                 <th className="px-3 py-2">命中率</th>
                 <th className="px-3 py-2">失效</th>
                 <th className="px-3 py-2">更新时间</th>
@@ -269,14 +319,14 @@ const CacheStatusPanel = ({
             <tbody className="divide-y divide-slate-100 bg-white">
               {loading && (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">
+                  <td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-400">
                     正在加载缓存状态...
                   </td>
                 </tr>
               )}
               {!loading && caches.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">
+                  <td colSpan={9} className="px-3 py-6 text-center text-sm text-slate-400">
                     暂无缓存状态
                   </td>
                 </tr>
@@ -293,7 +343,7 @@ const CacheStatusPanel = ({
                     </td>
                     <td className="px-3 py-2">
                       <Tooltip asChild content={cache.fixed ? '运行时状态缓存，不受「启用缓存」开关控制' : undefined}><span
-                        className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                        className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold ${
                           cache.enabled
                             ? 'bg-emerald-50 text-emerald-700'
                             : 'bg-slate-100 text-slate-500'
@@ -304,7 +354,12 @@ const CacheStatusPanel = ({
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-500">{cache.name === 'usage:local-index' ? '文件变化时重建' : formatCacheTTL(cache.ttl)}</td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-500">
-                      {formatCacheCapacity(cache)}
+                      <div className="whitespace-nowrap">{formatCacheBytes(cache.estimatedBytes)}{cache.maxBytes > 0 && ` / ${formatCacheBytes(cache.maxBytes)}`}</div>
+                      <div className="mt-0.5 whitespace-nowrap text-slate-400">{formatCacheCapacity(cache)} 项</div>
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-500">
+                      <div className="whitespace-nowrap">{formatCacheLoadTime(cache.lastLoadMs)}</div>
+                      {cache.loads > 0 && <div className="mt-0.5 whitespace-nowrap text-slate-400">{cache.loads} 次加载</div>}
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-500">
                       {formatCacheHitRate(cache.hits, cache.misses)}
@@ -426,7 +481,7 @@ const SettingsPage = () => {
   }, [isWails]);
 
   // 加载设置数据
-  const loadSettings = useCallback(async () => {
+  const loadSettings = useCallback(async function loadSettingsData() {
     let willRetry = false;
     try {
       setLoading(true);
@@ -485,7 +540,7 @@ const SettingsPage = () => {
           clearTimeout(initRetryRef.current.timer);
         }
         initRetryRef.current.timer = setTimeout(() => {
-          loadSettings();
+          loadSettingsData();
         }, retryDelayMs);
       } else {
         setError(msg);

@@ -33,18 +33,22 @@ const ConfigPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const loadConfig = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const data = await fetchConfig();
+  const loadConfig = useCallback(() => {
+    return fetchConfig().then((data) => {
       setConfig(data);
-    } catch (err) {
+      setError(null);
+    }).catch((err) => {
       setError(err.message);
-    } finally {
+    }).finally(() => {
       setLoading(false);
-    }
+    });
   }, []);
+
+  const refreshConfig = () => {
+    setLoading(true);
+    setError(null);
+    return loadConfig();
+  };
 
   useEffect(() => {
     loadConfig();
@@ -55,7 +59,7 @@ const ConfigPage = () => {
       <ErrorMessage
         title="配置加载失败"
         message={error}
-        onRetry={loadConfig}
+        onRetry={refreshConfig}
       />
     );
   }
@@ -112,7 +116,7 @@ const ConfigPage = () => {
             <p className="text-xs text-slate-500">查看当前系统配置参数（只读）</p>
           </div>
         </div>
-        <Button icon={RefreshCw} onClick={loadConfig}>
+        <Button icon={RefreshCw} onClick={refreshConfig}>
           刷新
         </Button>
       </div>

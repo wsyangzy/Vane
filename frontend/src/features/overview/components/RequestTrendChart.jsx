@@ -53,20 +53,16 @@ const RequestTrendChart = ({ uptimeSeconds = 0 }) => {
   const availableOptions = TIME_RANGE_OPTIONS.filter(o => o.value <= maxMinutes);
   const options = availableOptions.length > 0 ? availableOptions : TIME_RANGE_OPTIONS.slice(0, 1);
 
-  useEffect(() => {
-    if (timeRange > maxMinutes && options.length > 0) {
-      setTimeRange(options[options.length - 1].value);
-    }
-  }, [maxMinutes, options, timeRange]);
+  const availableTimeRange = options[options.length - 1].value;
+  if (timeRange > maxMinutes && timeRange !== availableTimeRange) {
+    setTimeRange(availableTimeRange);
+    setLoading(true);
+  }
 
   // 加载数据
-  const loadData = useCallback(async (showRefreshing = false) => {
-    if (showRefreshing) {
-      setIsRefreshing(true);
-    }
-    try {
+  const loadData = useCallback(() => {
       console.log('📊 [RequestTrendChart] 开始加载数据, timeRange:', timeRange, 'provider:', provider);
-      const data = await fetchRequestTrendData(timeRange, provider);
+    return fetchRequestTrendData(timeRange, provider).then((data) => {
       console.log('📊 [RequestTrendChart] 获取到原始数据:', data);
       const processedData = toCumulative(padTimeSeries(data, {
         minutes: timeRange,
@@ -75,19 +71,18 @@ const RequestTrendChart = ({ uptimeSeconds = 0 }) => {
       }));
       console.log('📊 [RequestTrendChart] 处理后数据:', processedData?.length, '个点');
       setChartData(processedData);
-    } catch (error) {
+    }).catch((error) => {
       console.error('加载请求趋势数据失败:', error);
-    } finally {
+    }).finally(() => {
       setLoading(false);
       setIsRefreshing(false);
-    }
+    });
   }, [timeRange, provider]);
 
   // 初始加载和时间范围/provider 变化时重新加载
   useEffect(() => {
-    setLoading(true);
     loadData();
-  }, [timeRange]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loadData]);
 
   // 定时刷新（每 30 秒）
   useEffect(() => {
@@ -121,7 +116,8 @@ const RequestTrendChart = ({ uptimeSeconds = 0 }) => {
 
   // 手动刷新
   const handleRefresh = () => {
-    loadData(true);
+    setIsRefreshing(true);
+    loadData();
   };
 
   const xKey = chartData.some(d => d?.timestamp) ? 'timestamp' : 'time';
@@ -142,7 +138,7 @@ const RequestTrendChart = ({ uptimeSeconds = 0 }) => {
           <CustomSelect
             options={options}
             value={timeRange}
-            onChange={setTimeRange}
+            onChange={value => { if (value !== timeRange) { setTimeRange(value); setLoading(true); } }}
             size="sm"
           />
 

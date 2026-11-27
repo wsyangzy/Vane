@@ -61,19 +61,15 @@ const ResponseTimeChart = ({ uptimeSeconds = 0 }) => {
   const availableOptions = TIME_RANGE_OPTIONS.filter(o => o.value <= maxMinutes);
   const options = availableOptions.length > 0 ? availableOptions : TIME_RANGE_OPTIONS.slice(0, 1);
 
-  useEffect(() => {
-    if (timeRange > maxMinutes && options.length > 0) {
-      setTimeRange(options[options.length - 1].value);
-    }
-  }, [maxMinutes, options, timeRange]);
+  const availableTimeRange = options[options.length - 1].value;
+  if (timeRange > maxMinutes && timeRange !== availableTimeRange) {
+    setTimeRange(availableTimeRange);
+    setLoading(true);
+  }
 
   // 加载数据
-  const loadData = useCallback(async (showRefreshing = false) => {
-    if (showRefreshing) {
-      setIsRefreshing(true);
-    }
-    try {
-      const data = await fetchResponseTimeData(timeRange, provider);
+  const loadData = useCallback(() => {
+    return fetchResponseTimeData(timeRange, provider).then((data) => {
       setChartData(
         padTimeSeries(data, {
           minutes: timeRange,
@@ -81,18 +77,18 @@ const ResponseTimeChart = ({ uptimeSeconds = 0 }) => {
           defaults: { avg: 0, min: 0, max: 0 },
         })
       );
-    } catch (error) {
+    }).catch((error) => {
       console.error('加载响应时间数据失败:', error);
-    } finally {
+    }).finally(() => {
       setLoading(false);
       setIsRefreshing(false);
-    }
+    });
   }, [timeRange, provider]);
 
   // 初始加载
   useEffect(() => {
     loadData();
-  }, [timeRange]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loadData]);
 
   // 定时刷新（每 30 秒）
   useEffect(() => {
@@ -126,7 +122,8 @@ const ResponseTimeChart = ({ uptimeSeconds = 0 }) => {
 
   // 手动刷新
   const handleRefresh = () => {
-    loadData(true);
+    setIsRefreshing(true);
+    loadData();
   };
 
   // 计算平均响应时间
@@ -149,7 +146,7 @@ const ResponseTimeChart = ({ uptimeSeconds = 0 }) => {
           <CustomSelect
             options={options}
             value={timeRange}
-            onChange={setTimeRange}
+            onChange={value => { if (value !== timeRange) { setTimeRange(value); setLoading(true); } }}
             size="xs"
           />
           <UiTooltip content="刷新数据">
