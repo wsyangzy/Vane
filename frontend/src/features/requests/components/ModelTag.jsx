@@ -245,6 +245,11 @@ const getRewriteIndicator = (source) => {
         label: '路由改写',
         classes: 'text-sky-500'
       };
+    case 'changed':
+      return {
+        label: '模型改写',
+        classes: 'text-orange-500'
+      };
     default:
       return null;
   }
@@ -266,6 +271,7 @@ const ModelTag = ({
   originalModel = '',
   rewriteTarget = '',
   routeSnapshot,
+  routeSummary,
   routePath,
   routeExecuted = null,
   compact = false
@@ -282,14 +288,14 @@ const ModelTag = ({
       ? (compact ? '-translate-y-[1.5px]' : '-translate-y-px')
       : '';
   const displayName = fallback?.label || ((!model || model === 'unknown') ? '-' : model);
-  const rewriteIndicator = routePath === '' ? null : getRewriteIndicator(rewriteSource);
+  const effectiveRewriteSource = rewriteSource || (routeSummary?.modelChanged ? 'changed' : '');
+  const rewriteIndicator = routePath === '' || routeSummary?.modelChanged === false ? null : getRewriteIndicator(effectiveRewriteSource);
   const rewriteTitle = rewriteIndicator
-    ? `${originalModel || '原模型未记录'} → ${rewriteTarget || displayName}`
+    ? `${originalModel || routeSummary?.sourceModel || '原模型未记录'} → ${rewriteTarget || displayName}`
     : '';
-  // A matched rule whose targets were never sent (all skipped, fallen back to
-  // default orchestration) must not look like a rerouted request. A route
-  // rewrite proves a target send even when the saved trace missed the attempt.
-  const routeNotExecuted = routeExecuted === false && rewriteSource !== 'route';
+  // Actual attempts take precedence over legacy rewrite metadata. Without a
+  // trace, a recorded route rewrite can still identify a historical send.
+  const routeNotExecuted = routeSummary?.ruleExecuted === false || routeExecuted === false && rewriteSource !== 'route';
   const route = routePath === '' || routeNotExecuted ? null : describeRouteSnapshot(routeSnapshot);
   const routeIndicator = route?.kind === 'model_rule'
     ? { label: '模型路由', Icon: Route, classes: 'text-sky-600' }
@@ -299,16 +305,21 @@ const ModelTag = ({
         ? { label: '模型映射', Icon: Replace, classes: 'text-orange-500' }
         : route?.kind === 'composite'
           ? { label: '条件路由', Icon: GitBranch, classes: 'text-sky-600' }
-          : route?.kind === 'pool' ? { label: '账号池', Icon: Layers, classes: 'text-slate-500' } : null;
+          : route?.kind === 'pool' ? { label: '账号池', Icon: Layers, classes: 'text-slate-500' }
+            : route?.kind === 'model_capability' ? { label: '模型能力改道', Icon: Route, classes: 'text-sky-600' }
+              : route?.kind === 'subscription' ? { label: '订阅路由', Icon: Route, classes: 'text-sky-600' }
+                : route?.kind === 'explicit' ? { label: '指定资源', Icon: Route, classes: 'text-sky-600' }
+                  : routeSummary?.resourceChanged ? { label: '渠道切换', Icon: Route, classes: 'text-sky-600' } : null;
   const RouteIcon = routeIndicator?.Icon;
   const tag = (
     <span
       data-model-brand={brand}
+      tabIndex={rewriteIndicator || routeIndicator ? 0 : undefined}
       className={`model-tag inline-flex h-[26px] items-center justify-center whitespace-nowrap rounded-md border py-0 align-middle font-normal leading-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] transition-colors ${compact ? 'min-w-0 max-w-full gap-1 px-1 text-[11px]' : 'w-fit max-w-none gap-1 px-2 text-xs'} ${modelStyle.classes} ${className}`}
     >
       <BrandIcon className={brand === 'claude' ? CLAUDE_ICON_CLASS : BRAND_ICON_CLASS} />
       <span className={`model-tag-name block leading-4 ${nameAlignment} ${compact ? 'min-w-0 overflow-hidden text-ellipsis' : ''}`}>{displayName}</span>
-      {rewriteIndicator && !(rewriteSource === 'route' && routeIndicator) && !(rewriteSource === 'mapping' && route?.kind === 'mapping') && (
+      {rewriteIndicator && !(effectiveRewriteSource === 'route' && routeIndicator) && route?.kind !== 'mapping' && (
         <Replace
           className={`h-3 w-3 shrink-0 -scale-x-100 stroke-[2.4] ${rewriteIndicator.classes}`}
           aria-label={rewriteIndicator.label}

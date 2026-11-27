@@ -106,6 +106,9 @@ test('health presentation distinguishes disabled resources, credential repair an
   assert.equal(cooling.label, '冷却中'); assert.equal(cooling.until, '2026-10-23T10:00:00Z');
   assert.equal(candidateHealthPresentation({ enabled: true, health: {} }).label, '正常');
   assert.match(dispatchReason('state_origin_unknown'), /新建会话/);
+  assert.equal(dispatchReason('balance_exhausted'), '上游账号余额已耗尽');
+  assert.equal(dispatchReason('rate_limited'), '上游限流');
+  assert.equal(dispatchReason('permission_denied'), '上游拒绝访问权限');
 });
 
 test('profile membership ignores legacy switches and preserves its own selections when reordered', () => {

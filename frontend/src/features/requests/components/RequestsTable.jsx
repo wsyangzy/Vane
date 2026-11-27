@@ -184,7 +184,7 @@ const renderCell = (column, request, onViewDispatch, showDate, auxiliary, route)
     case 'status':
       return <span className={`inline-flex max-w-full [&>div]:max-w-full [&>div]:gap-1 [&>div]:px-1 [&>div]:text-[11px] ${column.layoutWidth < 58 ? '[&_svg]:hidden' : ''}`}><RequestStatusBadge request={request} /></span>;
     case 'model': {
-      const routePath = route.resources.length > 1 || route.defaultSourceLabel ? (
+      const routePath = route.paths.length > 0 ? (
         <div className="space-y-1.5 text-left">
           {route.paths.map(({ model, resources }, index) => (
             <div key={index}>
@@ -207,6 +207,7 @@ const renderCell = (column, request, onViewDispatch, showDate, auxiliary, route)
           originalModel={request.originalModelName || request.original_model_name || ''}
           rewriteTarget={request.modelRewriteTarget || request.model_rewrite_target || request.model || ''}
           routeSnapshot={request.routeSnapshot || request.route_snapshot}
+          routeSummary={route}
           routePath={routePath}
           routeExecuted={request.dispatchTrace?.ruleExecuted ?? null}
         />

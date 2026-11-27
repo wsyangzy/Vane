@@ -76,6 +76,7 @@ import {
 } from '../utils/requestMetadata.js';
 import { describeFailureReason, getCompletedReasoningRecovery, getEncryptedHistoryRecovery, getRequestFailureDetails, getRequestProtocolDiagnostics } from '../utils/failureSummary.js';
 import { getRequestOutcome } from '../utils/requestOutcome.js';
+import { describeRequestRoutePath, summarizeRequestRoute } from '../utils/dispatchTrace.js';
 import { describeRouteSnapshot, describeRouteExecution } from '@/features/providers/shared/routing/routeTargets.js';
 
 // Provider responses, local processing and cancellation each have their own presentation.
@@ -422,8 +423,9 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
     ].filter(Boolean).join('\n');
   const diagnosticErrorText = protocolDiagnostics.length
     ? `${errorText}\n\n请求格式诊断：\n${protocolDiagnostics.join('\n')}` : errorText;
-  const modelRewriteSource = request.modelRewriteSource || request.model_rewrite_source || '';
-  const originalModelName = request.originalModelName || request.original_model_name || '';
+  const routeSummary = summarizeRequestRoute(request);
+  const modelRewriteSource = request.modelRewriteSource || request.model_rewrite_source || (routeSummary.modelChanged ? 'changed' : '');
+  const originalModelName = routeSummary.sourceModel;
   const modelRewriteTarget = request.modelRewriteTarget || request.model_rewrite_target || request.model || '';
   const modelRewriteLabelMap = {
     mapping: '模型映射',
@@ -436,7 +438,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
     route: 'text-sky-500'
   };
   const modelRewriteLabel = modelRewriteLabelMap[modelRewriteSource] || (modelRewriteSource ? '模型改写' : '');
-  const hasModelRewrite = Boolean(modelRewriteLabel && modelRewriteTarget);
+  const hasModelRewrite = routeSummary.modelChanged;
   const route = describeRouteSnapshot(request.routeSnapshot || request.route_snapshot);
   const routeExecution = describeRouteExecution(request.routeSnapshot || request.route_snapshot);
   const reasoningRaw = request.reasoningEffort || request.reasoning_effort || '';
@@ -614,7 +616,10 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 <div className="px-4">
                   <div className="flex items-center justify-between gap-3 py-2.5">
                     <span className="shrink-0 text-sm font-medium text-slate-500">模型名称</span>
-                    <ModelTag model={request.model} provider={request.provider} method={request.method} path={request.path} compact />
+                    <ModelTag model={request.model} provider={request.provider} method={request.method} path={request.path} compact
+                      rewriteSource={modelRewriteSource} originalModel={originalModelName} rewriteTarget={modelRewriteTarget}
+                      routeSnapshot={request.routeSnapshot || request.route_snapshot} routeSummary={routeSummary}
+                      routePath={describeRequestRoutePath(request, routeSummary)} />
                   </div>
                   {hasReasoning && (
                     <div className="border-t border-slate-100">
@@ -708,7 +713,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                       <div className="flex items-center justify-end gap-2 min-w-0">
                         <Replace className={`h-3.5 w-3.5 shrink-0 -scale-x-100 stroke-[2.4] ${modelRewriteIconClassMap[modelRewriteSource] || 'text-slate-400'}`} />
                         <span className="text-sm font-mono text-slate-900 text-right break-all">
-                          {originalModelName || '-'} -&gt; {modelRewriteTarget}
+                          {routeSummary.paths.length ? [...new Set(routeSummary.paths.map(path => path.model))].join('；') : `${originalModelName || '-'} → ${modelRewriteTarget}`}
                         </span>
                       </div>
                     </div>

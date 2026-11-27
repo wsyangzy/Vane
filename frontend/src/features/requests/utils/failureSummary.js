@@ -36,6 +36,9 @@ export const FAILURE_REASON_DETAILS = Object.freeze({
   empty_stream: '上游返回空的流式响应',
   invalid_stream_event: '上游流式事件格式无效',
   credential_rejected: '上游拒绝此分组的凭证',
+  balance_exhausted: '上游账号余额已耗尽，请核对余额并充值，或选择其他凭证分组',
+  permission_denied: '此凭证没有本次模型或接口的访问权限',
+  quota_exhausted: '供应商额度已耗尽，请检查额度与重置时间',
   permission_scope_unknown: '上游拒绝此请求，需核对账号余额和访问权限',
   endpoint_unavailable: '上游端点暂不可用',
   model_not_found: '上游未提供此模型',
@@ -308,6 +311,20 @@ export const explainUpstreamFailure = (raw, request = {}) => {
   const error = envelope?.error || envelope?.response?.error || envelope;
   const code = String(error?.code || error?.type || '').toLowerCase();
   const message = String(error?.message || text).toLowerCase();
+  const identifiers = [error?.code, error?.type].map(value => String(value || '').toLowerCase());
+  if (identifiers.some(value => ['insufficient_quota', 'insufficient_user_quota', 'credit_balance_exhausted', 'billing_hard_limit_reached', 'balance_exhausted'].includes(value))
+    || code === 'accessdenied' && message.trim().replace(/\.$/, '') === 'current user is in debt') {
+    return { code: 'balance_exhausted', summary: '上游账号余额已耗尽',
+      advice: '核对上游账号余额并充值，或在调度方案中选择其他凭证分组；单纯释放端点不会补充余额。' };
+  }
+  if (identifiers.some(value => ['rate_limit_exceeded', 'rate_limit_error', 'too_many_requests', 'rate_limit'].includes(value))) {
+    return { code: 'rate_limited', summary: FAILURE_REASON_DETAILS.rate_limited,
+      advice: '按上游要求等待后重试，或选择其他凭证分组；同一凭证、同一模型的其他端点仍受此限制。' };
+  }
+  if (identifiers.some(value => ['permission_denied', 'permission_error', 'insufficient_permissions'].includes(value))) {
+    return { code: 'permission_denied', summary: FAILURE_REASON_DETAILS.permission_denied,
+      advice: '核对此凭证的模型与接口访问权限，或选择有权限的凭证分组。' };
+  }
   if (code === 'invalid_encrypted_content' || /\binvalid_encrypted_content\b/.test(message)) {
     const recovery = getEncryptedHistoryRecovery(request);
     const restored = getCompletedReasoningRecovery(request);

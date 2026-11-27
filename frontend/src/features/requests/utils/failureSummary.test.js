@@ -9,8 +9,23 @@ import {
   getRequestFailureDetails,
   getEncryptedHistoryRecovery,
   getCompletedReasoningRecovery,
+  explainUpstreamFailure,
   shouldNotifyFailure
 } from './failureSummary.js';
+
+test('upstream debt, model rate limits and permissions have distinct explanations', () => {
+  const debt = explainUpstreamFailure(JSON.stringify({ error: { code: 'AccessDenied', message: 'Current user is in debt.' } }));
+  assert.equal(debt.code, 'balance_exhausted');
+  assert.match(debt.advice, /充值/);
+  assert.equal(explainUpstreamFailure(JSON.stringify({ error: { code: 'AccessDenied', message: 'Access denied.' } })), null);
+  assert.equal(explainUpstreamFailure(JSON.stringify({ error: { message: 'Current user is in debt.' } })), null);
+  const rate = explainUpstreamFailure(JSON.stringify({ response: { error: { code: 'rate_limit_exceeded', type: 'too_many_requests' } } }));
+  assert.equal(rate.code, 'rate_limited');
+  assert.match(rate.advice, /同一凭证、同一模型/);
+  const permission = explainUpstreamFailure(JSON.stringify({ error: { type: 'permission_error' } }));
+  assert.equal(permission.code, 'permission_denied');
+  assert.match(describeFailureReason('balance_exhausted'), /余额已耗尽/);
+});
 
 test('encrypted history errors remain primary while the budget is a separate stop reason', () => {
   assert.equal(shouldNotifyFailure('invalid_encrypted_content'), true);

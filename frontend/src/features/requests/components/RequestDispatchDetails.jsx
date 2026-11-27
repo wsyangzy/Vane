@@ -3,6 +3,7 @@ import { affinityOptions, dispatchReason, strategyOptions } from '@/features/pro
 import { formatDuration } from '@/services/http/api.js';
 import ModelTag from './ModelTag.jsx';
 import { describeFailureReason } from '../utils/failureSummary.js';
+import { describeRequestRoutePath, summarizeRequestRoute } from '../utils/dispatchTrace.js';
 import './requestDispatch.css';
 
 const optionLabel = (options, value) => options.find(item => item.value === value)?.label.split(' · ')[0] || value;
@@ -101,7 +102,10 @@ export default function RequestDispatchDetails({ trace, expanded = false }) {
       {(trace.maxAttempts > 0 || trace.maxDurationMs > 0) && <dl className="request-dispatch-summary">{trace.maxAttempts > 0 && <div><dt>发送次数上限</dt><dd>{trace.maxAttempts} 次</dd></div>}{trace.maxDurationMs > 0 && <div><dt>请求时间上限</dt><dd>{formatDuration(trace.maxDurationMs)}</dd></div>}</dl>}
       <h4 className="request-dispatch-section-title">实际发送路径</h4>
     </>}
-    {!!trace.attempts.length && <ol className="request-dispatch-attempts" aria-label="实际调用路径">{trace.attempts.map((attempt, index) => <li key={`${attempt.key}/${index}`} data-result={attempt.action}>
+    {!!trace.attempts.length && <ol className="request-dispatch-attempts" aria-label="实际调用路径">{trace.attempts.map((attempt, index) => {
+      const attemptRequest = { model: attempt.model, dispatchTrace: { ...trace, attempts: [attempt], ruleExecuted: attempt.ruleExecuted, defaultSource: null } };
+      const route = summarizeRequestRoute(attemptRequest);
+      return <li key={`${attempt.key}/${index}`} data-result={attempt.action}>
       <span className="request-dispatch-sequence" aria-label={`第 ${index + 1} 次尝试`}>{String(index + 1).padStart(2, '0')}</span>
       <div className="request-dispatch-resource">
         {expanded ? <div className="request-dispatch-resource-info">
@@ -113,7 +117,9 @@ export default function RequestDispatchDetails({ trace, expanded = false }) {
             </dl>
           </div>
           <div className="request-dispatch-technical">
-            <ModelTag model={attempt.model} provider={trace.provider} compact className="h-[22px]!" title={`模型：${attempt.model || '未记录'}`} />
+            <ModelTag model={attempt.model} provider={trace.provider} compact className="h-[22px]!"
+              routeSummary={route} routeSnapshot={{ profile_id: trace.profileId, decision: trace.decision }}
+              routePath={describeRequestRoutePath(attemptRequest, route)} />
             <span className="request-dispatch-protocol"><span>协议</span><code>{({ responses: 'Responses', messages: 'Messages' })[attempt.protocol] || attempt.protocol || '未记录'}</code></span>
           </div>
         </div> : <><strong>{attempt.channel}</strong><span>{attempt.credentialGroup} / {attempt.endpoint}</span></>}
@@ -122,7 +128,7 @@ export default function RequestDispatchDetails({ trace, expanded = false }) {
         {expanded && attempt.error && <details className="request-dispatch-upstream-error"><summary>{attempt.local ? '本地传输错误' : '渠道原始错误'}</summary><pre>{attempt.error}</pre></details>}
       </div>
       <div className="request-dispatch-result"><span>{!expanded && (attempt.action === 'success' ? <Check size={12} aria-hidden="true" /> : attempt.action === 'failed' ? <X size={12} aria-hidden="true" /> : <Activity size={12} aria-hidden="true" />)}{actionLabels[attempt.action] || '处理中'}</span>{attempt.durationMs != null && <small>{formatDuration(attempt.durationMs)}</small>}{attempt.statusCode > 0 && <small>HTTP {attempt.statusCode}</small>}</div>
-    </li>)}</ol>}
+    </li>; })}</ol>}
     {!trace.attempts.length && <p className="request-dispatch-empty">{trace.attemptCount ? '此记录未保存逐次候选事件。' : trace.finished || trace.stopReason ? '未向上游发送请求。' : '等待调度选择上游。'}</p>}
     {trace.stopReason && <p className="request-dispatch-stop">结束原因：{eventReason(trace.stopReason)}</p>}
     {!!trace.skipped.length && <details open={expanded} className="request-dispatch-skipped"><summary>{trace.skipped.length} 条候选跳过记录</summary><ul>{trace.skipped.map((item, index) => <li key={index}><span>{item.channel} / {item.credentialGroup} / {item.endpoint}</span><small>{item.reason ? eventReason(item.reason) : '未发起上游调用'}</small></li>)}</ul></details>}
